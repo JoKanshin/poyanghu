@@ -32,6 +32,7 @@ var selected_label: Label
 var current_hand: Array = []   # 当前手牌（card dict 数组）
 var card_infos: Array = []     # {panel, card_id, base_pos, theta, radial, selected}
 var _fan_layout_size: Vector2 = Vector2.ZERO  # 上次布局时的容器尺寸
+var play_deal_anim: bool = false              # 下次布局时播放发牌入场动画
 var popup_root: Control
 var dim: ColorRect
 var popup_center: CenterContainer
@@ -493,7 +494,17 @@ func _update_species_views() -> void:
 		var view: Dictionary = species_views[sid]
 		var rigs: Array = view["rigs"]
 		for i in rigs.size():
-			rigs[i].visible = i < count
+			var rig: Node3D = rigs[i]
+			var should_show := i < count
+			if should_show and not rig.visible:
+				# 新出现的个体：弹性放大登场（TRANS_BACK，有"冒出来"的弹性感）
+				rig.visible = true
+				rig.scale = Vector3(0.01, 0.01, 0.01)
+				var tw := rig.create_tween()
+				tw.set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+				tw.tween_property(rig, "scale", Vector3.ONE, 0.4)
+			elif not should_show and rig.visible:
+				rig.visible = false
 
 
 ## 为每种植物生成一组个体
@@ -542,9 +553,26 @@ func _update_plant_views() -> void:
 		var meshes: Array = view["meshes"]
 		var kind: String = view["kind"]
 		for i in meshes.size():
-			meshes[i].visible = i < count
-			if meshes[i].visible:
-				meshes[i].position = _plant_position(pid, kind, i)
+			var mi: MeshInstance3D = meshes[i]
+			var should_show := i < count
+			if should_show and not mi.visible:
+				mi.visible = true
+				mi.position = _plant_position(pid, kind, i)
+				mi.scale = Vector3(0.01, 0.01, 0.01)
+				var tw := mi.create_tween()
+				tw.set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+				tw.tween_property(mi, "scale", _plant_scale(pid, kind), 0.45)
+			elif not should_show and mi.visible:
+				mi.visible = false
+
+
+## 植物原始缩放（用于弹性动画还原）
+func _plant_scale(pid: String, kind: String) -> Vector3:
+	match kind:
+		"submerged", "floating":
+			return Vector3(1.2, 0.3, 1.2)
+		_:
+			return Vector3.ONE
 
 
 func _plant_position(pid: String, kind: String, i: int) -> Vector3:
@@ -796,6 +824,7 @@ func _on_event(text: String) -> void:
 
 func _enter_allocate() -> void:
 	current_hand = GameState.draw_cards(6)
+	play_deal_anim = true
 	_build_hand_panel()
 	hand_panel.visible = true
 
@@ -873,6 +902,25 @@ func _layout_fan() -> void:
 		card_infos[i]["theta"] = thetas[i]
 		card_infos[i]["radial"] = Vector2(sin(thetas[i]), -cos(thetas[i]))
 	_fan_layout_size = area_size
+	# 发牌入场动画（从下方滑入 + 逐张错开）
+	if play_deal_anim:
+		play_deal_anim = false
+		_play_deal_animation()
+
+
+## 发牌入场：牌从下方滑入，逐张错开（EASE_OUT，玩家等待中的入场用稍长时长）
+func _play_deal_animation() -> void:
+	for i in card_infos.size():
+		var info: Dictionary = card_infos[i]
+		var panel: PanelContainer = info["panel"]
+		var target: Vector2 = info["base_pos"]
+		panel.position = target + Vector2(0, 90.0)
+		panel.modulate.a = 0.0
+		var tw := panel.create_tween()
+		tw.set_parallel(true)
+		tw.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+		tw.tween_property(panel, "position", target, 0.34).set_delay(i * 0.045)
+		tw.tween_property(panel, "modulate:a", 1.0, 0.22).set_delay(i * 0.045)
 
 
 ## 容器尺寸变化时重排（确保扇形始终居中）
@@ -1112,6 +1160,16 @@ func _show_popup(title: String, body: String, button_text: String, on_continue: 
 	popup_button.text = button_text
 	_popup_continue = on_continue
 	popup_root.visible = true
+	# 弹窗淡入 + 面板轻微上浮（玩家等待中的反馈，用稍长时长更从容）
+	popup_root.modulate.a = 0.0
+	popup_panel.scale = Vector2(0.94, 0.94)
+	popup_panel.pivot_offset = popup_panel.size * 0.5
+	var tw := popup_root.create_tween()
+	tw.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+	tw.tween_property(popup_root, "modulate:a", 1.0, 0.18)
+	var tw2 := popup_panel.create_tween()
+	tw2.set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	tw2.tween_property(popup_panel, "scale", Vector2.ONE, 0.24)
 
 
 func _on_popup_button() -> void:
