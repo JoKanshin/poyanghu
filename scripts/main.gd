@@ -73,7 +73,7 @@ func _ready() -> void:
 func _setup_camera() -> void:
 	var cam := get_node("../Camera3D") as Camera3D
 	cam.projection = Camera3D.PROJECTION_ORTHOGONAL
-	cam.size = 15.0
+	cam.size = 17.5
 	# 饥荒式 2.5D：正交 + 45° 方位角 + 约 57° 俯角（顶面与侧面均可见，立体感强）
 	cam.position = Vector3(6, 13, 6)
 	cam.look_at(Vector3(0, 0, 0), Vector3.UP)
@@ -696,6 +696,7 @@ func _build_ui() -> void:
 	card_box.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	card_box.custom_minimum_size = Vector2(0, 260)
 	card_box.mouse_filter = Control.MOUSE_FILTER_PASS
+	card_box.resized.connect(_on_card_box_resized)
 	hv.add_child(card_box)
 
 	# --- 弹窗（顶层）---
@@ -806,7 +807,7 @@ func _build_hand_panel() -> void:
 			"base_pos": Vector2.ZERO, "theta": 0.0, "radial": Vector2.UP,
 			"selected": false,
 		})
-	_layout_fan()
+	_layout_fan.call_deferred()
 	_update_hud()
 
 
@@ -815,15 +816,15 @@ func _layout_fan() -> void:
 	var n := card_infos.size()
 	if n == 0:
 		return
-	var card_w := 110.0
-	var card_h := 135.0
+	var card_w := 130.0
+	var card_h := 158.0
 	# 圆心：以 card_box 实际尺寸为准，水平居中，垂直在底部下方
 	var area_size := card_box.size
 	if area_size.x < 10.0 or area_size.y < 10.0:
 		area_size = Vector2(552.0, 260.0)  # 兜底
-	var center := Vector2(area_size.x / 2.0, area_size.y + 60.0)
-	var radius := 150.0
-	var total_span := deg_to_rad(50.0)
+	var center := Vector2(area_size.x / 2.0, area_size.y + 40.0)
+	var radius := 165.0
+	var total_span := deg_to_rad(58.0)
 	for i in n:
 		var info: Dictionary = card_infos[i]
 		var panel: PanelContainer = info["panel"]
@@ -840,23 +841,30 @@ func _layout_fan() -> void:
 	_fan_layout_size = area_size
 
 
+## 容器尺寸变化时重排（确保扇形始终居中）
+func _on_card_box_resized() -> void:
+	if not card_infos.is_empty():
+		_layout_fan()
+
+
 func _make_card(card: Dictionary) -> PanelContainer:
 	var panel := PanelContainer.new()
-	panel.custom_minimum_size = Vector2(110, 135)
+	panel.custom_minimum_size = Vector2(130, 158)
 	_panel_style(panel, Color(0.30, 0.22, 0.14, 0.98))
 	panel.tooltip_text = "%s\n\n%s" % [card["desc"], _effect_text(card)]
 	panel.gui_input.connect(_on_card_gui_input.bind(panel))
 
 	var vb := VBoxContainer.new()
-	vb.add_theme_constant_override("separation", 4)
+	vb.add_theme_constant_override("separation", 3)
 	panel.add_child(vb)
 
-	var name_l := _make_label(card["name"], 14, Color(1, 1, 1))
+	var name_l := _make_label(card["name"], 15, Color(1, 1, 1))
 	name_l.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	name_l.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	vb.add_child(name_l)
 
 	var cat: String = card["category"]
-	var cat_l := _make_label(CATEGORY_NAMES[cat], 10, CATEGORY_COLORS[cat])
+	var cat_l := _make_label(CATEGORY_NAMES[cat], 11, CATEGORY_COLORS[cat])
 	cat_l.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	vb.add_child(cat_l)
 
@@ -864,7 +872,7 @@ func _make_card(card: Dictionary) -> PanelContainer:
 	spacer.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	vb.add_child(spacer)
 
-	var cost_l := _make_label("%d 万" % card["cost"], 14, Color(1, 0.9, 0.55))
+	var cost_l := _make_label("%d 万" % card["cost"], 16, Color(1, 0.9, 0.55))
 	cost_l.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	vb.add_child(cost_l)
 
@@ -921,21 +929,37 @@ func _update_selected_label() -> void:
 	selected_label.text = "已选：%d/%d" % [_selected_count(), GameState.MAX_ACTIONS]
 
 
-## 每帧轮询卡牌悬停：鼠标在卡上保持弹起，移开落下（避免子控件 mouse_exited 抖动）
+## 每帧轮询卡牌悬停：精确判断鼠标是否在旋转后的卡牌内（避免相邻牌误判）
 func _update_card_hover() -> void:
 	if hand_panel.visible == false or card_infos.is_empty():
 		return
-	var mouse := get_viewport().get_mouse_position()
+	var mouse_global := get_viewport().get_mouse_position()
+	var box_tf := card_box.get_global_transform()
 	for info in card_infos:
 		var panel: PanelContainer = info["panel"]
 		if not is_instance_valid(panel):
 			continue
-		var hovering: bool = panel.get_global_rect().has_point(mouse)
+		var hovering: bool = _point_in_card(panel, mouse_global, box_tf)
 		var raised: bool = hovering or info["selected"]
 		# 弹起方向：沿径向向外（远离圆心，即向上弹出）
 		var target: Vector2 = info["base_pos"] + info["radial"] * (26.0 if raised else 0.0)
 		if panel.position.distance_to(target) > 0.5:
 			panel.position = panel.position.lerp(target, 0.25)
+
+
+## 判断全局坐标点是否在旋转后的卡牌矩形内
+func _point_in_card(panel: PanelContainer, mouse_global: Vector2, box_tf: Transform2D) -> bool:
+	# 鼠标 → card_box 局部坐标
+	var local: Vector2 = box_tf.affine_inverse() * mouse_global
+	# 相对卡牌左上角（position 是 pivot 位置）
+	var offset: Vector2 = local - (panel.position - panel.pivot_offset)
+	# 逆旋转
+	var ang := -panel.rotation
+	var rotated := Vector2(
+		offset.x * cos(ang) - offset.y * sin(ang),
+		offset.x * sin(ang) + offset.y * cos(ang)
+	)
+	return rotated.x >= 0.0 and rotated.x <= panel.size.x and rotated.y >= 0.0 and rotated.y <= panel.size.y
 
 
 ## 金色闪光框（选中标记，呼吸发光）
