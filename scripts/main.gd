@@ -46,10 +46,10 @@ var grass_nodes: Array = []
 var grass_mats: Array = []
 var bird_nodes: Array = []
 var fish_nodes: Array = []
-var village_mesh: MeshInstance3D
-var village_mat: StandardMaterial3D
-var species_views: Dictionary = {}  # sid -> {node, meshes[], base_positions[], speeds[]}
-var plant_views: Dictionary = {}    # pid -> {meshes[], positions[]}
+var village_nodes: Array = []     # 多栋房子
+var village_mats: Array = []
+var species_views: Dictionary = {}  # sid -> {rigs[], bases[], states[], timers[], targets[]}
+var plant_views: Dictionary = {}    # pid -> {meshes[], kind}
 
 
 func _ready() -> void:
@@ -145,20 +145,68 @@ func _build_3d() -> void:
 		lake_view.add_child(mi)
 		fish_nodes.append(mi)
 
-	# 渔村（占位房屋群）
-	village_mesh = MeshInstance3D.new()
-	var bm := BoxMesh.new()
-	bm.size = Vector3(3.5, 1.6, 3.5)
-	village_mesh.mesh = bm
-	village_mesh.position = Vector3(-10, 0.8, -9)
-	village_mat = StandardMaterial3D.new()
-	village_mat.albedo_color = Color(0.65, 0.45, 0.30)
-	village_mesh.material_override = village_mat
-	lake_view.add_child(village_mesh)
+	# 渔村（湖边一排房子）
+	_build_village(lake_view)
 
 	# 延迟挂到场景，避免父节点初始化期 add_child 冲突
 	var root := get_parent() as Node3D
 	root.add_child.call_deferred(lake_view)
+
+
+## 湖边社区：一排房子，数量/颜色随社区信任度变化
+func _build_village(parent: Node3D) -> void:
+	var house_positions := [
+		Vector3(-11, 0, -7), Vector3(-12.5, 0, -5.2), Vector3(-13, 0, -3.4),
+		Vector3(-12.2, 0, -1.6), Vector3(-10.6, 0, 0.2),
+	]
+	for p in house_positions:
+		var house := _make_house()
+		house.position = p
+		parent.add_child(house)
+		village_nodes.append(house)
+		var mats := _collect_mats(house)
+		for m in mats:
+			village_mats.append(m)
+
+
+func _make_house() -> Node3D:
+	var house := Node3D.new()
+	# 墙体
+	var wall := MeshInstance3D.new()
+	var wm := BoxMesh.new()
+	wm.size = Vector3(1.4, 1.0, 1.1)
+	wall.mesh = wm
+	wall.position = Vector3(0, 0.5, 0)
+	wall.material_override = _mat(Color(0.78, 0.62, 0.44))
+	house.add_child(wall)
+	# 屋顶（三棱柱）
+	var roof := MeshInstance3D.new()
+	var rm := PrismMesh.new()
+	rm.size = Vector3(1.7, 0.6, 1.4)
+	roof.mesh = rm
+	roof.position = Vector3(0, 1.3, 0)
+	roof.material_override = _mat(Color(0.48, 0.30, 0.24))
+	house.add_child(roof)
+	# 门
+	var door := MeshInstance3D.new()
+	var dm := BoxMesh.new()
+	dm.size = Vector3(0.3, 0.5, 0.05)
+	door.mesh = dm
+	door.position = Vector3(0, 0.25, 0.58)
+	door.material_override = _mat(Color(0.35, 0.24, 0.16))
+	house.add_child(door)
+	return house
+
+
+func _collect_mats(n: Node) -> Array:
+	var out: Array = []
+	if n is MeshInstance3D:
+		var mi: MeshInstance3D = n
+		if mi.material_override:
+			out.append(mi.material_override)
+	for c in n.get_children():
+		out.append_array(_collect_mats(c))
+	return out
 
 
 ## 生成棋盘网格线（生息演算式棋盘感）
@@ -210,49 +258,95 @@ func _build_mudflats(parent: Node3D) -> void:
 
 
 func _process(delta: float) -> void:
-	# 物种个体在各自位置附近游走
-	var time := Time.get_ticks_msec() / 1000.0
+	_process_birds(delta)
+
+
+## 鸟类状态机：站立 / 啄水 / 行走，朝向符合移动方向
+func _process_birds(delta: float) -> void:
 	for sid in species_views:
 		var view: Dictionary = species_views[sid]
-		var meshes: Array = view["meshes"]
+		var rigs: Array = view["rigs"]
 		var bases: Array = view["bases"]
-		var speeds: Array = view["speeds"]
-		var phases: Array = view["phases"]
-		for i in meshes.size():
-			var rig: Node3D = meshes[i]
-			var b: Vector3 = bases[i]
-			var sp: float = speeds[i]
-			var ph: float = phases[i]
-			rig.position = b + Vector3(
-				sin(time * sp + ph) * 1.0,
-				sin(time * sp * 2.0 + ph) * 0.06,
-				cos(time * sp + ph) * 1.0
-			)
+		var states: Array = view["states"]
+		var timers: Array = view["timers"]
+		var targets: Array = view["targets"]
+		for i in rigs.size():
+			var rig: Node3D = rigs[i]
+			if not rig.visible:
+				continue
+			var base: Vector3 = bases[i]
+			timers[i] -= delta
+			if timers[i] <= 0.0:
+				# 切换状态
+				var r := randf()
+				if r < 0.45:
+					states[i] = 0  # 站立
+					timers[i] = 1.0 + randf() * 2.5
+				elif r < 0.78:
+					states[i] = 1  # 啄水
+					timers[i] = 1.2 + randf() * 1.4
+				else:
+					states[i] = 2  # 行走
+					timers[i] = 2.0 + randf() * 2.5
+					var ang := randf() * TAU
+					var dist := 1.6 + randf() * 3.5
+					targets[i] = base + Vector3(cos(ang) * dist, 0, sin(ang) * dist)
+
+			var st: int = states[i]
+			match st:
+				0:  # 站立：回正，静止
+					rig.rotation.x = lerpf(rig.rotation.x, 0.0, delta * 6.0)
+					rig.position.y = base.y
+				1:  # 啄水：俯身低头
+					rig.rotation.x = lerpf(rig.rotation.x, 0.55, delta * 8.0)
+					rig.position.y = base.y
+				2:  # 行走：朝目标移动，朝向移动方向
+					var target: Vector3 = targets[i]
+					var to_t := target - rig.position
+					var flat := Vector3(to_t.x, 0, to_t.z)
+					if flat.length() < 0.2:
+						states[i] = 0
+						timers[i] = 1.0 + randf() * 2.0
+						rig.rotation.x = lerpf(rig.rotation.x, 0.0, delta * 6.0)
+					else:
+						var dir := flat.normalized()
+						var speed := 0.9
+						rig.position += dir * speed * delta
+						# 朝向移动方向（喙在 +Z）
+						rig.rotation.y = atan2(dir.x, dir.z)
+						rig.rotation.x = lerpf(rig.rotation.x, 0.0, delta * 6.0)
+						# 走路轻微颠簸
+						rig.position.y = base.y + abs(sin(Time.get_ticks_msec() * 0.012 + i * 1.7)) * 0.05
 
 
 ## 为每个物种生成一组会动的个体（最多 10 个/物种），用多几何体拼出可辨识剪影
 func _build_species_views(parent: Node3D) -> void:
 	for sid in GameState.SPECIES:
-		var meshes: Array = []
+		var rigs: Array = []
 		var bases: Array = []
-		var speeds: Array = []
-		var phases: Array = []
+		var states: Array = []
+		var timers: Array = []
+		var targets: Array = []
 		for i in 10:
 			var rig := Node3D.new()  # 一个物种个体 = 一组几何体
 			rig.name = sid
 			_build_bird_body(rig, sid)
 			rig.visible = false
 			parent.add_child(rig)
-			meshes.append(rig)
+			rigs.append(rig)
 			var base := Vector3(
 				(-7 + i * 1.5) + (sid.length() % 3) * 2.0,
 				0.0,
 				-5 + (i % 4) * 3.0
 			)
 			bases.append(base)
-			speeds.append(0.6 + (i % 5) * 0.2)
-			phases.append(i * 1.3)
-		species_views[sid] = {"meshes": meshes, "bases": bases, "speeds": speeds, "phases": phases}
+			states.append(0)
+			timers.append(1.0 + (i % 5) * 0.6)
+			targets.append(base)
+		species_views[sid] = {
+			"rigs": rigs, "bases": bases,
+			"states": states, "timers": timers, "targets": targets,
+		}
 
 
 ## 用几何体拼出鸟类剪影（可辨识）
@@ -389,9 +483,9 @@ func _update_species_views() -> void:
 		var pop: int = GameState.species_pop.get(sid, 0)
 		var count: int = int(pop / 10.0)  # 0-100 → 0-10 个
 		var view: Dictionary = species_views[sid]
-		var meshes: Array = view["meshes"]
-		for i in meshes.size():
-			meshes[i].visible = i < count
+		var rigs: Array = view["rigs"]
+		for i in rigs.size():
+			rigs[i].visible = i < count
 
 
 ## 为每种植物生成一组个体
@@ -414,21 +508,21 @@ func _build_plant_shape(mi: MeshInstance3D, pid: String, kind: String) -> void:
 	match kind:
 		"submerged", "floating":
 			var sm := SphereMesh.new()
-			sm.radius = 0.3
-			sm.height = 0.5
+			sm.radius = 0.4
+			sm.height = 0.6
 			mi.mesh = sm
-			mi.scale = Vector3(1.0, 0.25, 1.0)
+			mi.scale = Vector3(1.2, 0.3, 1.2)
 		"emergent":
 			var cm := CylinderMesh.new()
-			cm.top_radius = 0.05
-			cm.bottom_radius = 0.06
-			cm.height = 1.6
+			cm.top_radius = 0.07
+			cm.bottom_radius = 0.09
+			cm.height = 2.2
 			mi.mesh = cm
 		"marsh":
 			var cm2 := CylinderMesh.new()
-			cm2.top_radius = 0.02
-			cm2.bottom_radius = 0.15
-			cm2.height = 0.5
+			cm2.top_radius = 0.03
+			cm2.bottom_radius = 0.25
+			cm2.height = 0.7
 			mi.mesh = cm2
 
 
@@ -478,8 +572,16 @@ func _update_3d() -> void:
 	# 植物数量随植被指标增减
 	_update_plant_views()
 
+	# 社区房子：信任度高则更多房子亮灯（暖色），低则灰暗
 	var cv := float(m["community"]) / 100.0
-	village_mat.albedo_color = Color(0.45 + 0.35 * cv, 0.32 + 0.25 * cv, 0.22 + 0.1 * cv)
+	var lit_count := int(cv / 20.0)  # 0-100 → 0-5 栋亮
+	for i in village_mats.size():
+		var house_cv: float = 1.0 if i < lit_count else 0.45
+		village_mats[i].albedo_color = Color(
+			0.45 + 0.35 * house_cv,
+			0.32 + 0.25 * house_cv,
+			0.22 + 0.1 * house_cv
+		)
 
 
 # ==================== UI ====================

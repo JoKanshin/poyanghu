@@ -94,9 +94,9 @@ const PLANTS := {
 
 # 行动卡 → 直接提升的植物
 const ACTION_PLANT_BONUS := {
-	"veg_restore": {"kucao": 10, "taicao": 8},
-	"water_control": {"luwei": 6, "lian": 6},
-	"water_monitor": {"kucao": 6},
+	"veg_restore": {"kucao": 18, "taicao": 14},
+	"water_control": {"luwei": 10, "lian": 10},
+	"water_monitor": {"kucao": 8},
 }
 
 # ==================== 行动卡数据 ====================
