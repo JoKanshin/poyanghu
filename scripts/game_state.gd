@@ -90,6 +90,11 @@ const PLANTS := {
 		"role": "草洲优势种，雁类的主要食物。",
 		"drivers": ["vegetation", "water_quality"],
 	},
+	"chishan": {
+		"name": "池杉", "color": Color(0.26, 0.46, 0.24), "kind": "tree",
+		"role": "岸边乔木，为候鸟提供筑巢与停歇的栖息地。",
+		"drivers": ["vegetation"],
+	},
 }
 
 # 行动卡 → 直接提升的植物

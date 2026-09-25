@@ -516,42 +516,113 @@ func _update_species_views() -> void:
 				tw2.tween_callback(func() -> void: rig.visible = false)
 
 
-## 为每种植物生成一组个体
+## 为每种植物生成一组个体（组合模型：根 Node3D + 多个几何体）
 func _build_plant_views(parent: Node3D) -> void:
 	for pid in GameState.PLANTS:
-		var meshes: Array = []
+		var rigs: Array = []
 		var kind: String = GameState.PLANTS[pid]["kind"]
 		for i in 14:
-			var mi := MeshInstance3D.new()
-			mi.visible = false
-			_build_plant_shape(mi, pid, kind)
-			parent.add_child(mi)
-			meshes.append(mi)
-		plant_views[pid] = {"meshes": meshes, "kind": kind}
+			var rig := Node3D.new()
+			rig.visible = false
+			_build_plant_model(rig, pid, kind)
+			parent.add_child(rig)
+			rigs.append(rig)
+		plant_views[pid] = {"rigs": rigs, "kind": kind}
 
 
-func _build_plant_shape(mi: MeshInstance3D, pid: String, kind: String) -> void:
+## 构建植物组合模型（比单几何体更有辨识度）
+func _build_plant_model(rig: Node3D, pid: String, kind: String) -> void:
 	var c: Color = GameState.PLANTS[pid]["color"]
-	mi.material_override = _mat(c)
 	match kind:
-		"submerged", "floating":
-			var sm := SphereMesh.new()
-			sm.radius = 0.4
-			sm.height = 0.6
-			mi.mesh = sm
-			mi.scale = Vector3(1.2, 0.3, 1.2)
+		"submerged":
+			# 苦草：水下丛生的带状叶片
+			for k in 5:
+				var leaf := MeshInstance3D.new()
+				var lm := BoxMesh.new()
+				lm.size = Vector3(0.08, 0.7, 0.18)
+				leaf.mesh = lm
+				leaf.material_override = _mat(c)
+				leaf.position = Vector3((k - 2) * 0.11, 0.35, (k % 2) * 0.08)
+				leaf.rotation.z = (k - 2) * 0.12
+				rig.add_child(leaf)
+		"floating":
+			# 莲：圆形浮叶 + 花
+			for k in 3:
+				var pad := MeshInstance3D.new()
+				var pm := CylinderMesh.new()
+				pm.top_radius = 0.32
+				pm.bottom_radius = 0.32
+				pm.height = 0.04
+				pad.mesh = pm
+				pad.material_override = _mat(c)
+				pad.position = Vector3((k - 1) * 0.42, 0.06, (k % 2) * 0.3)
+				rig.add_child(pad)
+			var flower := MeshInstance3D.new()
+			var fm := SphereMesh.new()
+			fm.radius = 0.09
+			fm.height = 0.18
+			flower.mesh = fm
+			flower.material_override = _mat(Color(0.92, 0.65, 0.78))
+			flower.position = Vector3(0, 0.22, 0)
+			rig.add_child(flower)
 		"emergent":
-			var cm := CylinderMesh.new()
-			cm.top_radius = 0.07
-			cm.bottom_radius = 0.09
-			cm.height = 2.2
-			mi.mesh = cm
-		"marsh":
-			var cm2 := CylinderMesh.new()
-			cm2.top_radius = 0.03
-			cm2.bottom_radius = 0.25
-			cm2.height = 0.7
-			mi.mesh = cm2
+			# 芦苇：多根细高秆 + 顶部穗
+			for k in 4:
+				var stalk := MeshInstance3D.new()
+				var sm := CylinderMesh.new()
+				sm.top_radius = 0.03
+				sm.bottom_radius = 0.045
+				sm.height = 1.9 + (k % 3) * 0.25
+				stalk.mesh = sm
+				stalk.material_override = _mat(c)
+				stalk.position = Vector3((k - 1.5) * 0.16, (1.9 + (k % 3) * 0.25) / 2.0, (k % 2) * 0.12)
+				rig.add_child(stalk)
+				var tassel := MeshInstance3D.new()
+				var tm := CylinderMesh.new()
+				tm.top_radius = 0.02
+				tm.bottom_radius = 0.07
+				tm.height = 0.32
+				tassel.mesh = tm
+				tassel.material_override = _mat(c.lightened(0.28))
+				tassel.position = Vector3((k - 1.5) * 0.16, 1.9 + (k % 3) * 0.25, (k % 2) * 0.12)
+				rig.add_child(tassel)
+		"tree":
+			# 池杉：树干 + 三层锥形树冠
+			var trunk := MeshInstance3D.new()
+			var trm := CylinderMesh.new()
+			trm.top_radius = 0.09
+			trm.bottom_radius = 0.16
+			trm.height = 1.6
+			trunk.mesh = trm
+			trunk.material_override = _mat(Color(0.36, 0.25, 0.16))
+			trunk.position = Vector3(0, 0.8, 0)
+			rig.add_child(trunk)
+			for layer in 3:
+				var canopy := MeshInstance3D.new()
+				var cm := CylinderMesh.new()
+				var r := 0.85 - layer * 0.22
+				cm.top_radius = 0.02
+				cm.bottom_radius = r
+				cm.height = 0.75
+				canopy.mesh = cm
+				canopy.material_override = _mat(c.lightened(layer * 0.08))
+				canopy.position = Vector3(0, 1.5 + layer * 0.55, 0)
+				rig.add_child(canopy)
+		_:  # marsh 草洲
+			# 草丛：一簇小锥
+			for k in 6:
+				var blade := MeshInstance3D.new()
+				var bm := CylinderMesh.new()
+				bm.top_radius = 0.01
+				bm.bottom_radius = 0.07
+				bm.height = 0.45 + (k % 3) * 0.15
+				blade.mesh = bm
+				blade.material_override = _mat(c.lightened((k % 3) * 0.06))
+				var ang := k * 1.05
+				blade.position = Vector3(cos(ang) * 0.14, (0.45 + (k % 3) * 0.15) / 2.0, sin(ang) * 0.14)
+				blade.rotation.z = cos(ang) * 0.22
+				blade.rotation.x = sin(ang) * 0.22
+				rig.add_child(blade)
 
 
 func _update_plant_views() -> void:
@@ -559,37 +630,30 @@ func _update_plant_views() -> void:
 		var pop: int = GameState.plant_pop.get(pid, 0)
 		var count: int = int(pop / 7.0)  # 0-100 → 0-14
 		var view: Dictionary = plant_views[pid]
-		var meshes: Array = view["meshes"]
+		var rigs: Array = view["rigs"]
 		var kind: String = view["kind"]
-		for i in meshes.size():
-			var mi: MeshInstance3D = meshes[i]
+		for i in rigs.size():
+			var rig: Node3D = rigs[i]
 			var should_show := i < count
-			if should_show and not mi.visible:
-				mi.visible = true
-				mi.position = _plant_position(pid, kind, i)
-				mi.scale = Vector3(0.01, 0.01, 0.01)
-				var tw := mi.create_tween()
+			if should_show and not rig.visible:
+				# 生长动画：从地面纵向"长出来"（高度 0→1 + 轻微过冲）
+				rig.visible = true
+				rig.position = _plant_position(pid, kind, i)
+				rig.scale = Vector3(1.0, 0.01, 1.0)
+				var tw := rig.create_tween()
 				tw.set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
-				tw.tween_property(mi, "scale", _plant_scale(pid, kind), 0.45)
+				tw.tween_property(rig, "scale", Vector3.ONE, 0.55).set_delay(i * 0.03)
 			elif should_show:
 				# 已在显示：确保缩放正确（防止动画被打断后残留小尺寸）
-				var want := _plant_scale(pid, kind)
-				if mi.scale.x < want.x * 0.95:
-					mi.scale = want
-			elif not should_show and mi.visible:
-				var tw2 := mi.create_tween()
+				if rig.scale.y < 0.95:
+					rig.scale = Vector3.ONE
+					rig.position = _plant_position(pid, kind, i)
+			elif not should_show and rig.visible:
+				# 消退：纵向缩回地面
+				var tw2 := rig.create_tween()
 				tw2.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_IN)
-				tw2.tween_property(mi, "scale", Vector3(0.01, 0.01, 0.01), 0.25)
-				tw2.tween_callback(func() -> void: mi.visible = false)
-
-
-## 植物原始缩放（用于弹性动画还原）
-func _plant_scale(pid: String, kind: String) -> Vector3:
-	match kind:
-		"submerged", "floating":
-			return Vector3(1.2, 0.3, 1.2)
-		_:
-			return Vector3.ONE
+				tw2.tween_property(rig, "scale", Vector3(1.0, 0.01, 1.0), 0.3)
+				tw2.tween_callback(func() -> void: rig.visible = false)
 
 
 func _plant_position(pid: String, kind: String, i: int) -> Vector3:
@@ -600,6 +664,9 @@ func _plant_position(pid: String, kind: String, i: int) -> Vector3:
 			return Vector3(2 + (i % 5) * 2.5, 0.06, -4 + int(i / 5) * 2.5)
 		"emergent":
 			return Vector3(-9 + (i % 7) * 2.6, 0.5, 3 + int(i / 7) * 2.5)
+		"tree":
+			# 乔木在岸边 / 草洲外围
+			return Vector3(-13 + (i % 5) * 6.0, 0.0, -12 + int(i / 5) * 2.6)
 		_:
 			return Vector3(-8 + (i % 7) * 2.4, 0.05, 5 + int(i / 7) * 2.4)
 
