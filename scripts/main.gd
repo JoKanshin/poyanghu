@@ -48,6 +48,7 @@ var bird_nodes: Array = []
 var fish_nodes: Array = []
 var village_mesh: MeshInstance3D
 var village_mat: StandardMaterial3D
+var species_views: Dictionary = {}  # sid -> {node, meshes[], base_positions[], speeds[]}
 
 
 func _ready() -> void:
@@ -109,19 +110,8 @@ func _build_3d() -> void:
 		grass_nodes.append(mi)
 		grass_mats.append(mat)
 
-	# 鸟群（8 只白鹤占位）
-	for i in 8:
-		var mi := MeshInstance3D.new()
-		var sm := SphereMesh.new()
-		sm.radius = 0.22
-		sm.height = 0.55
-		mi.mesh = sm
-		mi.position = Vector3(-6 + i * 1.8, 1.3, -4 + (i % 3) * 2.0)
-		var mat := StandardMaterial3D.new()
-		mat.albedo_color = Color(0.95, 0.95, 0.95)
-		mi.material_override = mat
-		lake_view.add_child(mi)
-		bird_nodes.append(mi)
+	# 鸟群（8 只白鹤占位）—— 替换为多物种动态个体系统
+	_build_species_views(lake_view)
 
 	# 鱼群（8 条占位，水下）
 	for i in 8:
@@ -153,6 +143,69 @@ func _build_3d() -> void:
 	root.add_child.call_deferred(lake_view)
 
 
+func _process(delta: float) -> void:
+	# 物种个体在各自位置附近游走
+	var time := Time.get_ticks_msec() / 1000.0
+	for sid in species_views:
+		var view: Dictionary = species_views[sid]
+		var meshes: Array = view["meshes"]
+		var bases: Array = view["bases"]
+		var speeds: Array = view["speeds"]
+		var phases: Array = view["phases"]
+		for i in meshes.size():
+			var mi: MeshInstance3D = meshes[i]
+			var b: Vector3 = bases[i]
+			var sp: float = speeds[i]
+			var ph: float = phases[i]
+			mi.position = b + Vector3(
+				sin(time * sp + ph) * 1.2,
+				sin(time * sp * 1.7 + ph) * 0.25,
+				cos(time * sp + ph) * 1.2
+			)
+
+
+## 为每个物种生成一组会动的个体（最多 12 个/物种）
+func _build_species_views(parent: Node3D) -> void:
+	for sid in GameState.SPECIES:
+		var color: Color = GameState.SPECIES[sid]["color"]
+		var meshes: Array = []
+		var bases: Array = []
+		var speeds: Array = []
+		var phases: Array = []
+		for i in 12:
+			var mi := MeshInstance3D.new()
+			var sm := SphereMesh.new()
+			sm.radius = 0.18
+			sm.height = 0.45
+			mi.mesh = sm
+			mi.visible = false
+			var mat := StandardMaterial3D.new()
+			mat.albedo_color = color
+			mi.material_override = mat
+			parent.add_child(mi)
+			meshes.append(mi)
+			# 每个物种在湖区不同区域活动
+			var base := Vector3(
+				(-7 + i * 1.4) + (sid.length() % 3) * 2.0,
+				1.0,
+				-5 + (i % 4) * 3.0
+			)
+			bases.append(base)
+			speeds.append(0.6 + (i % 5) * 0.2)
+			phases.append(i * 1.3)
+		species_views[sid] = {"meshes": meshes, "bases": bases, "speeds": speeds, "phases": phases}
+
+
+func _update_species_views() -> void:
+	for sid in GameState.SPECIES:
+		var pop: int = GameState.species_pop.get(sid, 0)
+		var count: int = int(pop / 8.0)  # 0-100 → 0-12 个
+		var view: Dictionary = species_views[sid]
+		var meshes: Array = view["meshes"]
+		for i in meshes.size():
+			meshes[i].visible = i < count
+
+
 func _update_3d() -> void:
 	var m: Dictionary = GameState.metrics
 	var wscale := lerpf(0.55, 1.35, float(m["water_level"]) / 100.0)
@@ -164,13 +217,12 @@ func _update_3d() -> void:
 		grass_mats[i].albedo_color = Color(0.55 - 0.3 * v, 0.35 + 0.35 * v, 0.20 + 0.15 * v)
 		grass_nodes[i].visible = m["vegetation"] > (10 + i * 8)
 
-	var nbird := int(m["birds"] / 12.0)
-	for i in bird_nodes.size():
-		bird_nodes[i].visible = i < nbird
-
 	var nfish := int(m["fish"] / 12.0)
 	for i in fish_nodes.size():
 		fish_nodes[i].visible = i < nfish
+
+	# 物种个体数量随物种种群增减
+	_update_species_views()
 
 	var cv := float(m["community"]) / 100.0
 	village_mat.albedo_color = Color(0.45 + 0.35 * cv, 0.32 + 0.25 * cv, 0.22 + 0.1 * cv)
@@ -472,6 +524,10 @@ func _advance_to_next() -> void:
 		_show_report(GameState.generate_report())
 	else:
 		GameState.start_new_turn()
+		# start_new_turn 会触发事件信号（有事件回合）。无事件回合不弹窗，
+		# 但知识卡弹窗此时已经关闭，所以直接进入分配阶段即可。
+		if not popup_root.visible:
+			_enter_allocate()
 
 
 func _on_game_end(report: Dictionary) -> void:

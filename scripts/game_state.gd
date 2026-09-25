@@ -23,6 +23,44 @@ const METRIC_NAMES := {
 const TIER_COST_MULT := {"basic": 0.5, "effective": 1.0, "deep": 2.0}
 const TIER_NAMES := {"basic": "基础投入", "effective": "有效投入", "deep": "深度投入"}
 
+# ==================== 物种数据 ====================
+# 每个物种有生态角色；数量受相关指标与行动联动。地图上按数量显示会动的个体。
+const SPECIES := {
+	"baihe": {
+		"name": "白鹤", "color": Color(0.95, 0.95, 0.95),
+		"role": "旗舰物种：取食苦草块茎，是人鸟冲突的核心。",
+		"drivers": ["birds", "vegetation"],
+	},
+	"dongfangbaihuan": {
+		"name": "东方白鹳", "color": Color(0.15, 0.15, 0.22),
+		"role": "鱼类取食者：湿地健康的指示物种。",
+		"drivers": ["birds", "fish"],
+	},
+	"xiaotiane": {
+		"name": "小天鹅", "color": Color(0.90, 0.90, 0.85),
+		"role": "浅水滤食者：对碟形湖水位变化最敏感。",
+		"drivers": ["birds", "water_level"],
+	},
+	"baizhenhe": {
+		"name": "白枕鹤", "color": Color(0.78, 0.78, 0.72),
+		"role": "杂食性：喜在农田与草洲交界处觅食稻谷。",
+		"drivers": ["birds", "community"],
+	},
+	"yanlei": {
+		"name": "雁类", "color": Color(0.62, 0.57, 0.47),
+		"role": "草洲取食者：数量庞大，是食物链的基础。",
+		"drivers": ["birds", "vegetation"],
+	},
+}
+
+# 行动卡 → 直接提升的物种（体现「某种选项导致物种增多」）
+const ACTION_SPECIES_BONUS := {
+	"veg_restore": {"baihe": 8, "yanlei": 8},
+	"water_control": {"xiaotiane": 8},
+	"bird_canteen": {"baihe": 6, "baizhenhe": 6},
+	"patrol": {"dongfangbaihuan": 6},
+}
+
 # ==================== 行动卡数据 ====================
 # effects: [{metric, delta, delay}]  delay=0 即时；>0 进延迟队列
 const ACTION_CARDS := [
@@ -178,6 +216,14 @@ const KNOWLEDGE_CARDS := {
 		"management": "保护碟形湖与草洲，营建候鸟食堂。",
 		"condition": "turn == 2",
 	},
+	"bird_xiaotiane": {
+		"name": "小天鹅", "category": "鸟类", "trigger": "observation",
+		"short": "体型较小的天鹅，嘴基黄黑，是国家二级保护动物。",
+		"ecology": "浅水滤食者，靠碟形湖浅水区觅食沉水植物与底栖动物。",
+		"threat": "水位异常波动会让浅水觅食地消失，种群随之下滑。",
+		"management": "碟形湖控水应维持适宜浅水深度，保障小天鹅觅食地。",
+		"condition": "turn == 3",
+	},
 	"bird_dongfang": {
 		"name": "东方白鹳", "category": "鸟类", "trigger": "observation",
 		"short": "白身黑翅、嘴黑而长的大型涉禽。",
@@ -239,6 +285,7 @@ var funds: int = 0          # 本回合可用资金
 var carry: int = 0          # 结转下回合
 var research_points: int = 0
 var metrics: Dictionary = {}
+var species_pop: Dictionary = {}     # 每物种数量 0-100
 var effects_queue: Array = []       # 延迟效果 {metric, delta, remaining, source}
 var used_action_ids: Array = []     # 本回合已执行的卡
 var knowledge_unlocked: Array = []
@@ -279,7 +326,23 @@ func reset_game() -> void:
 		"birds": 50,
 		"community": 55,
 	}
+	_sync_species()
 	start_new_turn()
+
+
+## 将物种数量同步到目标值（由驱动指标决定）
+func _sync_species() -> void:
+	for sid in SPECIES:
+		species_pop[sid] = _species_target(sid)
+
+
+## 物种目标数量 = 驱动指标均值（0-100）
+func _species_target(sid: String) -> int:
+	var drivers: Array = SPECIES[sid]["drivers"]
+	var sum := 0
+	for d in drivers:
+		sum += metrics[d]
+	return int(sum / drivers.size())
 
 
 ## 回合开始：结算拨款 + 扣运营支出
@@ -347,6 +410,11 @@ func execute_action(card_id: String, tier: String) -> bool:
 	if card_id == "research":
 		research_points += {"basic": 1, "effective": 2, "deep": 3}[tier]
 
+	# 行动对特定物种的直接加成（某选项让某物种增多）
+	if ACTION_SPECIES_BONUS.has(card_id):
+		for sid in ACTION_SPECIES_BONUS[card_id]:
+			species_pop[sid] = clampi(species_pop[sid] + ACTION_SPECIES_BONUS[card_id][sid], 0, 100)
+
 	funds_changed.emit()
 	metrics_changed.emit()
 	return true
@@ -376,6 +444,7 @@ func natural_evolution() -> void:
 	if metrics["community"] < 40 and not used_action_ids.has("community_comp"):
 		_apply_delta("community", -3)
 
+	_sync_species()
 	metrics_changed.emit()
 
 
