@@ -503,8 +503,17 @@ func _update_species_views() -> void:
 				var tw := rig.create_tween()
 				tw.set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
 				tw.tween_property(rig, "scale", Vector3.ONE, 0.4)
+			elif should_show and rig.scale.x < 1.0:
+				# 正在退场又需要显示：立即恢复
+				rig.scale = Vector3.ONE
 			elif not should_show and rig.visible:
-				rig.visible = false
+				# 消失的个体：缩小淡出后隐藏（不打断正在进行的退场动画）
+				if rig.scale.x < 0.9:
+					continue
+				var tw2 := rig.create_tween()
+				tw2.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_IN)
+				tw2.tween_property(rig, "scale", Vector3(0.01, 0.01, 0.01), 0.25)
+				tw2.tween_callback(func() -> void: rig.visible = false)
 
 
 ## 为每种植物生成一组个体
@@ -562,8 +571,16 @@ func _update_plant_views() -> void:
 				var tw := mi.create_tween()
 				tw.set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
 				tw.tween_property(mi, "scale", _plant_scale(pid, kind), 0.45)
+			elif should_show:
+				# 已在显示：确保缩放正确（防止动画被打断后残留小尺寸）
+				var want := _plant_scale(pid, kind)
+				if mi.scale.x < want.x * 0.95:
+					mi.scale = want
 			elif not should_show and mi.visible:
-				mi.visible = false
+				var tw2 := mi.create_tween()
+				tw2.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_IN)
+				tw2.tween_property(mi, "scale", Vector3(0.01, 0.01, 0.01), 0.25)
+				tw2.tween_callback(func() -> void: mi.visible = false)
 
 
 ## 植物原始缩放（用于弹性动画还原）
@@ -1160,19 +1177,30 @@ func _show_popup(title: String, body: String, button_text: String, on_continue: 
 	popup_button.text = button_text
 	_popup_continue = on_continue
 	popup_root.visible = true
-	# 弹窗淡入 + 面板轻微上浮（玩家等待中的反馈，用稍长时长更从容）
+	# 面板 pivot 需要等布局完成后再设，否则用旧尺寸缩放会偏移
+	popup_panel.pivot_offset = popup_panel.size * 0.5
+	# 弹窗淡入 + 面板轻微弹入（玩家等待中的反馈，用稍长时长更从容）
 	popup_root.modulate.a = 0.0
 	popup_panel.scale = Vector2(0.94, 0.94)
-	popup_panel.pivot_offset = popup_panel.size * 0.5
 	var tw := popup_root.create_tween()
 	tw.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
 	tw.tween_property(popup_root, "modulate:a", 1.0, 0.18)
 	var tw2 := popup_panel.create_tween()
 	tw2.set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
 	tw2.tween_property(popup_panel, "scale", Vector2.ONE, 0.24)
+	# 正文逐字揭示（长文本慢一点，短文本快一点，上限 0.7s）
+	popup_body.visible_ratio = 0.0
+	var reveal_time: float = clampf(body.length() * 0.006, 0.25, 0.7)
+	var tw3 := popup_body.create_tween()
+	tw3.set_trans(Tween.TRANS_LINEAR)
+	tw3.tween_property(popup_body, "visible_ratio", 1.0, reveal_time).set_delay(0.1)
 
 
 func _on_popup_button() -> void:
+	# 若正文还在逐字揭示中，第一次点击先把文字补全（避免误关）
+	if popup_body.visible_ratio < 1.0:
+		popup_body.visible_ratio = 1.0
+		return
 	popup_root.visible = false
 	var cb := _popup_continue
 	_popup_continue = Callable()
