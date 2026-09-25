@@ -431,6 +431,13 @@ func tier_cost(card_id: String, tier: String) -> int:
 	return int(round(card["cost"] * TIER_COST_MULT[tier]))
 
 
+## 从卡池随机抽 n 张（不重复，洗牌后取前 n）
+func draw_cards(n: int) -> Array:
+	var pool := ACTION_CARDS.duplicate()
+	pool.shuffle()
+	return pool.slice(0, min(n, pool.size()))
+
+
 ## 能否执行：资金够 + 行动位够
 func can_execute(card_id: String, tier: String) -> bool:
 	if used_action_ids.size() >= MAX_ACTIONS:

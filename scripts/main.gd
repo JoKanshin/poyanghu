@@ -28,6 +28,7 @@ var right_panel: PanelContainer
 var metric_bars: Dictionary = {}
 var hand_panel: PanelContainer
 var card_box: HBoxContainer
+var card_scroll: ScrollContainer
 var selected_label: Label
 var popup_root: Control
 var dim: ColorRect
@@ -674,7 +675,7 @@ func _build_ui() -> void:
 
 	var h_top := HBoxContainer.new()
 	hv.add_child(h_top)
-	var h_hint := _make_label("每回合最多执行 3 个行动（点击档位直接执行）", 13, Color(0.8, 0.85, 0.9))
+	var h_hint := _make_label("每回合最多执行 3 个行动（点击卡牌直接执行）", 13, Color(0.8, 0.85, 0.9))
 	h_hint.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	h_top.add_child(h_hint)
 	selected_label = _make_label("已选：0/3", 14, Color(1, 0.9, 0.5))
@@ -688,6 +689,7 @@ func _build_ui() -> void:
 	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
 	scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	hv.add_child(scroll)
+	card_scroll = scroll
 	card_box = HBoxContainer.new()
 	card_box.add_theme_constant_override("separation", 8)
 	scroll.add_child(card_box)
@@ -790,8 +792,10 @@ func _enter_allocate() -> void:
 func _build_allocate_panel() -> void:
 	for c in card_box.get_children():
 		c.queue_free()
-	for card in GameState.ACTION_CARDS:
+	var drawn := GameState.draw_cards(6)
+	for card in drawn:
 		card_box.add_child(_make_card(card))
+	card_scroll.scroll_horizontal = 0
 	_update_hud()
 
 
@@ -799,12 +803,14 @@ func _make_card(card: Dictionary) -> PanelContainer:
 	var panel := PanelContainer.new()
 	panel.custom_minimum_size = Vector2(200, 150)
 	_panel_style(panel, Color(0.30, 0.22, 0.14, 0.98))
+	panel.mouse_entered.connect(_on_card_hover.bind(panel, true))
+	panel.mouse_exited.connect(_on_card_hover.bind(panel, false))
 
 	var vb := VBoxContainer.new()
-	vb.add_theme_constant_override("separation", 3)
+	vb.add_theme_constant_override("separation", 4)
 	panel.add_child(vb)
 
-	var name_l := _make_label(card["name"], 15, Color(1, 1, 1))
+	var name_l := _make_label(card["name"], 16, Color(1, 1, 1))
 	vb.add_child(name_l)
 
 	var cat: String = card["category"]
@@ -812,29 +818,43 @@ func _make_card(card: Dictionary) -> PanelContainer:
 
 	var desc := _make_label(card["desc"], 11, Color(0.82, 0.85, 0.88))
 	desc.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	desc.custom_minimum_size = Vector2(0, 42)
+	desc.custom_minimum_size = Vector2(0, 44)
+	desc.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	vb.add_child(desc)
 
-	var btns := HBoxContainer.new()
-	btns.add_theme_constant_override("separation", 4)
-	vb.add_child(btns)
-	for tier in ["basic", "effective", "deep"]:
-		var cost := GameState.tier_cost(card["id"], tier)
-		var btn := _make_button("%s%d万" % [GameState.TIER_NAMES[tier].substr(0, 2), cost], _on_action_click.bind(card["id"], tier), 11)
-		btn.custom_minimum_size = Vector2(0, 30)
-		btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		btn.tooltip_text = "%s（%d 万）" % [GameState.TIER_NAMES[tier], cost]
-		btn.disabled = not GameState.can_execute(card["id"], tier)
-		btns.add_child(btn)
+	# 单个执行按钮（原价，效果=有效档）
+	var btn := _make_button("%d 万" % card["cost"], _on_action_click.bind(card["id"], panel), 15)
+	btn.custom_minimum_size = Vector2(0, 40)
+	btn.disabled = not GameState.can_execute(card["id"], "effective")
+	vb.add_child(btn)
 
 	return panel
 
 
-func _on_action_click(card_id: String, tier: String) -> void:
-	if not GameState.can_execute(card_id, tier):
+## 卡牌悬停：放大上浮
+func _on_card_hover(panel: PanelContainer, hovered: bool) -> void:
+	panel.pivot_offset = panel.size * 0.5
+	var tw := panel.create_tween()
+	if hovered:
+		panel.z_index = 10
+		tw.tween_property(panel, "scale", Vector2(1.07, 1.07), 0.12)
+	else:
+		panel.z_index = 0
+		tw.tween_property(panel, "scale", Vector2(1.0, 1.0), 0.12)
+
+
+## 点击卡牌执行：弹出缩放特效后执行
+func _on_action_click(card_id: String, panel: PanelContainer) -> void:
+	if not GameState.can_execute(card_id, "effective"):
 		return
-	GameState.execute_action(card_id, tier)
-	_build_allocate_panel()
+	panel.pivot_offset = panel.size * 0.5
+	var tw := panel.create_tween()
+	tw.tween_property(panel, "scale", Vector2(1.18, 1.18), 0.07)
+	tw.tween_property(panel, "scale", Vector2(1.0, 1.0), 0.10)
+	tw.tween_callback(func() -> void:
+		GameState.execute_action(card_id, "effective")
+		_build_allocate_panel()
+	)
 
 
 func _finish_turn() -> void:
