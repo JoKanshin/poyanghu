@@ -262,7 +262,7 @@ func _build_mudflats(parent: Node3D) -> void:
 
 func _process(delta: float) -> void:
 	_process_birds(delta)
-	_update_card_hover()
+	_update_card_hover(delta)
 	# 容器尺寸变化时重排扇形（居中）
 	if card_box != null and card_box.size.x > 10.0:
 		if _fan_layout_size.distance_to(card_box.size) > 1.0:
@@ -767,8 +767,13 @@ func _make_metric_row(metric: String) -> VBoxContainer:
 func _update_hud() -> void:
 	var m: Dictionary = GameState.metrics
 	for metric in metric_bars:
-		metric_bars[metric]["bar"].value = m[metric]
-		metric_bars[metric]["val"].text = str(m[metric])
+		var bar: ProgressBar = metric_bars[metric]["bar"]
+		var val: Label = metric_bars[metric]["val"]
+		# 指标变化不是玩家直接操作 → 用动画"告知"变化（速查表：非用户触发可较长时长）
+		var tw := bar.create_tween()
+		tw.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+		tw.tween_property(bar, "value", float(m[metric]), 0.35)
+		val.text = str(m[metric])
 
 	var t: int = GameState.turn
 	turn_label.text = "第 %d / %d 回合" % [t, GameState.TOTAL_TURNS]
@@ -958,7 +963,7 @@ func _update_selected_label() -> void:
 
 
 ## 每帧轮询卡牌悬停：精确判断鼠标是否在旋转后的卡牌内（避免相邻牌误判）
-func _update_card_hover() -> void:
+func _update_card_hover(delta: float) -> void:
 	if hand_panel.visible == false or card_infos.is_empty():
 		return
 	var mouse_global := get_viewport().get_mouse_position()
@@ -971,8 +976,8 @@ func _update_card_hover() -> void:
 		var raised: bool = hovering or info["selected"]
 		# 弹起方向：沿径向向外（远离圆心，即向上弹出）
 		var target: Vector2 = info["base_pos"] + info["radial"] * (26.0 if raised else 0.0)
-		if panel.position.distance_to(target) > 0.5:
-			panel.position = panel.position.lerp(target, 0.25)
+		# 与帧率无关的平滑（每秒 12 倍速收敛），替代固定系数 lerp
+		panel.position = panel.position.lerp(target, 1.0 - exp(-12.0 * delta))
 
 
 ## 判断全局坐标点是否在旋转后的卡牌矩形内
@@ -1009,8 +1014,9 @@ func _apply_gold_frame(panel: PanelContainer) -> void:
 	sb.content_margin_bottom = 10
 	panel.add_theme_stylebox_override("panel", sb)
 	var tw := panel.create_tween().set_loops()
-	tw.tween_property(sb, "border_color", Color(1.0, 0.95, 0.55), 0.55)
-	tw.tween_property(sb, "border_color", Color(0.95, 0.72, 0.18), 0.55)
+	tw.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+	tw.tween_property(sb, "border_color", Color(1.0, 0.95, 0.55), 0.7)
+	tw.tween_property(sb, "border_color", Color(0.95, 0.72, 0.18), 0.7)
 
 
 ## 取消选中：恢复普通边框
