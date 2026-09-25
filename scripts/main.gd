@@ -74,7 +74,7 @@ func _ready() -> void:
 	_fit_camera_to_window()
 
 
-## 根据窗口宽高比调整正交相机尺寸，保证沙盘完整可见
+## 根据窗口宽高比调整正交相机尺寸：让沙盘占满屏幕主体，不因宽屏被推远
 func _fit_camera_to_window() -> void:
 	var cam := get_node("../Camera3D") as Camera3D
 	if cam == null:
@@ -82,13 +82,12 @@ func _fit_camera_to_window() -> void:
 	var vp := get_viewport().get_visible_rect().size
 	if vp.y <= 0.0:
 		return
-	# 沙盘需要的最小可见宽度（世界单位）
-	var need_w := 30.0
 	var aspect := vp.x / vp.y
-	# 正交 size 是「垂直」尺寸；宽高比小时要放大以容纳 need_w
-	var size_for_w := need_w / aspect
-	var size_for_h := 20.0
-	cam.size = maxf(size_for_w, size_for_h)
+	# 沙盘在 45° 俯视下的垂直投影约 29 世界单位，留边距 → 垂直视野 31
+	const VIEW_H := 31.0
+	# 窄屏时保证水平也能容纳沙盘宽度
+	const NEED_W := 50.0
+	cam.size = maxf(VIEW_H, NEED_W / aspect)
 
 
 # ==================== 相机 ====================
@@ -100,12 +99,29 @@ func _setup_camera() -> void:
 	cam.position = Vector3(14, 14, 14)
 	cam.look_at(Vector3(0, 0, 0), Vector3.UP)
 
+	# 沙盘地面：与远景布景协调的草绿（替代场景里的深绿盒子观感）
+	var ground_mesh := get_node_or_null("../Ground/GroundMesh") as MeshInstance3D
+	if ground_mesh:
+		var gm := StandardMaterial3D.new()
+		gm.albedo_color = Color(0.40, 0.53, 0.30)
+		gm.roughness = 1.0
+		ground_mesh.material_override = gm
+
 	# 暖色方向光（湿地黄昏氛围）
 	var light := get_node("../DirectionalLight3D") as DirectionalLight3D
-	light.light_color = Color(1.0, 0.85, 0.65)
-	light.light_energy = 1.4
+	light.light_color = Color(1.0, 0.92, 0.78)
+	light.light_energy = 1.15
 	light.rotation_degrees = Vector3(-45, -35, 0)
 	light.shadow_enabled = true
+
+	# 提高环境光，避免远景布景背光发黑
+	var env_node := get_node("../WorldEnvironment") as WorldEnvironment
+	if env_node and env_node.environment:
+		var env := env_node.environment
+		env.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
+		env.ambient_light_color = Color(0.62, 0.66, 0.58)
+		env.ambient_light_energy = 0.85
+		env.tonemap_mode = Environment.TONE_MAPPER_FILMIC
 
 
 # ==================== 3D 表现 ====================
@@ -173,6 +189,9 @@ func _build_3d() -> void:
 	# 渔村（湖边一排房子）
 	_build_village(lake_view)
 
+	# 远景布景草地（环绕沙盘的低多边形起伏草原，不参与游戏交互）
+	_build_backdrop_grass(lake_view)
+
 	# 延迟挂到场景，避免父节点初始化期 add_child 冲突
 	var root := get_parent() as Node3D
 	root.add_child.call_deferred(lake_view)
@@ -204,6 +223,119 @@ func _find_perch_point(sid: String, seed_i: int) -> Vector3:
 				return p.position + Vector3(0, 1.2, 0)
 	# 最后兜底：原地
 	return Vector3(-6 + seed_i * 1.2, 1.0, -3 + (seed_i % 3) * 2.0)
+
+
+## 远景布景：环绕沙盘的起伏草原（纯装饰，不参与任何游戏交互）
+func _build_backdrop_grass(parent: Node3D) -> void:
+	var backdrop := Node3D.new()
+	backdrop.name = "Backdrop"
+	parent.add_child(backdrop)
+
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 20260925  # 固定种子，每次启动地貌一致
+
+	# 1) 起伏地面：大尺寸 PlaneMesh + 顶点位移（用 SurfaceTool 造波状起伏）
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var half := 90.0     # 覆盖 180×180，远超沙盘，视野边缘不会露空
+	var cells := 60
+	var step := half * 2.0 / cells
+	for ix in cells:
+		for iz in cells:
+			var x0 := -half + ix * step
+			var z0 := -half + iz * step
+			var x1 := x0 + step
+			var z1 := z0 + step
+			var v00 := Vector3(x0, _backdrop_height(x0, z0), z0)
+			var v10 := Vector3(x1, _backdrop_height(x1, z0), z0)
+			var v01 := Vector3(x0, _backdrop_height(x0, z1), z1)
+			var v11 := Vector3(x1, _backdrop_height(x1, z1), z1)
+			# 双面渲染 + 显式向上法线，彻底避免朝向/背光问题
+			var up := Vector3.UP
+			st.set_normal(up); st.add_vertex(v00)
+			st.set_normal(up); st.add_vertex(v11)
+			st.set_normal(up); st.add_vertex(v01)
+			st.set_normal(up); st.add_vertex(v00)
+			st.set_normal(up); st.add_vertex(v10)
+			st.set_normal(up); st.add_vertex(v11)
+	var ground := MeshInstance3D.new()
+	ground.mesh = st.commit()
+	ground.material_override = _mat(Color(0.42, 0.55, 0.32))
+	ground.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	ground.position = Vector3(0, -0.28, 0)  # 略低于沙盘地面，避免z-fighting
+	backdrop.add_child(ground)
+
+	# 2) 散落的远景树（沙盘外围才放，避免遮挡主场景）
+	var tree_spots: Array = []
+	for k in 150:
+		var ang := rng.randf_range(0, TAU)
+		var dist := rng.randf_range(24.0, 82.0)  # 只在沙盘(±18)之外
+		var x := cos(ang) * dist
+		var z := sin(ang) * dist
+		tree_spots.append(Vector3(x, _backdrop_height(x, z), z))
+	for p in tree_spots:
+		var t := _make_backdrop_tree(rng)
+		t.position = p
+		backdrop.add_child(t)
+
+	# 3) 灌木丛点缀
+	for k in 90:
+		var ang := rng.randf_range(0, TAU)
+		var dist := rng.randf_range(22.0, 85.0)
+		var x := cos(ang) * dist
+		var z := sin(ang) * dist
+		var bush := MeshInstance3D.new()
+		var bm := SphereMesh.new()
+		bm.radius = rng.randf_range(0.7, 1.4)
+		bm.height = bm.radius * 1.1
+		bush.mesh = bm
+		bush.material_override = _mat(Color(0.30, 0.44, 0.22).lightened(rng.randf_range(0.0, 0.14)))
+		bush.position = Vector3(x, _backdrop_height(x, z) + bm.radius * 0.4, z)
+		bush.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		backdrop.add_child(bush)
+
+
+## 远景地形高度：几层正弦叠加，形成平缓起伏（距离沙盘越远越不必精确）
+func _backdrop_height(x: float, z: float) -> float:
+	var h := sin(x * 0.11) * cos(z * 0.13) * 1.6
+	h += sin(x * 0.31 + 1.7) * cos(z * 0.27 - 0.6) * 0.55
+	h += sin(x * 0.63 - 0.4) * cos(z * 0.58 + 2.1) * 0.22
+	# 靠近沙盘（半径 22 内）压平并下沉，与沙盘地面平滑衔接
+	var d := Vector2(x, z).length()
+	if d < 26.0:
+		var t := clampf((d - 20.0) / 6.0, 0.0, 1.0)
+		h = lerpf(-0.28, h, t)
+	return h
+
+
+## 远景树：低多边形锥形树（随机高矮胖瘦）
+func _make_backdrop_tree(rng: RandomNumberGenerator) -> Node3D:
+	var tree := Node3D.new()
+	var h := rng.randf_range(2.2, 4.6)
+	var trunk := MeshInstance3D.new()
+	var tm := CylinderMesh.new()
+	tm.top_radius = 0.10
+	tm.bottom_radius = 0.20
+	tm.height = h * 0.45
+	trunk.mesh = tm
+	trunk.material_override = _mat(Color(0.33, 0.24, 0.16))
+	trunk.position = Vector3(0, h * 0.225, 0)
+	tree.add_child(trunk)
+	var layers := 2 + rng.randi() % 2
+	for layer in layers:
+		var canopy := MeshInstance3D.new()
+		var cm := CylinderMesh.new()
+		cm.top_radius = 0.03
+		var r := h * 0.30 * (1.0 - layer * 0.22)
+		cm.bottom_radius = r
+		cm.height = h * 0.42
+		canopy.mesh = cm
+		var green := rng.randf_range(0.20, 0.34)
+		canopy.material_override = _mat(Color(green * 0.75, green + 0.20, green * 0.85))
+		canopy.position = Vector3(0, h * 0.42 + layer * h * 0.20, 0)
+		canopy.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		tree.add_child(canopy)
+	return tree
 
 
 ## 湖边社区：一排房子，数量/颜色随社区信任度变化
