@@ -670,7 +670,7 @@ func _build_ui() -> void:
 	hand_panel.anchor_bottom = 1.0
 	hand_panel.offset_left = 300
 	hand_panel.offset_right = -300
-	hand_panel.offset_top = -380
+	hand_panel.offset_top = -320
 	hand_panel.offset_bottom = -8
 	_panel_style(hand_panel, Color(0.22, 0.15, 0.10, 0.96))
 	hand_panel.visible = false
@@ -694,7 +694,7 @@ func _build_ui() -> void:
 	# 牌区（扇形手牌，手动定位）
 	card_box = Control.new()
 	card_box.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	card_box.custom_minimum_size = Vector2(0, 320)
+	card_box.custom_minimum_size = Vector2(0, 238)
 	card_box.mouse_filter = Control.MOUSE_FILTER_PASS
 	card_box.resized.connect(_on_card_box_resized)
 	hv.add_child(card_box)
@@ -816,29 +816,57 @@ func _layout_fan() -> void:
 	var n := card_infos.size()
 	if n == 0:
 		return
-	var card_w := 130.0
-	var card_h := 158.0
-	# 圆心：以 card_box 实际尺寸为准，水平居中，垂直在底部下方
+	var card_w := 122.0
+	var card_h := 165.0
 	var area_size := card_box.size
-	if area_size.x < 10.0 or area_size.y < 10.0:
-		area_size = Vector2(552.0, 260.0)  # 兜底
-	var center := Vector2(area_size.x / 2.0, area_size.y - 20.0)
-	var radius := 135.0
-	var total_span := deg_to_rad(55.0)
+	if area_size.x < 10.0:
+		area_size.x = 528.0
+
+	var step_dist := 66.0                      # 相邻牌在弧上的间距（越小重叠越多）
+	var delta_theta := deg_to_rad(8.5)
+	var radius: float = step_dist / delta_theta
+	var total_span := delta_theta * float(n - 1)
+
+	# 第一遍：以「圆心在原点」计算每张牌的角度与轴心点
+	var pivots: Array = []
+	var thetas: Array = []
 	for i in n:
-		var info: Dictionary = card_infos[i]
-		var panel: PanelContainer = info["panel"]
+		var theta := -total_span / 2.0 + delta_theta * float(i)
+		pivots.append(Vector2(sin(theta), -cos(theta)) * radius)
+		thetas.append(theta)
+		var panel: PanelContainer = card_infos[i]["panel"]
 		panel.size = Vector2(card_w, card_h)
 		panel.custom_minimum_size = Vector2(card_w, card_h)
 		panel.pivot_offset = Vector2(card_w / 2.0, card_h)
-		var theta := -total_span / 2.0 + total_span * (float(i) / (n - 1)) if n > 1 else 0.0
-		var radial := Vector2(cos(theta - PI / 2.0), sin(theta - PI / 2.0))
-		var bottom_pos := center + radial * radius
-		panel.position = bottom_pos
 		panel.rotation = theta
-		info["base_pos"] = panel.position
-		info["theta"] = theta
-		info["radial"] = radial
+
+	# 第二遍：算出旋转后整体的真实包围盒（不依赖手算常数）
+	var corners := [
+		Vector2(-card_w / 2.0, -card_h), Vector2(card_w / 2.0, -card_h),
+		Vector2(card_w / 2.0, 0.0), Vector2(-card_w / 2.0, 0.0),
+	]
+	var min_x := INF
+	var max_x := -INF
+	var min_y := INF
+	var max_y := -INF
+	for i in n:
+		for c in corners:
+			var p: Vector2 = pivots[i] + c.rotated(thetas[i])
+			min_x = minf(min_x, p.x)
+			max_x = maxf(max_x, p.x)
+			min_y = minf(min_y, p.y)
+			max_y = maxf(max_y, p.y)
+
+	# 第三遍：整体平移 —— 水平居中于容器，底部贴边（留下上方空间供悬停弹起）
+	var bottom_margin := 10.0
+	var dx: float = area_size.x / 2.0 - (min_x + max_x) / 2.0
+	var dy: float = (area_size.y - bottom_margin) - max_y
+	for i in n:
+		var panel: PanelContainer = card_infos[i]["panel"]
+		panel.position = pivots[i] + Vector2(dx, dy) - panel.pivot_offset
+		card_infos[i]["base_pos"] = panel.position
+		card_infos[i]["theta"] = thetas[i]
+		card_infos[i]["radial"] = Vector2(sin(thetas[i]), -cos(thetas[i]))
 	_fan_layout_size = area_size
 
 
@@ -850,8 +878,8 @@ func _on_card_box_resized() -> void:
 
 func _make_card(card: Dictionary) -> PanelContainer:
 	var panel := PanelContainer.new()
-	panel.custom_minimum_size = Vector2(130, 158)
-	panel.size = Vector2(130, 158)
+	panel.custom_minimum_size = Vector2(122, 165)
+	panel.size = Vector2(122, 165)
 	panel.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
 	_panel_style(panel, Color(0.30, 0.22, 0.14, 0.98))
 	panel.tooltip_text = "%s\n\n%s" % [card["desc"], _effect_text(card)]
@@ -951,15 +979,18 @@ func _update_card_hover() -> void:
 func _point_in_card(panel: PanelContainer, mouse_global: Vector2, box_tf: Transform2D) -> bool:
 	# 鼠标 → card_box 局部坐标
 	var local: Vector2 = box_tf.affine_inverse() * mouse_global
-	# 相对卡牌左上角（position 是 pivot 位置）
-	var offset: Vector2 = local - (panel.position - panel.pivot_offset)
-	# 逆旋转
+	# 相对牌底中心(pivot)的向量
+	var offset: Vector2 = local - (panel.position + panel.pivot_offset)
+	# 逆旋转到卡牌自身坐标系
 	var ang := -panel.rotation
 	var rotated := Vector2(
 		offset.x * cos(ang) - offset.y * sin(ang),
 		offset.x * sin(ang) + offset.y * cos(ang)
 	)
-	return rotated.x >= 0.0 and rotated.x <= panel.size.x and rotated.y >= 0.0 and rotated.y <= panel.size.y
+	var hx: float = panel.pivot_offset.x
+	var hy: float = panel.pivot_offset.y
+	return rotated.x >= -hx and rotated.x <= panel.size.x - hx \
+		and rotated.y >= -hy and rotated.y <= panel.size.y - hy
 
 
 ## 金色闪光框（选中标记，呼吸发光）
