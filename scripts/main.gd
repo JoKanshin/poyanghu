@@ -27,9 +27,10 @@ var event_label: Label
 var right_panel: PanelContainer
 var metric_bars: Dictionary = {}
 var hand_panel: PanelContainer
-var card_box: HBoxContainer
-var card_scroll: ScrollContainer
+var card_box: Control
 var selected_label: Label
+var current_hand: Array = []   # 当前手牌（card dict 数组）
+var card_infos: Array = []     # {panel, btn, card_id, base_y, selected}
 var popup_root: Control
 var dim: ColorRect
 var popup_center: CenterContainer
@@ -684,15 +685,12 @@ func _build_ui() -> void:
 	end_btn.custom_minimum_size = Vector2(140, 34)
 	h_top.add_child(end_btn)
 
-	var scroll := ScrollContainer.new()
-	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
-	scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	hv.add_child(scroll)
-	card_scroll = scroll
-	card_box = HBoxContainer.new()
-	card_box.add_theme_constant_override("separation", 8)
-	scroll.add_child(card_box)
+	# 牌区（扇形手牌，手动定位）
+	card_box = Control.new()
+	card_box.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	card_box.custom_minimum_size = Vector2(0, 160)
+	card_box.mouse_filter = Control.MOUSE_FILTER_PASS
+	hv.add_child(card_box)
 
 	# --- 弹窗（顶层）---
 	popup_root = Control.new()
@@ -785,24 +783,58 @@ func _on_event(text: String) -> void:
 
 
 func _enter_allocate() -> void:
-	_build_allocate_panel()
+	current_hand = GameState.draw_cards(6)
+	_build_hand_panel()
 	hand_panel.visible = true
 
 
-func _build_allocate_panel() -> void:
+func _build_hand_panel() -> void:
 	for c in card_box.get_children():
 		c.queue_free()
-	var drawn := GameState.draw_cards(6)
-	for card in drawn:
-		card_box.add_child(_make_card(card))
-	card_scroll.scroll_horizontal = 0
+	card_infos = []
+	for card in current_hand:
+		var panel := _make_card(card)
+		card_box.add_child(panel)
+		card_infos.append({
+			"panel": panel, "card_id": card["id"],
+			"base_y": 0.0, "selected": false,
+		})
+	_layout_fan()
 	_update_hud()
+
+
+## 扇形摆放手牌：中间低、两侧抬升并旋转（斗地主式）
+func _layout_fan() -> void:
+	var n := card_infos.size()
+	if n == 0:
+		return
+	var area_w := 552.0
+	var area_h := 160.0
+	var card_w := 110.0
+	var card_h := 135.0
+	var spacing := 74.0
+	var center_x := area_w / 2.0
+	var max_rot := deg_to_rad(18.0)
+	for i in n:
+		var info: Dictionary = card_infos[i]
+		var panel: PanelContainer = info["panel"]
+		panel.custom_minimum_size = Vector2(card_w, card_h)
+		panel.pivot_offset = Vector2(card_w / 2.0, card_h)
+		var t := 0.0 if n == 1 else float(i) / (n - 1) - 0.5  # -0.5..0.5
+		var rot := -t * max_rot * 2.0
+		var lift: float = abs(t) * 45.0
+		var bottom_y: float = area_h - 12.0 - lift
+		var bottom_center := Vector2(center_x + t * (n - 1) * spacing, bottom_y)
+		panel.position = bottom_center - panel.pivot_offset
+		panel.rotation = rot
+		info["base_y"] = panel.position.y
 
 
 func _make_card(card: Dictionary) -> PanelContainer:
 	var panel := PanelContainer.new()
-	panel.custom_minimum_size = Vector2(200, 150)
+	panel.custom_minimum_size = Vector2(110, 135)
 	_panel_style(panel, Color(0.30, 0.22, 0.14, 0.98))
+	panel.tooltip_text = "%s\n\n%s" % [card["desc"], _effect_text(card)]
 	panel.mouse_entered.connect(_on_card_hover.bind(panel, true))
 	panel.mouse_exited.connect(_on_card_hover.bind(panel, false))
 
@@ -810,51 +842,104 @@ func _make_card(card: Dictionary) -> PanelContainer:
 	vb.add_theme_constant_override("separation", 4)
 	panel.add_child(vb)
 
-	var name_l := _make_label(card["name"], 16, Color(1, 1, 1))
+	var name_l := _make_label(card["name"], 14, Color(1, 1, 1))
+	name_l.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	vb.add_child(name_l)
 
 	var cat: String = card["category"]
-	vb.add_child(_make_label(CATEGORY_NAMES[cat], 11, CATEGORY_COLORS[cat]))
+	var cat_l := _make_label(CATEGORY_NAMES[cat], 10, CATEGORY_COLORS[cat])
+	cat_l.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	vb.add_child(cat_l)
 
-	var desc := _make_label(card["desc"], 11, Color(0.82, 0.85, 0.88))
-	desc.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	desc.custom_minimum_size = Vector2(0, 44)
-	desc.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	vb.add_child(desc)
+	var spacer := Control.new()
+	spacer.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	vb.add_child(spacer)
 
-	# 单个执行按钮（原价，效果=有效档）
-	var btn := _make_button("%d 万" % card["cost"], _on_action_click.bind(card["id"], panel), 15)
-	btn.custom_minimum_size = Vector2(0, 40)
+	var btn := _make_button("%d 万" % card["cost"], _on_action_click.bind(card["id"], panel), 14)
+	btn.custom_minimum_size = Vector2(0, 38)
 	btn.disabled = not GameState.can_execute(card["id"], "effective")
 	vb.add_child(btn)
 
 	return panel
 
 
-## 卡牌悬停：放大上浮
+func _effect_text(card: Dictionary) -> String:
+	var t: Dictionary = card["tiers"]["effective"]
+	var parts: Array = []
+	for e in t["effects"]:
+		var d: int = e["delay"]
+		var suffix := "（%d 回合后）" % d if d > 0 else ""
+		parts.append("%s %+d%s" % [GameState.METRIC_NAMES[e["metric"]], e["delta"], suffix])
+	return "效果：" + "、".join(parts)
+
+
+func _find_card_info(panel: PanelContainer) -> Dictionary:
+	for info in card_infos:
+		if info["panel"] == panel:
+			return info
+	return {}
+
+
+## 卡牌悬停/选中：向上弹出（位移，不放大）
 func _on_card_hover(panel: PanelContainer, hovered: bool) -> void:
-	panel.pivot_offset = panel.size * 0.5
+	var info: Dictionary = _find_card_info(panel)
+	if info.is_empty():
+		return
+	var raised: bool = hovered or info["selected"]
+	var target_y: float = info["base_y"] - (26.0 if raised else 0.0)
 	var tw := panel.create_tween()
-	if hovered:
-		panel.z_index = 10
-		tw.tween_property(panel, "scale", Vector2(1.07, 1.07), 0.12)
-	else:
-		panel.z_index = 0
-		tw.tween_property(panel, "scale", Vector2(1.0, 1.0), 0.12)
+	tw.tween_property(panel, "position:y", target_y, 0.12)
 
 
-## 点击卡牌执行：弹出缩放特效后执行
+## 点击卡牌执行：弹出动画后执行，选中加金色闪光框
 func _on_action_click(card_id: String, panel: PanelContainer) -> void:
 	if not GameState.can_execute(card_id, "effective"):
 		return
-	panel.pivot_offset = panel.size * 0.5
-	var tw := panel.create_tween()
-	tw.tween_property(panel, "scale", Vector2(1.18, 1.18), 0.07)
-	tw.tween_property(panel, "scale", Vector2(1.0, 1.0), 0.10)
-	tw.tween_callback(func() -> void:
-		GameState.execute_action(card_id, "effective")
-		_build_allocate_panel()
-	)
+	var info: Dictionary = _find_card_info(panel)
+	if info.is_empty() or info["selected"]:
+		return
+	GameState.execute_action(card_id, "effective")
+	info["selected"] = true
+	_apply_gold_frame(panel)
+	_on_card_hover(panel, false)  # 保持弹出
+	_refresh_card_buttons()
+	_update_hud()
+
+
+## 金色闪光框（选中标记，呼吸发光）
+func _apply_gold_frame(panel: PanelContainer) -> void:
+	var sb := StyleBoxFlat.new()
+	sb.bg_color = Color(0.30, 0.22, 0.14, 0.98)
+	sb.border_color = Color(1.0, 0.85, 0.30)
+	sb.set_border_width_all(3)
+	sb.corner_radius_top_left = 4
+	sb.corner_radius_top_right = 4
+	sb.corner_radius_bottom_left = 4
+	sb.corner_radius_bottom_right = 4
+	sb.content_margin_left = 12
+	sb.content_margin_right = 12
+	sb.content_margin_top = 10
+	sb.content_margin_bottom = 10
+	panel.add_theme_stylebox_override("panel", sb)
+	# 呼吸发光动画
+	var tw := panel.create_tween().set_loops()
+	tw.tween_property(sb, "border_color", Color(1.0, 0.95, 0.55), 0.55)
+	tw.tween_property(sb, "border_color", Color(0.95, 0.72, 0.18), 0.55)
+
+
+## 执行后刷新各牌按钮禁用状态（资金/行动位变化）
+func _refresh_card_buttons() -> void:
+	for info in card_infos:
+		var panel: PanelContainer = info["panel"]
+		var card_id: String = info["card_id"]
+		if info["selected"]:
+			continue
+		# 找到面板里的按钮
+		for child in panel.get_children():
+			if child is VBoxContainer:
+				for c in child.get_children():
+					if c is Button:
+						c.disabled = not GameState.can_execute(card_id, "effective")
 
 
 func _finish_turn() -> void:
