@@ -1,0 +1,55 @@
+[gd_scene format=3 uid="uid://bxv48pbooddxq"]
+
+[ext_resource type="Script" path="res://scripts/main.gd" id="1_o5qli"]
+
+[sub_resource type="ProceduralSkyMaterial" id="ProceduralSkyMaterial_sgp6g"]
+sky_top_color = Color(0.38, 0.45, 0.55, 1)
+sky_horizon_color = Color(0.65, 0.67, 0.7, 1)
+ground_bottom_color = Color(0.2, 0.17, 0.13, 1)
+ground_horizon_color = Color(0.65, 0.67, 0.7, 1)
+
+[sub_resource type="Sky" id="Sky_o5qli"]
+sky_material = SubResource("ProceduralSkyMaterial_sgp6g")
+
+[sub_resource type="Environment" id="Environment_0wfyh"]
+background_mode = 2
+background_color = Color(0.65882355, 0.8352941, 0.8862745, 1)
+sky = SubResource("Sky_o5qli")
+ambient_light_source = 3
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_sgp6g"]
+albedo_color = Color(0.41960785, 0.5568628, 0.3529412, 1)
+
+[sub_resource type="BoxMesh" id="BoxMesh_o5qli"]
+size = Vector3(40, 0.5, 40)
+
+[sub_resource type="BoxShape3D" id="BoxShape3D_0wfyh"]
+size = Vector3(40, 0.5, 40)
+
+[node name="Main" type="Node3D" unique_id=1828341335]
+
+[node name="Camera3D" type="Camera3D" parent="." unique_id=2049983551]
+transform = Transform3D(1, 0, 0, 0, 0.70710677, 0.70710677, 0, -0.70710677, 0.70710677, 0, 12, 12)
+projection = 1
+current = true
+size = 14.0
+
+[node name="DirectionalLight3D" type="DirectionalLight3D" parent="." unique_id=1254740233]
+transform = Transform3D(0.8660254, 0.38302222, -0.32139382, 0, 0.64278764, 0.76604444, 0.5, -0.66341394, 0.5566704, 0, 0, 0)
+shadow_enabled = true
+
+[node name="WorldEnvironment" type="WorldEnvironment" parent="." unique_id=902741563]
+environment = SubResource("Environment_0wfyh")
+
+[node name="Ground" type="StaticBody3D" parent="." unique_id=2078855689]
+
+[node name="GroundMesh" type="MeshInstance3D" parent="Ground" unique_id=386970948]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -0.25, 0)
+material_override = SubResource("StandardMaterial3D_sgp6g")
+mesh = SubResource("BoxMesh_o5qli")
+
+[node name="GroundCollision" type="CollisionShape3D" parent="Ground" unique_id=589676059]
+shape = SubResource("BoxShape3D_0wfyh")
+
+[node name="Game" type="Node" parent="." unique_id=1936194429]
+script = ExtResource("1_o5qli")
