@@ -807,17 +807,17 @@ func _build_ui() -> void:
 	canvas.name = "UICanvas"
 	add_child(canvas)
 
-	# --- 左侧：时间 / 金钱 / 事件 ---
+	# --- 左侧：时间 / 金钱 / 事件（收窄为竖条，把沙盘让出来）---
 	left_panel = PanelContainer.new()
 	left_panel.anchor_left = 0.0
 	left_panel.anchor_top = 0.0
 	left_panel.anchor_right = 0.0
-	left_panel.anchor_bottom = 1.0
-	left_panel.offset_left = 8
-	left_panel.offset_right = 292
-	left_panel.offset_top = 8
-	left_panel.offset_bottom = -200
-	_panel_style(left_panel, Color(0.20, 0.14, 0.09, 0.94))
+	left_panel.anchor_bottom = 0.0
+	left_panel.offset_left = 6
+	left_panel.offset_right = 210
+	left_panel.offset_top = 6
+	left_panel.offset_bottom = 300
+	_panel_style(left_panel, Color(0.20, 0.14, 0.09, 0.86))
 	canvas.add_child(left_panel)
 
 	var lv := VBoxContainer.new()
@@ -850,17 +850,17 @@ func _build_ui() -> void:
 	event_label.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	lv.add_child(event_label)
 
-	# --- 右侧：六项指标 ---
+	# --- 右侧：六项指标（收窄为竖条）---
 	right_panel = PanelContainer.new()
 	right_panel.anchor_left = 1.0
 	right_panel.anchor_top = 0.0
 	right_panel.anchor_right = 1.0
-	right_panel.anchor_bottom = 1.0
-	right_panel.offset_left = -292
-	right_panel.offset_right = -8
-	right_panel.offset_top = 8
-	right_panel.offset_bottom = -200
-	_panel_style(right_panel, Color(0.20, 0.14, 0.09, 0.94))
+	right_panel.anchor_bottom = 0.0
+	right_panel.offset_left = -190
+	right_panel.offset_right = -6
+	right_panel.offset_top = 6
+	right_panel.offset_bottom = 266
+	_panel_style(right_panel, Color(0.20, 0.14, 0.09, 0.86))
 	canvas.add_child(right_panel)
 
 	var rv := VBoxContainer.new()
@@ -871,17 +871,19 @@ func _build_ui() -> void:
 	for metric in GameState.METRIC_NAMES:
 		rv.add_child(_make_metric_row(metric))
 
-	# --- 底部中间：手牌 ---
+	# --- 底部中间：手牌（无背景框，卡牌直接浮在沙盘上）---
 	hand_panel = PanelContainer.new()
-	hand_panel.anchor_left = 0.0
+	hand_panel.anchor_left = 0.5
 	hand_panel.anchor_top = 1.0
-	hand_panel.anchor_right = 1.0
+	hand_panel.anchor_right = 0.5
 	hand_panel.anchor_bottom = 1.0
-	hand_panel.offset_left = 300
-	hand_panel.offset_right = -300
-	hand_panel.offset_top = -320
-	hand_panel.offset_bottom = -8
-	_panel_style(hand_panel, Color(0.22, 0.15, 0.10, 0.96))
+	hand_panel.offset_left = -330
+	hand_panel.offset_right = 330
+	hand_panel.offset_top = -290
+	hand_panel.offset_bottom = -4
+	# 透明无边框：手牌区域不遮挡沙盘
+	var empty_sb := StyleBoxEmpty.new()
+	hand_panel.add_theme_stylebox_override("panel", empty_sb)
 	hand_panel.visible = false
 	canvas.add_child(hand_panel)
 
@@ -889,9 +891,27 @@ func _build_ui() -> void:
 	hv.add_theme_constant_override("separation", 6)
 	hand_panel.add_child(hv)
 
+	var h_top_wrap := PanelContainer.new()
+	var bar_sb := StyleBoxFlat.new()
+	bar_sb.bg_color = Color(0.16, 0.11, 0.07, 0.9)
+	bar_sb.border_color = Color(0.45, 0.32, 0.18, 1.0)
+	bar_sb.set_border_width_all(2)
+	bar_sb.corner_radius_top_left = 6
+	bar_sb.corner_radius_top_right = 6
+	bar_sb.corner_radius_bottom_left = 6
+	bar_sb.corner_radius_bottom_right = 6
+	bar_sb.content_margin_left = 12
+	bar_sb.content_margin_right = 12
+	bar_sb.content_margin_top = 6
+	bar_sb.content_margin_bottom = 6
+	h_top_wrap.add_theme_stylebox_override("panel", bar_sb)
+	h_top_wrap.z_index = 10  # 操作条浮在卡牌之上
+	hv.add_child(h_top_wrap)
+
 	var h_top := HBoxContainer.new()
-	hv.add_child(h_top)
-	var h_hint := _make_label("每回合最多执行 3 个行动（点击卡牌直接执行）", 13, Color(0.8, 0.85, 0.9))
+	h_top.add_theme_constant_override("separation", 16)
+	h_top_wrap.add_child(h_top)
+	var h_hint := _make_label("每回合最多执行 3 个行动（点击卡牌直接执行）", 13, Color(0.92, 0.94, 0.96))
 	h_hint.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	h_top.add_child(h_hint)
 	selected_label = _make_label("已选：0/3", 14, Color(1, 0.9, 0.5))
@@ -900,10 +920,10 @@ func _build_ui() -> void:
 	end_btn.custom_minimum_size = Vector2(140, 34)
 	h_top.add_child(end_btn)
 
-	# 牌区（扇形手牌，手动定位）
+	# 牌区（扇形手牌，手动定位，无背景）
 	card_box = Control.new()
 	card_box.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	card_box.custom_minimum_size = Vector2(0, 238)
+	card_box.custom_minimum_size = Vector2(0, 200)
 	card_box.mouse_filter = Control.MOUSE_FILTER_PASS
 	card_box.resized.connect(_on_card_box_resized)
 	hv.add_child(card_box)
@@ -950,12 +970,12 @@ func _build_ui() -> void:
 
 func _make_metric_row(metric: String) -> VBoxContainer:
 	var vb := VBoxContainer.new()
-	vb.add_theme_constant_override("separation", 2)
+	vb.add_theme_constant_override("separation", 1)
 
 	var head := HBoxContainer.new()
 	vb.add_child(head)
-	head.add_child(_make_label(GameState.METRIC_NAMES[metric], 13, Color(0.95, 0.95, 0.95)))
-	var val := _make_label("0", 13, METRIC_COLORS[metric])
+	head.add_child(_make_label(GameState.METRIC_NAMES[metric], 12, Color(0.95, 0.95, 0.95)))
+	var val := _make_label("0", 12, METRIC_COLORS[metric])
 	val.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	val.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	head.add_child(val)
@@ -965,7 +985,7 @@ func _make_metric_row(metric: String) -> VBoxContainer:
 	bar.max_value = 100
 	bar.value = 0
 	bar.show_percentage = false
-	bar.custom_minimum_size = Vector2(0, 14)
+	bar.custom_minimum_size = Vector2(0, 11)
 	bar.modulate = METRIC_COLORS[metric]
 	vb.add_child(bar)
 
@@ -992,7 +1012,7 @@ func _update_hud() -> void:
 	funds_label.text = "资金：%d 万" % GameState.funds
 	research_label.text = "科研点：%d" % GameState.research_points
 	event_label.text = _current_event if _current_event != "" else "暂无"
-	selected_label.text = "已选：%d/%d" % [GameState.used_action_ids.size(), GameState.MAX_ACTIONS]
+	_update_selected_label()
 
 
 # ==================== 事件 / 结算 / 知识卡 / 报告 ====================
@@ -1020,7 +1040,7 @@ func _build_hand_panel() -> void:
 		card_infos.append({
 			"panel": panel, "card_id": card["id"],
 			"base_pos": Vector2.ZERO, "theta": 0.0, "radial": Vector2.UP,
-			"selected": false,
+			"selected": false, "shaking": false,
 		})
 	_layout_fan.call_deferred()
 	_update_hud()
@@ -1141,6 +1161,14 @@ func _make_card(card: Dictionary) -> PanelContainer:
 	return panel
 
 
+## 由卡 id 取中文名
+func _card_name(card_id: String) -> String:
+	for c in GameState.ACTION_CARDS:
+		if c["id"] == card_id:
+			return c["name"]
+	return card_id
+
+
 func _effect_text(card: Dictionary) -> String:
 	var t: Dictionary = card["tiers"]["effective"]
 	var parts: Array = []
@@ -1172,11 +1200,27 @@ func _toggle_card(panel: PanelContainer) -> void:
 		info["selected"] = false
 		_remove_gold_frame(panel)
 	else:
+		# 行动位上限
 		if _selected_count() >= GameState.MAX_ACTIONS:
+			_reject_card(panel, "行动位已满（每回合最多 3 个）")
+			return
+		# 资金检查：已选卡的总花费 + 这张，不能超过可用资金
+		var cost := GameState.tier_cost(info["card_id"], "effective")
+		if _committed_funds() + cost > GameState.funds:
+			_reject_card(panel, "资金不足（还需 %d 万，可用 %d 万）" % [cost, GameState.funds - _committed_funds()])
 			return
 		info["selected"] = true
 		_apply_gold_frame(panel)
 	_update_selected_label()
+
+
+## 已选卡牌的总花费（万）
+func _committed_funds() -> int:
+	var total := 0
+	for info in card_infos:
+		if info["selected"]:
+			total += GameState.tier_cost(info["card_id"], "effective")
+	return total
 
 
 func _selected_count() -> int:
@@ -1188,7 +1232,45 @@ func _selected_count() -> int:
 
 
 func _update_selected_label() -> void:
-	selected_label.text = "已选：%d/%d" % [_selected_count(), GameState.MAX_ACTIONS]
+	var used := _committed_funds()
+	selected_label.text = "已选：%d/%d　预算：%d/%d 万" % [
+		_selected_count(), GameState.MAX_ACTIONS, used, GameState.funds]
+
+
+## 拒绝选中：红框闪烁 + 左右抖动 + 提示原因
+func _reject_card(panel: PanelContainer, reason: String) -> void:
+	var info: Dictionary = _find_card_info(panel)
+	if info.is_empty() or info.get("shaking", false):
+		return
+	info["shaking"] = true
+	var sb := panel.get_theme_stylebox("panel")
+	var old_border := Color.WHITE
+	if sb is StyleBoxFlat:
+		old_border = sb.border_color
+		sb.border_color = Color(0.92, 0.26, 0.22)
+	var base: Vector2 = panel.position
+	var tw := panel.create_tween()
+	tw.set_trans(Tween.TRANS_SINE)
+	for k in 3:
+		tw.tween_property(panel, "position:x", base.x + 9.0, 0.045)
+		tw.tween_property(panel, "position:x", base.x - 9.0, 0.045)
+	tw.tween_property(panel, "position:x", base.x, 0.05)
+	tw.tween_callback(func() -> void:
+		if is_instance_valid(sb):
+			sb.border_color = old_border
+		info["shaking"] = false)
+	_flash_hint(reason)
+
+
+## 顶部提示条短暂显示（红字），随后恢复
+func _flash_hint(text: String) -> void:
+	selected_label.add_theme_color_override("font_color", Color(1.0, 0.42, 0.36))
+	selected_label.text = text
+	var tw := selected_label.create_tween()
+	tw.tween_interval(1.2)
+	tw.tween_callback(func() -> void:
+		selected_label.add_theme_color_override("font_color", Color(1, 0.9, 0.5))
+		_update_selected_label())
 
 
 ## 每帧轮询卡牌悬停：精确判断鼠标是否在旋转后的卡牌内（避免相邻牌误判）
@@ -1201,6 +1283,8 @@ func _update_card_hover(delta: float) -> void:
 		var panel: PanelContainer = info["panel"]
 		if not is_instance_valid(panel):
 			continue
+		if info.get("shaking", false):
+			continue  # 抖动动画期间不要抢它的 position
 		var hovering: bool = _point_in_card(panel, mouse_global, box_tf)
 		var raised: bool = hovering or info["selected"]
 		# 弹起方向：沿径向向外（远离圆心，即向上弹出）
@@ -1254,10 +1338,12 @@ func _remove_gold_frame(panel: PanelContainer) -> void:
 
 
 func _finish_turn() -> void:
-	# 执行所有选中的卡（按选中顺序，资金不足的跳过）
+	# 执行所有选中的卡（防御：资金/行动位不足的记录为失败，不静默吞掉）
+	var failed: Array = []
 	for info in card_infos:
 		if info["selected"]:
-			GameState.execute_action(info["card_id"], "effective")
+			if not GameState.execute_action(info["card_id"], "effective"):
+				failed.append(info["card_id"])
 
 	var before: Dictionary = GameState.metrics.duplicate()
 	GameState.end_turn()
@@ -1271,6 +1357,11 @@ func _finish_turn() -> void:
 			lines.append("  %s：%+d" % [GameState.METRIC_NAMES[metric], d])
 	for msg in GameState.log_messages:
 		lines.append("  · %s" % msg)
+	if not failed.is_empty():
+		var names: Array = []
+		for cid in failed:
+			names.append(_card_name(cid))
+		lines.append("  ⚠ 以下行动因资金不足未能执行：%s" % "、".join(names))
 	lines.append("")
 	lines.append("结转资金：%d 万（上限 %d 万）" % [GameState.carry, GameState.MAX_CARRY])
 
