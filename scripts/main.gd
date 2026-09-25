@@ -665,7 +665,7 @@ func _build_ui() -> void:
 	hand_panel.anchor_bottom = 1.0
 	hand_panel.offset_left = 300
 	hand_panel.offset_right = -300
-	hand_panel.offset_top = -190
+	hand_panel.offset_top = -280
 	hand_panel.offset_bottom = -8
 	_panel_style(hand_panel, Color(0.22, 0.15, 0.10, 0.96))
 	hand_panel.visible = false
@@ -689,7 +689,7 @@ func _build_ui() -> void:
 	# 牌区（扇形手牌，手动定位）
 	card_box = Control.new()
 	card_box.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	card_box.custom_minimum_size = Vector2(0, 160)
+	card_box.custom_minimum_size = Vector2(0, 260)
 	card_box.mouse_filter = Control.MOUSE_FILTER_PASS
 	hv.add_child(card_box)
 
@@ -798,37 +798,41 @@ func _build_hand_panel() -> void:
 		card_box.add_child(panel)
 		card_infos.append({
 			"panel": panel, "card_id": card["id"],
-			"base_y": 0.0, "selected": false,
+			"base_pos": Vector2.ZERO, "theta": 0.0, "radial": Vector2.UP,
+			"selected": false,
 		})
 	_layout_fan()
 	_update_hud()
 
 
-## 扇形摆放手牌：中间低、两侧抬升并旋转（斗地主式）
+## 扇形摆放手牌：圆心在下方，牌绕圆心径向排列（牌底小弧、牌顶大弧）
 func _layout_fan() -> void:
 	var n := card_infos.size()
 	if n == 0:
 		return
-	var area_w := 552.0
-	var area_h := 160.0
 	var card_w := 110.0
 	var card_h := 135.0
-	var spacing := 74.0
-	var center_x := area_w / 2.0
-	var max_rot := deg_to_rad(18.0)
+	# 圆心：牌区正下方（在 card_box 局部坐标中）
+	var area_h := 160.0
+	var center := Vector2(276.0, area_h + 120.0)  # 圆心在下方
+	var radius := 150.0        # 牌底到圆心的距离
+	var total_span := deg_to_rad(50.0)  # 总张角
 	for i in n:
 		var info: Dictionary = card_infos[i]
 		var panel: PanelContainer = info["panel"]
 		panel.custom_minimum_size = Vector2(card_w, card_h)
-		panel.pivot_offset = Vector2(card_w / 2.0, card_h)
-		var t := 0.0 if n == 1 else float(i) / (n - 1) - 0.5  # -0.5..0.5
-		var rot := -t * max_rot * 2.0
-		var lift: float = (1.0 - abs(t)) * 45.0  # 中间最高，两侧逐张降低
-		var bottom_y: float = area_h - 12.0 - lift
-		var bottom_center := Vector2(center_x + t * (n - 1) * spacing, bottom_y)
-		panel.position = bottom_center - panel.pivot_offset
-		panel.rotation = rot
-		info["base_y"] = panel.position.y
+		panel.pivot_offset = Vector2(card_w / 2.0, card_h)  # 以牌底中心为锚点
+		# 每张牌的角度：从左到右
+		var theta := -total_span / 2.0 + total_span * (float(i) / (n - 1)) if n > 1 else 0.0
+		# 牌底中心位置：圆心 + 径向向外 radius
+		var radial := Vector2(cos(theta - PI / 2.0), sin(theta - PI / 2.0))  # 向上为正
+		var bottom_pos := center + radial * radius
+		panel.position = bottom_pos
+		# 牌旋转：径向方向（牌长边指向圆心）
+		panel.rotation = theta
+		info["base_pos"] = panel.position
+		info["theta"] = theta
+		info["radial"] = radial
 
 
 func _make_card(card: Dictionary) -> PanelContainer:
@@ -923,9 +927,10 @@ func _update_card_hover() -> void:
 			continue
 		var hovering: bool = panel.get_global_rect().has_point(mouse)
 		var raised: bool = hovering or info["selected"]
-		var target_y: float = info["base_y"] - (26.0 if raised else 0.0)
-		if abs(panel.position.y - target_y) > 0.5:
-			panel.position.y = lerpf(panel.position.y, target_y, 0.25)
+		# 弹起方向：沿径向向外（牌底指向圆心的反方向）
+		var target: Vector2 = info["base_pos"] - info["radial"] * (26.0 if raised else 0.0)
+		if panel.position.distance_to(target) > 0.5:
+			panel.position = panel.position.lerp(target, 0.25)
 
 
 ## 金色闪光框（选中标记，呼吸发光）
