@@ -600,7 +600,7 @@ func _build_ui() -> void:
 	left_panel.offset_right = 292
 	left_panel.offset_top = 8
 	left_panel.offset_bottom = -200
-	_panel_style(left_panel, Color(0.08, 0.11, 0.14, 0.92))
+	_panel_style(left_panel, Color(0.20, 0.14, 0.09, 0.94))
 	canvas.add_child(left_panel)
 
 	var lv := VBoxContainer.new()
@@ -643,7 +643,7 @@ func _build_ui() -> void:
 	right_panel.offset_right = -8
 	right_panel.offset_top = 8
 	right_panel.offset_bottom = -200
-	_panel_style(right_panel, Color(0.08, 0.11, 0.14, 0.92))
+	_panel_style(right_panel, Color(0.20, 0.14, 0.09, 0.94))
 	canvas.add_child(right_panel)
 
 	var rv := VBoxContainer.new()
@@ -664,7 +664,7 @@ func _build_ui() -> void:
 	hand_panel.offset_right = -300
 	hand_panel.offset_top = -190
 	hand_panel.offset_bottom = -8
-	_panel_style(hand_panel, Color(0.10, 0.13, 0.16, 0.96))
+	_panel_style(hand_panel, Color(0.22, 0.15, 0.10, 0.96))
 	hand_panel.visible = false
 	canvas.add_child(hand_panel)
 
@@ -712,7 +712,7 @@ func _build_ui() -> void:
 
 	popup_panel = PanelContainer.new()
 	popup_panel.custom_minimum_size = Vector2(600, 0)
-	_panel_style(popup_panel, Color(0.12, 0.16, 0.20, 0.98))
+	_panel_style(popup_panel, Color(0.24, 0.17, 0.11, 0.98))
 	popup_center.add_child(popup_panel)
 
 	var pv := VBoxContainer.new()
@@ -798,7 +798,7 @@ func _build_allocate_panel() -> void:
 func _make_card(card: Dictionary) -> PanelContainer:
 	var panel := PanelContainer.new()
 	panel.custom_minimum_size = Vector2(200, 150)
-	_panel_style(panel, Color(0.16, 0.20, 0.24, 0.98))
+	_panel_style(panel, Color(0.30, 0.22, 0.14, 0.98))
 
 	var vb := VBoxContainer.new()
 	vb.add_theme_constant_override("separation", 3)
@@ -943,17 +943,44 @@ func _make_button(text: String, cb: Callable, size: int) -> Button:
 	var b := Button.new()
 	b.text = text
 	b.add_theme_font_size_override("font_size", size)
+	b.add_theme_color_override("font_color", Color(0.96, 0.90, 0.76))
+	b.add_theme_color_override("font_hover_color", Color(1.0, 0.95, 0.82))
+	b.add_theme_color_override("font_pressed_color", Color(0.90, 0.82, 0.66))
+	b.add_theme_color_override("font_disabled_color", Color(0.55, 0.50, 0.42))
+	b.add_theme_stylebox_override("normal", _wood_button(Color(0.42, 0.30, 0.18), Color(0.24, 0.16, 0.09)))
+	b.add_theme_stylebox_override("hover", _wood_button(Color(0.52, 0.38, 0.23), Color(0.30, 0.20, 0.11)))
+	b.add_theme_stylebox_override("pressed", _wood_button(Color(0.28, 0.19, 0.11), Color(0.16, 0.10, 0.05)))
+	b.add_theme_stylebox_override("disabled", _wood_button(Color(0.26, 0.22, 0.17), Color(0.18, 0.15, 0.11)))
 	b.pressed.connect(cb)
 	return b
+
+
+## 星露谷风木按钮（硬边角、木色、细边框）
+func _wood_button(bg: Color, border: Color) -> StyleBoxFlat:
+	var sb := StyleBoxFlat.new()
+	sb.bg_color = bg
+	sb.border_color = border
+	sb.set_border_width_all(2)
+	sb.corner_radius_top_left = 3
+	sb.corner_radius_top_right = 3
+	sb.corner_radius_bottom_left = 3
+	sb.corner_radius_bottom_right = 3
+	sb.content_margin_left = 8
+	sb.content_margin_right = 8
+	sb.content_margin_top = 5
+	sb.content_margin_bottom = 5
+	return sb
 
 
 func _panel_style(p: PanelContainer, color: Color) -> void:
 	var sb := StyleBoxFlat.new()
 	sb.bg_color = color
-	sb.corner_radius_top_left = 10
-	sb.corner_radius_top_right = 10
-	sb.corner_radius_bottom_left = 10
-	sb.corner_radius_bottom_right = 10
+	sb.border_color = Color(0.45, 0.32, 0.18, 1.0)  # 中木棕边框
+	sb.set_border_width_all(3)
+	sb.corner_radius_top_left = 4
+	sb.corner_radius_top_right = 4
+	sb.corner_radius_bottom_left = 4
+	sb.corner_radius_bottom_right = 4
 	sb.content_margin_left = 12
 	sb.content_margin_right = 12
 	sb.content_margin_top = 10
