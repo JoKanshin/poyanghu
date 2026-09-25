@@ -261,6 +261,7 @@ func _build_mudflats(parent: Node3D) -> void:
 
 func _process(delta: float) -> void:
 	_process_birds(delta)
+	_update_card_hover()
 
 
 ## 鸟类状态机：站立 / 啄水 / 行走，朝向符合移动方向
@@ -822,7 +823,7 @@ func _layout_fan() -> void:
 		panel.pivot_offset = Vector2(card_w / 2.0, card_h)
 		var t := 0.0 if n == 1 else float(i) / (n - 1) - 0.5  # -0.5..0.5
 		var rot := -t * max_rot * 2.0
-		var lift: float = abs(t) * 45.0
+		var lift: float = (1.0 - abs(t)) * 45.0  # 中间最高，两侧逐张降低
 		var bottom_y: float = area_h - 12.0 - lift
 		var bottom_center := Vector2(center_x + t * (n - 1) * spacing, bottom_y)
 		panel.position = bottom_center - panel.pivot_offset
@@ -835,8 +836,7 @@ func _make_card(card: Dictionary) -> PanelContainer:
 	panel.custom_minimum_size = Vector2(110, 135)
 	_panel_style(panel, Color(0.30, 0.22, 0.14, 0.98))
 	panel.tooltip_text = "%s\n\n%s" % [card["desc"], _effect_text(card)]
-	panel.mouse_entered.connect(_on_card_hover.bind(panel, true))
-	panel.mouse_exited.connect(_on_card_hover.bind(panel, false))
+	panel.gui_input.connect(_on_card_gui_input.bind(panel))
 
 	var vb := VBoxContainer.new()
 	vb.add_theme_constant_override("separation", 4)
@@ -855,10 +855,9 @@ func _make_card(card: Dictionary) -> PanelContainer:
 	spacer.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	vb.add_child(spacer)
 
-	var btn := _make_button("%d 万" % card["cost"], _on_action_click.bind(card["id"], panel), 14)
-	btn.custom_minimum_size = Vector2(0, 38)
-	btn.disabled = not GameState.can_execute(card["id"], "effective")
-	vb.add_child(btn)
+	var cost_l := _make_label("%d 万" % card["cost"], 14, Color(1, 0.9, 0.55))
+	cost_l.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	vb.add_child(cost_l)
 
 	return panel
 
@@ -880,30 +879,53 @@ func _find_card_info(panel: PanelContainer) -> Dictionary:
 	return {}
 
 
-## 卡牌悬停/选中：向上弹出（位移，不放大）
-func _on_card_hover(panel: PanelContainer, hovered: bool) -> void:
+## 点击卡牌：切换选中（可取消）
+func _on_card_gui_input(event: InputEvent, panel: PanelContainer) -> void:
+	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
+		_toggle_card(panel)
+
+
+func _toggle_card(panel: PanelContainer) -> void:
 	var info: Dictionary = _find_card_info(panel)
 	if info.is_empty():
 		return
-	var raised: bool = hovered or info["selected"]
-	var target_y: float = info["base_y"] - (26.0 if raised else 0.0)
-	var tw := panel.create_tween()
-	tw.tween_property(panel, "position:y", target_y, 0.12)
+	if info["selected"]:
+		info["selected"] = false
+		_remove_gold_frame(panel)
+	else:
+		if _selected_count() >= GameState.MAX_ACTIONS:
+			return
+		info["selected"] = true
+		_apply_gold_frame(panel)
+	_update_selected_label()
 
 
-## 点击卡牌执行：弹出动画后执行，选中加金色闪光框
-func _on_action_click(card_id: String, panel: PanelContainer) -> void:
-	if not GameState.can_execute(card_id, "effective"):
+func _selected_count() -> int:
+	var n := 0
+	for info in card_infos:
+		if info["selected"]:
+			n += 1
+	return n
+
+
+func _update_selected_label() -> void:
+	selected_label.text = "已选：%d/%d" % [_selected_count(), GameState.MAX_ACTIONS]
+
+
+## 每帧轮询卡牌悬停：鼠标在卡上保持弹起，移开落下（避免子控件 mouse_exited 抖动）
+func _update_card_hover() -> void:
+	if hand_panel.visible == false or card_infos.is_empty():
 		return
-	var info: Dictionary = _find_card_info(panel)
-	if info.is_empty() or info["selected"]:
-		return
-	GameState.execute_action(card_id, "effective")
-	info["selected"] = true
-	_apply_gold_frame(panel)
-	_on_card_hover(panel, false)  # 保持弹出
-	_refresh_card_buttons()
-	_update_hud()
+	var mouse := get_viewport().get_mouse_position()
+	for info in card_infos:
+		var panel: PanelContainer = info["panel"]
+		if not is_instance_valid(panel):
+			continue
+		var hovering: bool = panel.get_global_rect().has_point(mouse)
+		var raised: bool = hovering or info["selected"]
+		var target_y: float = info["base_y"] - (26.0 if raised else 0.0)
+		if abs(panel.position.y - target_y) > 0.5:
+			panel.position.y = lerpf(panel.position.y, target_y, 0.25)
 
 
 ## 金色闪光框（选中标记，呼吸发光）
@@ -921,28 +943,22 @@ func _apply_gold_frame(panel: PanelContainer) -> void:
 	sb.content_margin_top = 10
 	sb.content_margin_bottom = 10
 	panel.add_theme_stylebox_override("panel", sb)
-	# 呼吸发光动画
 	var tw := panel.create_tween().set_loops()
 	tw.tween_property(sb, "border_color", Color(1.0, 0.95, 0.55), 0.55)
 	tw.tween_property(sb, "border_color", Color(0.95, 0.72, 0.18), 0.55)
 
 
-## 执行后刷新各牌按钮禁用状态（资金/行动位变化）
-func _refresh_card_buttons() -> void:
-	for info in card_infos:
-		var panel: PanelContainer = info["panel"]
-		var card_id: String = info["card_id"]
-		if info["selected"]:
-			continue
-		# 找到面板里的按钮
-		for child in panel.get_children():
-			if child is VBoxContainer:
-				for c in child.get_children():
-					if c is Button:
-						c.disabled = not GameState.can_execute(card_id, "effective")
+## 取消选中：恢复普通边框
+func _remove_gold_frame(panel: PanelContainer) -> void:
+	_panel_style(panel, Color(0.30, 0.22, 0.14, 0.98))
 
 
 func _finish_turn() -> void:
+	# 执行所有选中的卡（按选中顺序，资金不足的跳过）
+	for info in card_infos:
+		if info["selected"]:
+			GameState.execute_action(info["card_id"], "effective")
+
 	var before: Dictionary = GameState.metrics.duplicate()
 	GameState.end_turn()
 	var after: Dictionary = GameState.metrics
