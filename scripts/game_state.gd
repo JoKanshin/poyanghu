@@ -61,6 +61,44 @@ const ACTION_SPECIES_BONUS := {
 	"patrol": {"dongfangbaihuan": 6},
 }
 
+# ==================== 植物数据 ====================
+# 不同湿地植物，各有生态角色；数量随指标联动，地图上显示会生长的个体。
+# kind: submerged 沉水 / emergent 挺水 / floating 浮叶 / marsh 草洲
+const PLANTS := {
+	"kucao": {
+		"name": "苦草", "color": Color(0.20, 0.55, 0.32), "kind": "submerged",
+		"role": "沉水植物，白鹤越冬主食。",
+		"drivers": ["vegetation", "water_quality"],
+	},
+	"luwei": {
+		"name": "芦苇", "color": Color(0.55, 0.62, 0.34), "kind": "emergent",
+		"role": "挺水植物，净化水质、为鸟类提供筑巢地。",
+		"drivers": ["vegetation", "water_level"],
+	},
+	"lian": {
+		"name": "莲", "color": Color(0.30, 0.58, 0.34), "kind": "floating",
+		"role": "浮叶植物，白鹤取食莲藕，人鸟冲突焦点。",
+		"drivers": ["vegetation", "water_level"],
+	},
+	"lihao": {
+		"name": "藜蒿", "color": Color(0.60, 0.66, 0.38), "kind": "marsh",
+		"role": "草洲先锋植物，固土防冲刷。",
+		"drivers": ["vegetation", "community"],
+	},
+	"taicao": {
+		"name": "苔草", "color": Color(0.42, 0.58, 0.30), "kind": "marsh",
+		"role": "草洲优势种，雁类的主要食物。",
+		"drivers": ["vegetation", "water_quality"],
+	},
+}
+
+# 行动卡 → 直接提升的植物
+const ACTION_PLANT_BONUS := {
+	"veg_restore": {"kucao": 10, "taicao": 8},
+	"water_control": {"luwei": 6, "lian": 6},
+	"water_monitor": {"kucao": 6},
+}
+
 # ==================== 行动卡数据 ====================
 # effects: [{metric, delta, delay}]  delay=0 即时；>0 进延迟队列
 const ACTION_CARDS := [
@@ -286,6 +324,7 @@ var carry: int = 0          # 结转下回合
 var research_points: int = 0
 var metrics: Dictionary = {}
 var species_pop: Dictionary = {}     # 每物种数量 0-100
+var plant_pop: Dictionary = {}       # 每植物数量 0-100
 var effects_queue: Array = []       # 延迟效果 {metric, delta, remaining, source}
 var used_action_ids: Array = []     # 本回合已执行的卡
 var knowledge_unlocked: Array = []
@@ -327,6 +366,7 @@ func reset_game() -> void:
 		"community": 55,
 	}
 	_sync_species()
+	_sync_plants()
 	start_new_turn()
 
 
@@ -336,9 +376,24 @@ func _sync_species() -> void:
 		species_pop[sid] = _species_target(sid)
 
 
+## 将植物数量同步到目标值（由驱动指标决定）
+func _sync_plants() -> void:
+	for pid in PLANTS:
+		plant_pop[pid] = _plant_target(pid)
+
+
 ## 物种目标数量 = 驱动指标均值（0-100）
 func _species_target(sid: String) -> int:
 	var drivers: Array = SPECIES[sid]["drivers"]
+	var sum := 0
+	for d in drivers:
+		sum += metrics[d]
+	return int(sum / drivers.size())
+
+
+## 植物目标数量 = 驱动指标均值（0-100）
+func _plant_target(pid: String) -> int:
+	var drivers: Array = PLANTS[pid]["drivers"]
 	var sum := 0
 	for d in drivers:
 		sum += metrics[d]
@@ -415,6 +470,11 @@ func execute_action(card_id: String, tier: String) -> bool:
 		for sid in ACTION_SPECIES_BONUS[card_id]:
 			species_pop[sid] = clampi(species_pop[sid] + ACTION_SPECIES_BONUS[card_id][sid], 0, 100)
 
+	# 行动对特定植物的直接加成
+	if ACTION_PLANT_BONUS.has(card_id):
+		for pid in ACTION_PLANT_BONUS[card_id]:
+			plant_pop[pid] = clampi(plant_pop[pid] + ACTION_PLANT_BONUS[card_id][pid], 0, 100)
+
 	funds_changed.emit()
 	metrics_changed.emit()
 	return true
@@ -445,6 +505,7 @@ func natural_evolution() -> void:
 		_apply_delta("community", -3)
 
 	_sync_species()
+	_sync_plants()
 	metrics_changed.emit()
 
 

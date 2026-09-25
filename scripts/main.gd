@@ -49,6 +49,7 @@ var fish_nodes: Array = []
 var village_mesh: MeshInstance3D
 var village_mat: StandardMaterial3D
 var species_views: Dictionary = {}  # sid -> {node, meshes[], base_positions[], speeds[]}
+var plant_views: Dictionary = {}    # pid -> {meshes[], positions[]}
 
 
 func _ready() -> void:
@@ -74,6 +75,13 @@ func _setup_camera() -> void:
 	cam.position = Vector3(6, 13, 6)
 	cam.look_at(Vector3(0, 0, 0), Vector3.UP)
 
+	# 暖色方向光（湿地黄昏氛围）
+	var light := get_node("../DirectionalLight3D") as DirectionalLight3D
+	light.light_color = Color(1.0, 0.85, 0.65)
+	light.light_energy = 1.4
+	light.rotation_degrees = Vector3(-45, -35, 0)
+	light.shadow_enabled = true
+
 
 # ==================== 3D 表现 ====================
 func _build_3d() -> void:
@@ -95,7 +103,7 @@ func _build_3d() -> void:
 	# 棋盘网格线（生息演算式棋盘感）
 	_build_grid(lake_view)
 
-	# 草洲（8 块）
+	# 草洲（8 块，改湿地地貌分层）
 	var grass_positions := [
 		Vector3(-7, 0.05, -5), Vector3(-4, 0.05, -7), Vector3(6, 0.05, -4),
 		Vector3(8, 0.05, 2), Vector3(-8, 0.05, 4), Vector3(3, 0.05, 7),
@@ -114,8 +122,14 @@ func _build_3d() -> void:
 		grass_nodes.append(mi)
 		grass_mats.append(mat)
 
+	# 湿地泥滩（浅水与草洲之间的过渡带，暖褐色）
+	_build_mudflats(lake_view)
+
 	# 鸟群（8 只白鹤占位）—— 替换为多物种动态个体系统
 	_build_species_views(lake_view)
+
+	# 植物（不同湿地植物）
+	_build_plant_views(lake_view)
 
 	# 鱼群（8 条占位，水下）
 	for i in 8:
@@ -177,6 +191,24 @@ func _build_grid(parent: Node3D) -> void:
 	parent.add_child(mi)
 
 
+## 湿地泥滩（浅水与草洲之间的过渡带，暖褐色）
+func _build_mudflats(parent: Node3D) -> void:
+	var positions := [
+		Vector3(-11, 0.03, 0), Vector3(11, 0.03, -1), Vector3(0, 0.03, -11),
+		Vector3(1, 0.03, 11), Vector3(-5, 0.03, 9), Vector3(5, 0.03, -9),
+	]
+	for p in positions:
+		var mi := MeshInstance3D.new()
+		var cm := BoxMesh.new()
+		cm.size = Vector3(4.0, 0.15, 4.0)
+		mi.mesh = cm
+		mi.position = p
+		var mat := StandardMaterial3D.new()
+		mat.albedo_color = Color(0.52, 0.42, 0.28)
+		mi.material_override = mat
+		parent.add_child(mi)
+
+
 func _process(delta: float) -> void:
 	# 物种个体在各自位置附近游走
 	var time := Time.get_ticks_msec() / 1000.0
@@ -187,41 +219,34 @@ func _process(delta: float) -> void:
 		var speeds: Array = view["speeds"]
 		var phases: Array = view["phases"]
 		for i in meshes.size():
-			var mi: MeshInstance3D = meshes[i]
+			var rig: Node3D = meshes[i]
 			var b: Vector3 = bases[i]
 			var sp: float = speeds[i]
 			var ph: float = phases[i]
-			mi.position = b + Vector3(
-				sin(time * sp + ph) * 1.2,
-				sin(time * sp * 1.7 + ph) * 0.25,
-				cos(time * sp + ph) * 1.2
+			rig.position = b + Vector3(
+				sin(time * sp + ph) * 1.0,
+				sin(time * sp * 2.0 + ph) * 0.06,
+				cos(time * sp + ph) * 1.0
 			)
 
 
-## 为每个物种生成一组会动的个体（最多 12 个/物种）
+## 为每个物种生成一组会动的个体（最多 10 个/物种），用多几何体拼出可辨识剪影
 func _build_species_views(parent: Node3D) -> void:
 	for sid in GameState.SPECIES:
-		var color: Color = GameState.SPECIES[sid]["color"]
 		var meshes: Array = []
 		var bases: Array = []
 		var speeds: Array = []
 		var phases: Array = []
-		for i in 12:
-			var mi := MeshInstance3D.new()
-			var sm := SphereMesh.new()
-			sm.radius = 0.18
-			sm.height = 0.45
-			mi.mesh = sm
-			mi.visible = false
-			var mat := StandardMaterial3D.new()
-			mat.albedo_color = color
-			mi.material_override = mat
-			parent.add_child(mi)
-			meshes.append(mi)
-			# 每个物种在湖区不同区域活动
+		for i in 10:
+			var rig := Node3D.new()  # 一个物种个体 = 一组几何体
+			rig.name = sid
+			_build_bird_body(rig, sid)
+			rig.visible = false
+			parent.add_child(rig)
+			meshes.append(rig)
 			var base := Vector3(
-				(-7 + i * 1.4) + (sid.length() % 3) * 2.0,
-				1.0,
+				(-7 + i * 1.5) + (sid.length() % 3) * 2.0,
+				0.0,
 				-5 + (i % 4) * 3.0
 			)
 			bases.append(base)
@@ -230,14 +255,206 @@ func _build_species_views(parent: Node3D) -> void:
 		species_views[sid] = {"meshes": meshes, "bases": bases, "speeds": speeds, "phases": phases}
 
 
+## 用几何体拼出鸟类剪影（可辨识）
+func _build_bird_body(rig: Node3D, sid: String) -> void:
+	var white := Color(0.94, 0.94, 0.93)
+	var dark := Color(0.13, 0.13, 0.18)
+	var grey := Color(0.68, 0.67, 0.63)
+	var red := Color(0.80, 0.15, 0.12)
+	var yellow := Color(0.92, 0.72, 0.25)
+	var brown := Color(0.55, 0.48, 0.38)
+
+	# 躯干（椭球）
+	var body := MeshInstance3D.new()
+	var bm := SphereMesh.new()
+	bm.radius = 0.28
+	bm.height = 0.6
+	body.mesh = bm
+	body.scale = Vector3(0.8, 0.9, 1.3)
+	body.position = Vector3(0, 0.85, 0)
+	rig.add_child(body)
+
+	# 头
+	var head := MeshInstance3D.new()
+	var hm := SphereMesh.new()
+	hm.radius = 0.16
+	hm.height = 0.34
+	head.mesh = hm
+	head.position = Vector3(0, 1.35, 0.15)
+	rig.add_child(head)
+
+	# 长颈（圆柱，连接头与躯干）
+	var neck := MeshInstance3D.new()
+	var nm := CylinderMesh.new()
+	nm.top_radius = 0.06
+	nm.bottom_radius = 0.08
+	nm.height = 0.55
+	neck.mesh = nm
+	neck.position = Vector3(0, 1.08, 0.05)
+	rig.add_child(neck)
+
+	# 长腿（两根细圆柱）
+	for side in [-1, 1]:
+		var leg := MeshInstance3D.new()
+		var lm := CylinderMesh.new()
+		lm.top_radius = 0.02
+		lm.bottom_radius = 0.02
+		lm.height = 0.55
+		leg.mesh = lm
+		leg.position = Vector3(side * 0.12, 0.35, 0.0)
+		rig.add_child(leg)
+
+	# 喙
+	var beak := MeshInstance3D.new()
+	var bkm := CylinderMesh.new()
+	bkm.top_radius = 0.015
+	bkm.bottom_radius = 0.03
+	bkm.height = 0.2
+	beak.mesh = bkm
+	beak.rotation_degrees = Vector3(90, 0, 0)
+	beak.position = Vector3(0, 1.38, 0.32)
+	rig.add_child(beak)
+
+	# 按物种上色与特殊特征
+	match sid:
+		"baihe":
+			body.material_override = _mat(white)
+			head.material_override = _mat(white)
+			neck.material_override = _mat(white)
+			beak.material_override = _mat(yellow)
+			# 红色裸区（头顶）
+			var crown := MeshInstance3D.new()
+			var crm := SphereMesh.new()
+			crm.radius = 0.07
+			crm.height = 0.15
+			crown.mesh = crm
+			crown.material_override = _mat(red)
+			crown.position = Vector3(0, 1.42, 0.15)
+			rig.add_child(crown)
+			# 黑色翅尖
+			var wing := MeshInstance3D.new()
+			var wm := BoxMesh.new()
+			wm.size = Vector3(0.5, 0.08, 0.3)
+			wing.mesh = wm
+			wing.material_override = _mat(dark)
+			wing.position = Vector3(0, 0.9, -0.35)
+			rig.add_child(wing)
+		"dongfangbaihuan":
+			body.material_override = _mat(white)
+			head.material_override = _mat(white)
+			neck.material_override = _mat(white)
+			beak.material_override = _mat(dark)
+			# 黑色大翅
+			var dwing := MeshInstance3D.new()
+			var dwm := BoxMesh.new()
+			dwm.size = Vector3(0.6, 0.1, 0.5)
+			dwing.mesh = dwm
+			dwing.material_override = _mat(dark)
+			dwing.position = Vector3(0, 0.9, -0.45)
+			rig.add_child(dwing)
+		"xiaotiane":
+			body.material_override = _mat(white)
+			head.material_override = _mat(white)
+			neck.material_override = _mat(white)
+			beak.material_override = _mat(yellow)
+		"baizhenhe":
+			body.material_override = _mat(grey)
+			head.material_override = _mat(grey)
+			neck.material_override = _mat(grey)
+			beak.material_override = _mat(yellow)
+			# 红色脸
+			var face := MeshInstance3D.new()
+			var fsm := SphereMesh.new()
+			fsm.radius = 0.08
+			fsm.height = 0.16
+			face.mesh = fsm
+			face.material_override = _mat(red)
+			face.position = Vector3(0, 1.36, 0.22)
+			rig.add_child(face)
+		"yanlei":
+			body.material_override = _mat(brown)
+			head.material_override = _mat(brown)
+			neck.material_override = _mat(brown)
+			beak.material_override = _mat(yellow)
+
+
+func _mat(c: Color) -> StandardMaterial3D:
+	var m := StandardMaterial3D.new()
+	m.albedo_color = c
+	return m
+
+
 func _update_species_views() -> void:
 	for sid in GameState.SPECIES:
 		var pop: int = GameState.species_pop.get(sid, 0)
-		var count: int = int(pop / 8.0)  # 0-100 → 0-12 个
+		var count: int = int(pop / 10.0)  # 0-100 → 0-10 个
 		var view: Dictionary = species_views[sid]
 		var meshes: Array = view["meshes"]
 		for i in meshes.size():
 			meshes[i].visible = i < count
+
+
+## 为每种植物生成一组个体
+func _build_plant_views(parent: Node3D) -> void:
+	for pid in GameState.PLANTS:
+		var meshes: Array = []
+		var kind: String = GameState.PLANTS[pid]["kind"]
+		for i in 14:
+			var mi := MeshInstance3D.new()
+			mi.visible = false
+			_build_plant_shape(mi, pid, kind)
+			parent.add_child(mi)
+			meshes.append(mi)
+		plant_views[pid] = {"meshes": meshes, "kind": kind}
+
+
+func _build_plant_shape(mi: MeshInstance3D, pid: String, kind: String) -> void:
+	var c: Color = GameState.PLANTS[pid]["color"]
+	mi.material_override = _mat(c)
+	match kind:
+		"submerged", "floating":
+			var sm := SphereMesh.new()
+			sm.radius = 0.3
+			sm.height = 0.5
+			mi.mesh = sm
+			mi.scale = Vector3(1.0, 0.25, 1.0)
+		"emergent":
+			var cm := CylinderMesh.new()
+			cm.top_radius = 0.05
+			cm.bottom_radius = 0.06
+			cm.height = 1.6
+			mi.mesh = cm
+		"marsh":
+			var cm2 := CylinderMesh.new()
+			cm2.top_radius = 0.02
+			cm2.bottom_radius = 0.15
+			cm2.height = 0.5
+			mi.mesh = cm2
+
+
+func _update_plant_views() -> void:
+	for pid in GameState.PLANTS:
+		var pop: int = GameState.plant_pop.get(pid, 0)
+		var count: int = int(pop / 7.0)  # 0-100 → 0-14
+		var view: Dictionary = plant_views[pid]
+		var meshes: Array = view["meshes"]
+		var kind: String = view["kind"]
+		for i in meshes.size():
+			meshes[i].visible = i < count
+			if meshes[i].visible:
+				meshes[i].position = _plant_position(pid, kind, i)
+
+
+func _plant_position(pid: String, kind: String, i: int) -> Vector3:
+	match kind:
+		"submerged":
+			return Vector3(-6 + (i % 6) * 2.4, 0.0, -2 + int(i / 6) * 2.5)
+		"floating":
+			return Vector3(2 + (i % 5) * 2.5, 0.06, -4 + int(i / 5) * 2.5)
+		"emergent":
+			return Vector3(-9 + (i % 7) * 2.6, 0.5, 3 + int(i / 7) * 2.5)
+		_:
+			return Vector3(-8 + (i % 7) * 2.4, 0.05, 5 + int(i / 7) * 2.4)
 
 
 func _update_3d() -> void:
@@ -257,6 +474,9 @@ func _update_3d() -> void:
 
 	# 物种个体数量随物种种群增减
 	_update_species_views()
+
+	# 植物数量随植被指标增减
+	_update_plant_views()
 
 	var cv := float(m["community"]) / 100.0
 	village_mat.albedo_color = Color(0.45 + 0.35 * cv, 0.32 + 0.25 * cv, 0.22 + 0.1 * cv)
