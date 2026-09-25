@@ -45,7 +45,8 @@ var _current_event: String = ""
 
 # 3D 表现节点
 var lake_mesh: MeshInstance3D
-var lake_mat: StandardMaterial3D
+var lake_mat: ShaderMaterial
+var lake_color: Color = Color(0.20, 0.50, 0.80, 0.88)
 var grass_nodes: Array = []
 var grass_mats: Array = []
 var bird_nodes: Array = []
@@ -98,9 +99,9 @@ func _build_3d() -> void:
 	pm.size = Vector2(18, 18)
 	lake_mesh.mesh = pm
 	lake_mesh.position = Vector3(0, 0.08, 0)
-	lake_mat = StandardMaterial3D.new()
-	lake_mat.albedo_color = Color(0.20, 0.50, 0.80, 0.88)
-	lake_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	lake_mat = ShaderMaterial.new()
+	lake_mat.shader = _make_water_shader()
+	lake_mat.set_shader_parameter("water_color", lake_color)
 	lake_mesh.material_override = lake_mat
 	lake_view.add_child(lake_mesh)
 
@@ -155,6 +156,34 @@ func _build_3d() -> void:
 	# 延迟挂到场景，避免父节点初始化期 add_child 冲突
 	var root := get_parent() as Node3D
 	root.add_child.call_deferred(lake_view)
+
+
+## 为鸟类找一个栖息点：优先乔木树冠，其次草洲/挺水植物
+func _find_perch_point(sid: String, seed_i: int) -> Vector3:
+	# 优先在乔木上停歇（树冠高度约 1.5~2.6）
+	var tree_rigs: Array = plant_views.get("chishan", {}).get("rigs", [])
+	var visible_trees: Array = []
+	for r in tree_rigs:
+		if r.visible:
+			visible_trees.append(r)
+	if not visible_trees.is_empty():
+		var t: Node3D = visible_trees[(seed_i * 7 + int(sid.length())) % visible_trees.size()]
+		return t.position + Vector3(0, 2.5, 0)
+	# 退而求其次：草洲/挺水植物上方
+	for kind_want in ["marsh", "emergent"]:
+		for pid in plant_views:
+			if plant_views[pid]["kind"] != kind_want:
+				continue
+			var rigs: Array = plant_views[pid]["rigs"]
+			var vis: Array = []
+			for r in rigs:
+				if r.visible:
+					vis.append(r)
+			if not vis.is_empty():
+				var p: Node3D = vis[(seed_i * 5 + 3) % vis.size()]
+				return p.position + Vector3(0, 1.2, 0)
+	# 最后兜底：原地
+	return Vector3(-6 + seed_i * 1.2, 1.0, -3 + (seed_i % 3) * 2.0)
 
 
 ## 湖边社区：一排房子，数量/颜色随社区信任度变化
@@ -213,6 +242,31 @@ func _collect_mats(n: Node) -> Array:
 	return out
 
 
+## 水面 shader：轻微微波 + 波光
+func _make_water_shader() -> Shader:
+	var sh := Shader.new()
+	sh.code = """
+shader_type spatial;
+render_mode blend_mix, depth_draw_never, cull_disabled, unshaded;
+
+uniform vec4 water_color : source_color = vec4(0.2, 0.5, 0.8, 0.88);
+uniform float wave_speed = 0.55;
+uniform float wave_strength = 0.06;
+
+void fragment() {
+	// 两层正弦叠加，形成缓慢流动的波纹
+	float w1 = sin(VERTEX.x * 2.2 + TIME * wave_speed) * 0.5 + 0.5;
+	float w2 = sin(VERTEX.z * 1.7 - TIME * wave_speed * 0.8) * 0.5 + 0.5;
+	float ripple = (w1 * w2);
+	// 波光提亮水面，产生细微的明暗流动
+	vec3 col = water_color.rgb + vec3(0.10, 0.13, 0.16) * ripple * wave_strength * 16.0;
+	ALBEDO = col;
+	ALPHA = water_color.a;
+}
+"""
+	return sh
+
+
 ## 生成棋盘网格线（生息演算式棋盘感）
 func _build_grid(parent: Node3D) -> void:
 	var st := SurfaceTool.new()
@@ -263,11 +317,31 @@ func _build_mudflats(parent: Node3D) -> void:
 
 func _process(delta: float) -> void:
 	_process_birds(delta)
+	_process_plants_sway()
 	_update_card_hover(delta)
 	# 容器尺寸变化时重排扇形（居中）
 	if card_box != null and card_box.size.x > 10.0:
 		if _fan_layout_size.distance_to(card_box.size) > 1.0:
 			_layout_fan()
+
+
+## 植物随风轻微摆动（只有挺水/乔木/草洲这类露出水面的才明显摆动）
+func _process_plants_sway() -> void:
+	var t := Time.get_ticks_msec() / 1000.0
+	for pid in plant_views:
+		var kind: String = plant_views[pid]["kind"]
+		if kind == "submerged":
+			continue  # 沉水植物随水波，不随风
+		var amp := 0.045 if kind == "emergent" else 0.03
+		var rigs: Array = plant_views[pid]["rigs"]
+		for i in rigs.size():
+			var rig: Node3D = rigs[i]
+			if not rig.visible:
+				continue
+			# 各自相位错开，避免整齐划一
+			var ph := i * 0.8 + rig.position.x * 0.3
+			rig.rotation.z = sin(t * 1.1 + ph) * amp
+			rig.rotation.x = cos(t * 0.9 + ph * 1.3) * amp * 0.6
 
 
 ## 鸟类状态机：站立 / 啄水 / 行走，朝向符合移动方向
@@ -288,7 +362,14 @@ func _process_birds(delta: float) -> void:
 			if timers[i] <= 0.0:
 				# 切换状态
 				var r := randf()
-				if r < 0.45:
+				# 植被好时，更高概率找栖息地停歇（体现生态联动）
+				var veg: int = GameState.metrics.get("vegetation", 50)
+				var perch_chance := 0.12 + float(veg) / 100.0 * 0.25
+				if r < perch_chance:
+					states[i] = 3  # 停歇（飞到栖息点）
+					timers[i] = 6.0 + randf() * 4.0
+					targets[i] = _find_perch_point(sid, i)
+				elif r < 0.45:
 					states[i] = 0  # 站立
 					timers[i] = 1.0 + randf() * 2.5
 				elif r < 0.78:
@@ -326,6 +407,21 @@ func _process_birds(delta: float) -> void:
 						rig.rotation.x = lerpf(rig.rotation.x, 0.0, delta * 6.0)
 						# 走路轻微颠簸
 						rig.position.y = base.y + abs(sin(Time.get_ticks_msec() * 0.012 + i * 1.7)) * 0.05
+				3:  # 停歇：飞向栖息点并在其上停留
+					var perch: Vector3 = targets[i]
+					var to_p := perch - rig.position
+					if to_p.length() < 0.25:
+						# 已到栖息点：停在上面（可轻微起伏，像站在枝头）
+						rig.position = perch
+						rig.rotation.x = lerpf(rig.rotation.x, 0.0, delta * 5.0)
+						rig.position.y = perch.y + sin(Time.get_ticks_msec() * 0.004 + i) * 0.03
+					else:
+						# 飞行：抬升 + 朝目标（速度较快，确保能飞到栖息点）
+						var fdir := to_p.normalized()
+						rig.position += fdir * 4.5 * delta
+						rig.rotation.y = atan2(fdir.x, fdir.z)
+						# 飞行时前倾
+						rig.rotation.x = lerpf(rig.rotation.x, -0.25, delta * 5.0)
 
 
 ## 为每个物种生成一组会动的个体（最多 10 个/物种），用多几何体拼出可辨识剪影
@@ -675,7 +771,8 @@ func _update_3d() -> void:
 	var m: Dictionary = GameState.metrics
 	var wscale := lerpf(0.55, 1.35, float(m["water_level"]) / 100.0)
 	lake_mesh.scale = Vector3(wscale, 1.0, wscale)
-	lake_mat.albedo_color = Color(0.18, 0.45 + 0.35 * (float(m["water_level"]) / 100.0), 0.80, 0.88)
+	lake_color = Color(0.18, 0.45 + 0.35 * (float(m["water_level"]) / 100.0), 0.80, 0.88)
+	lake_mat.set_shader_parameter("water_color", lake_color)
 
 	for i in grass_nodes.size():
 		var v := float(m["vegetation"]) / 100.0
