@@ -30,7 +30,8 @@ var hand_panel: PanelContainer
 var card_box: Control
 var selected_label: Label
 var current_hand: Array = []   # 当前手牌（card dict 数组）
-var card_infos: Array = []     # {panel, btn, card_id, base_y, selected}
+var card_infos: Array = []     # {panel, card_id, base_pos, theta, radial, selected}
+var _fan_layout_size: Vector2 = Vector2.ZERO  # 上次布局时的容器尺寸
 var popup_root: Control
 var dim: ColorRect
 var popup_center: CenterContainer
@@ -262,6 +263,10 @@ func _build_mudflats(parent: Node3D) -> void:
 func _process(delta: float) -> void:
 	_process_birds(delta)
 	_update_card_hover()
+	# 容器尺寸变化时重排扇形（居中）
+	if card_box != null and card_box.size.x > 10.0:
+		if _fan_layout_size.distance_to(card_box.size) > 1.0:
+			_layout_fan()
 
 
 ## 鸟类状态机：站立 / 啄水 / 行走，朝向符合移动方向
@@ -812,27 +817,27 @@ func _layout_fan() -> void:
 		return
 	var card_w := 110.0
 	var card_h := 135.0
-	# 圆心：牌区正下方（在 card_box 局部坐标中）
-	var area_h := 160.0
-	var center := Vector2(276.0, area_h + 120.0)  # 圆心在下方
-	var radius := 150.0        # 牌底到圆心的距离
-	var total_span := deg_to_rad(50.0)  # 总张角
+	# 圆心：以 card_box 实际尺寸为准，水平居中，垂直在底部下方
+	var area_size := card_box.size
+	if area_size.x < 10.0 or area_size.y < 10.0:
+		area_size = Vector2(552.0, 260.0)  # 兜底
+	var center := Vector2(area_size.x / 2.0, area_size.y + 60.0)
+	var radius := 150.0
+	var total_span := deg_to_rad(50.0)
 	for i in n:
 		var info: Dictionary = card_infos[i]
 		var panel: PanelContainer = info["panel"]
 		panel.custom_minimum_size = Vector2(card_w, card_h)
-		panel.pivot_offset = Vector2(card_w / 2.0, card_h)  # 以牌底中心为锚点
-		# 每张牌的角度：从左到右
+		panel.pivot_offset = Vector2(card_w / 2.0, card_h)
 		var theta := -total_span / 2.0 + total_span * (float(i) / (n - 1)) if n > 1 else 0.0
-		# 牌底中心位置：圆心 + 径向向外 radius
-		var radial := Vector2(cos(theta - PI / 2.0), sin(theta - PI / 2.0))  # 向上为正
+		var radial := Vector2(cos(theta - PI / 2.0), sin(theta - PI / 2.0))
 		var bottom_pos := center + radial * radius
 		panel.position = bottom_pos
-		# 牌旋转：径向方向（牌长边指向圆心）
 		panel.rotation = theta
 		info["base_pos"] = panel.position
 		info["theta"] = theta
 		info["radial"] = radial
+	_fan_layout_size = area_size
 
 
 func _make_card(card: Dictionary) -> PanelContainer:
@@ -927,8 +932,8 @@ func _update_card_hover() -> void:
 			continue
 		var hovering: bool = panel.get_global_rect().has_point(mouse)
 		var raised: bool = hovering or info["selected"]
-		# 弹起方向：沿径向向外（牌底指向圆心的反方向）
-		var target: Vector2 = info["base_pos"] - info["radial"] * (26.0 if raised else 0.0)
+		# 弹起方向：沿径向向外（远离圆心，即向上弹出）
+		var target: Vector2 = info["base_pos"] + info["radial"] * (26.0 if raised else 0.0)
 		if panel.position.distance_to(target) > 0.5:
 			panel.position = panel.position.lerp(target, 0.25)
 
