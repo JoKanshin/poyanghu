@@ -69,15 +69,35 @@ func _ready() -> void:
 	GameState.reset_game()
 	_update_hud()
 	_update_3d()
+	# 窗口尺寸/全屏变化时自适应相机，避免全屏后沙盘被裁或留黑边
+	get_viewport().size_changed.connect(_fit_camera_to_window)
+	_fit_camera_to_window()
+
+
+## 根据窗口宽高比调整正交相机尺寸，保证沙盘完整可见
+func _fit_camera_to_window() -> void:
+	var cam := get_node("../Camera3D") as Camera3D
+	if cam == null:
+		return
+	var vp := get_viewport().get_visible_rect().size
+	if vp.y <= 0.0:
+		return
+	# 沙盘需要的最小可见宽度（世界单位）
+	var need_w := 30.0
+	var aspect := vp.x / vp.y
+	# 正交 size 是「垂直」尺寸；宽高比小时要放大以容纳 need_w
+	var size_for_w := need_w / aspect
+	var size_for_h := 20.0
+	cam.size = maxf(size_for_w, size_for_h)
 
 
 # ==================== 相机 ====================
 func _setup_camera() -> void:
 	var cam := get_node("../Camera3D") as Camera3D
 	cam.projection = Camera3D.PROJECTION_ORTHOGONAL
-	cam.size = 17.5
-	# 饥荒式 2.5D：正交 + 45° 方位角 + 约 57° 俯角（顶面与侧面均可见，立体感强）
-	cam.position = Vector3(6, 13, 6)
+	cam.size = 26.0  # 更大的正交尺寸 = 视野更广，能看全沙盘
+	# 2.5D 等距俯视：方位角 45°、俯角 45°（视野开阔，地形一览无余）
+	cam.position = Vector3(14, 14, 14)
 	cam.look_at(Vector3(0, 0, 0), Vector3.UP)
 
 	# 暖色方向光（湿地黄昏氛围）
