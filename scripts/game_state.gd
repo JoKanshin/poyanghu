@@ -309,6 +309,100 @@ const KNOWLEDGE_CARDS := {
 	},
 }
 
+# ==================== 危机事件池（肉鸽随机性核心）====================
+# 每回合有概率抽中危机；危机提前 1 回合预警，下回合生效。
+# weight：基础权重；cond：满足时权重翻倍，让危机与当前生态状态呼应。
+const CRISES := [
+	{
+		"id": "drought", "name": "极端干旱", "weight": 1.0, "cond": "water_level < 45",
+		"warn": "【自然预警】气象部门预报：未来一季降水显著偏少，湖区面临枯水风险。",
+		"hit": "【危机爆发】极端干旱来袭——湖区水位骤降，沉水植物块茎大面积发育受阻，湖床裸露。",
+		"effects": [{"metric": "water_level", "delta": -14}, {"metric": "vegetation", "delta": -7}],
+	},
+	{
+		"id": "disease", "name": "苦草病害暴发", "weight": 0.9, "cond": "water_quality < 50",
+		"warn": "【监测提示】巡护员发现局部水草出现腐烂迹象，疑与水体富营养化有关，建议加强监测。",
+		"hit": "【危机爆发】苦草病害大面积暴发——沉水植被成片腐烂死亡，候鸟食物锐减。",
+		"effects": [{"metric": "vegetation", "delta": -12}, {"metric": "water_quality", "delta": -6}],
+	},
+	{
+		"id": "illegal_fishing", "name": "非法捕捞猖獗", "weight": 1.0, "cond": "fish < 50",
+		"warn": "【巡护通报】近期湖区外围发现可疑船只活动轨迹，疑似非法捕捞，建议加强执法。",
+		"hit": "【危机爆发】非法捕捞猖獗——电捕鱼与密眼网具造成鱼类资源骤减。",
+		"effects": [{"metric": "fish", "delta": -13}],
+	},
+	{
+		"id": "bird_conflict", "name": "候鸟大规模进田", "weight": 1.0, "cond": "community < 55",
+		"warn": "【社区报告】农户反映白鹤开始向稻田聚集，若持续可能造成较大损失，请提前协商。",
+		"hit": "【危机爆发】数千只候鸟涌入农田取食莲藕、踩踏稻苗，农户损失严重，矛盾激化。",
+		"effects": [{"metric": "community", "delta": -14}, {"metric": "birds", "delta": 6}],
+	},
+	{
+		"id": "flood", "name": "汛期洪水", "weight": 0.8, "cond": "water_level > 60",
+		"warn": "【自然预警】上游持续降雨，水文站预计湖区水位将快速上涨。",
+		"hit": "【危机爆发】汛期洪水漫过草洲——新生沉水植被被冲毁，底质遭到破坏。",
+		"effects": [{"metric": "water_level", "delta": 18}, {"metric": "vegetation", "delta": -10}],
+	},
+	{
+		"id": "pollution", "name": "上游污染输入", "weight": 0.9, "cond": "water_quality < 55",
+		"warn": "【水质预警】上游监测断面总磷浓度上升，污染团可能随水流进入湖区。",
+		"hit": "【危机爆发】上游污染团入境——总磷总氮严重超标，鱼类与沉水植物同时受损。",
+		"effects": [{"metric": "water_quality", "delta": -14}, {"metric": "fish", "delta": -6}],
+	},
+	{
+		"id": "invasive", "name": "外来物种暴发", "weight": 0.9, "cond": "vegetation < 55",
+		"warn": "【巡查发现】湖区外围发现福寿螺与凤眼莲扩散迹象，繁殖速度较快。",
+		"hit": "【危机爆发】外来物种暴发——福寿螺啃食水生植物，凤眼莲覆盖水面挤占生存空间。",
+		"effects": [{"metric": "vegetation", "delta": -10}, {"metric": "fish", "delta": -5}],
+	},
+	{
+		"id": "algal_bloom", "name": "蓝藻水华", "weight": 0.85, "cond": "water_quality > 60",
+		"warn": "【监测提示】气温升高、水体流动性变差，蓝藻水华风险上升。",
+		"hit": "【危机爆发】蓝藻水华暴发——水面被绿色藻膜覆盖，水体缺氧，候鸟中毒与食物短缺同时发生。",
+		"effects": [{"metric": "water_quality", "delta": -12}, {"metric": "birds", "delta": -8}],
+	},
+]
+
+# ==================== 卡牌协同（组合出招）====================
+# 同回合内同时执行 requires 中全部卡牌，触发额外效果
+const SYNERGIES := [
+	{
+		"id": "sci_plant", "name": "科学补种", "requires": ["water_monitor", "veg_restore"],
+		"desc": "先测水质再补种，成活率大幅提升",
+		"bonus": [{"metric": "vegetation", "delta": 9}],
+	},
+	{
+		"id": "hydro_restore", "name": "水文修复", "requires": ["water_control", "veg_restore"],
+		"desc": "控水与补种协同，为沉水植物创造适宜水位",
+		"bonus": [{"metric": "vegetation", "delta": 7}, {"metric": "birds", "delta": 4}],
+	},
+	{
+		"id": "joint_defense", "name": "群防群治", "requires": ["patrol", "guard_team"],
+		"desc": "执法与社区共管协同，巡护覆盖翻倍",
+		"bonus": [{"metric": "fish", "delta": 8}, {"metric": "community", "delta": 4}],
+	},
+	{
+		"id": "livelihood", "name": "生计转型", "requires": ["community_comp", "industry_switch"],
+		"desc": "补偿与转产配套，农户与渔民获得长期出路",
+		"bonus": [{"metric": "community", "delta": 9}],
+	},
+	{
+		"id": "coexist", "name": "人鸟共处", "requires": ["bird_canteen", "community_comp"],
+		"desc": "候鸟食堂配合社区补偿，把冲突转化为共管",
+		"bonus": [{"metric": "birds", "delta": 6}, {"metric": "community", "delta": 5}],
+	},
+]
+
+# ==================== 失败原因（任一指标归零即提前结束）====================
+const FAILURE_TEXT := {
+	"water_level": "鄱阳湖干涸见底，湖床裸露龟裂，候鸟失去越冬栖息地。",
+	"vegetation": "沉水植被彻底消失，白鹤失去主要食物来源，草洲退化为荒滩。",
+	"water_quality": "水质彻底恶化，蓝藻暴发、水体缺氧，水生生物大面积死亡。",
+	"fish": "鱼类资源枯竭，江豚与食鱼水鸟无以为继，禁渔成果付诸东流。",
+	"birds": "候鸟种群崩溃，鄱阳湖失去国际重要湿地的生态价值。",
+	"community": "社区信任彻底破裂，农户与渔民转入对抗，保护工作再也无法开展。",
+}
+
 # ==================== 事件数据 ====================
 # 按回合触发，给出线索不给答案
 const EVENTS := {
@@ -337,6 +431,15 @@ var pending_knowledge: Array = []   # 待弹出的知识卡 id
 var log_messages: Array = []        # 因果提示
 var game_over: bool = false
 var total_spent: int = 0            # 累计卡牌支出（用于资金效率评价）
+# ===== 肉鸽机制状态 =====
+var run_seed: int = 0               # 本局种子（同种子可复现，用于反事实对照）
+var pending_crisis: Dictionary = {} # 待爆发的危机（本回合预警，下回合生效）
+var last_crisis_name: String = ""   # 上回合爆发的危机名（用于结算展示）
+var triggered_synergies: Array = [] # 本回合触发的协同
+var _fired_synergies: Array = []    # 本局已触发过的协同（防重复）
+var is_failure: bool = false        # 是否因生态崩溃提前结束
+var failure_reason: String = ""     # 失败原因文案
+var failure_metric: String = ""     # 崩溃的指标
 
 signal metrics_changed
 signal funds_changed
@@ -362,7 +465,27 @@ func reset_game() -> void:
 	pending_knowledge = []
 	log_messages = []
 	game_over = false
-	metrics = {
+	pending_crisis = {}
+	last_crisis_name = ""
+	triggered_synergies = []
+	_fired_synergies = []
+	is_failure = false
+	failure_reason = ""
+	failure_metric = ""
+	# 每局随机种子：同种子可复现（企划书 8.3 反事实对照）
+	if run_seed == 0:
+		randomize()
+		run_seed = randi()
+	seed(run_seed)
+	metrics = _roll_starting_metrics()
+	_sync_species()
+	_sync_plants()
+	start_new_turn()
+
+
+## 随机开局：在基线附近小幅偏移，每局困境不同
+func _roll_starting_metrics() -> Dictionary:
+	var base := {
 		"water_level": 35,   # 偏枯水
 		"vegetation": 45,    # 退化
 		"water_quality": 40, # 富营养化风险
@@ -370,9 +493,15 @@ func reset_game() -> void:
 		"birds": 50,
 		"community": 55,
 	}
-	_sync_species()
-	_sync_plants()
-	start_new_turn()
+	var out := {}
+	for k in base:
+		# 每项在 ±9 内偏移，并保证不越界
+		out[k] = clampi(base[k] + _randi_range(-9, 9), 18, 88)
+	# 至少保证有一项明显偏弱，制造"这局的软肋"
+	var weak_keys: Array = out.keys()
+	var weak: String = weak_keys[_randi_range(0, weak_keys.size() - 1)]
+	out[weak] = clampi(out[weak] - 12, 15, 88)
+	return out
 
 
 ## 将物种数量同步到目标值（由驱动指标决定）
@@ -428,6 +557,79 @@ func start_new_turn() -> void:
 	# 触发本回合事件
 	if EVENTS.has(turn):
 		event_triggered.emit(EVENTS[turn])
+
+	# 危机系统：先结算爆发的，再抽取新的预警
+	_resolve_pending_crisis()
+	_maybe_warn_crisis()
+
+
+## 结算上回合预警的危机：爆发并造成较重惩罚
+func _resolve_pending_crisis() -> void:
+	if pending_crisis.is_empty():
+		return
+	var c: Dictionary = pending_crisis
+	pending_crisis = {}
+	last_crisis_name = c["name"]
+	_add_log("⚠ %s" % c["hit"])
+	for e in c["effects"]:
+		_apply_delta(e["metric"], e["delta"])
+		_add_log("   %s %+d" % [METRIC_NAMES[e["metric"]], e["delta"]])
+	_sync_species()
+	_sync_plants()
+	event_triggered.emit(c["hit"])
+
+
+## 抽取本回合的危机预警（提前 1 回合告知，给玩家应对机会）
+func _maybe_warn_crisis() -> void:
+	if turn >= TOTAL_TURNS - 1:
+		return  # 最后两回合不再新增危机，避免无法应对
+	if not pending_crisis.is_empty():
+		return  # 已有待爆发的危机，不叠加
+	# 从第 3 回合起才开始抽危机，给玩家缓冲
+	if turn < 3:
+		return
+	# 基础概率 38%，随回合推进略升（后期压力更大）
+	var chance := 0.38 + float(turn) / float(TOTAL_TURNS) * 0.22
+	if randf() > chance:
+		return
+	# 加权抽选：与当前生态状态呼应的危机会更容易出现
+	var total_w := 0.0
+	var weights: Array = []
+	for c in CRISES:
+		var w: float = c["weight"]
+		if _eval_condition_simple(c["cond"]):
+			w *= 1.8  # 状态吻合 → 权重翻倍
+		weights.append(w)
+		total_w += w
+	var roll := randf() * total_w
+	for i in CRISES.size():
+		roll -= weights[i]
+		if roll <= 0.0:
+			pending_crisis = CRISES[i]
+			event_triggered.emit(pending_crisis["warn"])
+			return
+
+
+## 简易条件求值（复用知识卡的表达式风格）
+func _eval_condition_simple(cond: String) -> bool:
+	var m := RegEx.new()
+	m.compile("(\\w+)\\s*(<=|>=|<|>|==)\\s*(-?\\d+)")
+	var res := m.search(cond)
+	if res == null:
+		return false
+	var metric := res.get_string(1)
+	var op := res.get_string(2)
+	var val := int(res.get_string(3))
+	if not metrics.has(metric):
+		return false
+	var cur: int = metrics[metric]
+	match op:
+		"<": return cur < val
+		">": return cur > val
+		"<=": return cur <= val
+		">=": return cur >= val
+		"==": return cur == val
+	return false
 
 
 ## 某张卡某档位的成本（万，取整）
@@ -493,32 +695,66 @@ func execute_action(card_id: String, tier: String) -> bool:
 
 
 ## 结算自然演化（每回合结束调用）
+## 设计：不做决策生态会缓慢恶化（压力），但不会瞬间崩盘（给玩家反应时间）
 func natural_evolution() -> void:
-	# 水位随机小幅波动
-	_apply_delta("water_level", _randi_range(-4, 4))
+	# 水位随机波动（枯水更常见，符合鄱阳湖现实）
+	_apply_delta("water_level", _randi_range(-5, 3))
 
-	# 植被受水质拖累：水质差则植被缓慢退化
-	if metrics["water_quality"] < 40:
-		_apply_delta("vegetation", -2)
-	elif metrics["water_quality"] > 65:
+	# 水质：无治理则缓慢恶化
+	if used_action_ids.has("water_monitor") or used_action_ids.has("research"):
+		pass  # 本回合有监测/科研投入 → 水质不恶化
+	else:
+		_apply_delta("water_quality", -2)
+
+	# 植被受水质拖累：水质差则植被退化（比之前更重）
+	if metrics["water_quality"] < 45:
+		_apply_delta("vegetation", -3)
+	elif metrics["water_quality"] > 70:
 		_apply_delta("vegetation", 1)
 
 	# 植被是候鸟食物基础
-	if metrics["vegetation"] < 40:
-		_apply_delta("birds", -2)
-	elif metrics["vegetation"] > 65:
+	if metrics["vegetation"] < 42:
+		_apply_delta("birds", -3)
+	elif metrics["vegetation"] > 70:
 		_apply_delta("birds", 1)
 
-	# 鱼类缓慢自然恢复（禁渔背景），执法不足时恢复慢
-	_apply_delta("fish", 1)
+	# 鱼类：禁渔带来缓慢恢复，但执法不足则恢复停滞
+	if used_action_ids.has("patrol") or used_action_ids.has("guard_team"):
+		_apply_delta("fish", 2)
+	else:
+		_apply_delta("fish", -1)  # 无巡护 → 非法捕捞蚕食
 
-	# 社区信任：长期缺补偿则下降
-	if metrics["community"] < 40 and not used_action_ids.has("community_comp"):
+	# 社区信任：长期缺补偿则持续下降
+	if metrics["community"] < 45 and not used_action_ids.has("community_comp"):
 		_apply_delta("community", -3)
 
 	_sync_species()
 	_sync_plants()
 	metrics_changed.emit()
+
+
+## 结算卡牌协同：本回合打出指定组合则触发额外效果
+func resolve_synergies() -> void:
+	triggered_synergies = []
+	for s in SYNERGIES:
+		var ok := true
+		for req in s["requires"]:
+			if not used_action_ids.has(req):
+				ok = false
+				break
+		if not ok:
+			continue
+		# 避免重复触发（同一协同一局内只生效一次）
+		if s["id"] in _fired_synergies:
+			continue
+		_fired_synergies.append(s["id"])
+		triggered_synergies.append(s["name"])
+		_add_log("★ 协同「%s」：%s" % [s["name"], s["desc"]])
+		for e in s["bonus"]:
+			_apply_delta(e["metric"], e["delta"])
+			_add_log("   %s %+d" % [METRIC_NAMES[e["metric"]], e["delta"]])
+	_sync_species()
+	_sync_plants()
 
 
 ## 推进延迟效果队列（回合结束调用）
@@ -535,9 +771,10 @@ func advance_effects() -> void:
 	metrics_changed.emit()
 
 
-## 回合结束：推进延迟、自然演化、结转、知识卡检查
+## 回合结束：推进延迟、自然演化、结算协同、检查失败与知识卡
 func end_turn() -> void:
 	advance_effects()
+	resolve_synergies()      # 卡牌协同（在自然演化前结算，让玩家看到组合收益）
 	natural_evolution()
 
 	# 结转规则：最多 MAX_CARRY 万，溢出转科研点
@@ -548,12 +785,30 @@ func end_turn() -> void:
 	carry = funds
 	funds = 0
 
+	# 失败判定：任一指标归零 → 生态崩溃，提前结束
+	if _check_failure():
+		return
+
 	_check_knowledge_triggers()
 
 	if turn >= TOTAL_TURNS:
 		game_over = true
 		game_ended.emit(generate_report())
 	# 下一回合由主场景在展示完结算反馈后调用 start_new_turn()
+
+
+## 检查是否有指标归零（失败条件）
+func _check_failure() -> bool:
+	for metric in metrics:
+		if metrics[metric] <= 0:
+			is_failure = true
+			game_over = true
+			failure_metric = metric
+			failure_reason = FAILURE_TEXT.get(metric, "%s 崩溃。" % METRIC_NAMES.get(metric, metric))
+			_add_log("✖ %s" % failure_reason)
+			game_ended.emit(generate_report())
+			return true
+	return false
 
 
 ## 检查知识卡触发条件，压入待弹出队列
@@ -627,6 +882,11 @@ func generate_report() -> Dictionary:
 	return {
 		"eco": eco, "social": social, "manage": manage,
 		"reflection": reflection,
+		"is_failure": is_failure,
+		"failure_reason": failure_reason,
+		"failure_metric": failure_metric,
+		"seed": run_seed,
+		"turns_survived": turn,
 		"research_points": research_points,
 		"knowledge_count": knowledge_unlocked.size(),
 		"total_knowledge": KNOWLEDGE_CARDS.size(),

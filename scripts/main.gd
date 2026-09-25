@@ -1502,6 +1502,9 @@ func _finish_turn() -> void:
 	var after: Dictionary = GameState.metrics
 
 	var lines: Array = []
+	if GameState.last_crisis_name != "":
+		lines.append("⚠ 危机爆发：%s" % GameState.last_crisis_name)
+		lines.append("")
 	lines.append("本回合结算：")
 	for metric in GameState.METRIC_NAMES:
 		var d: int = after[metric] - before[metric]
@@ -1516,6 +1519,10 @@ func _finish_turn() -> void:
 		lines.append("  ⚠ 以下行动因资金不足未能执行：%s" % "、".join(names))
 	lines.append("")
 	lines.append("结转资金：%d 万（上限 %d 万）" % [GameState.carry, GameState.MAX_CARRY])
+	# 下回合危机预警
+	if not GameState.pending_crisis.is_empty():
+		lines.append("")
+		lines.append("[color=#ffb060]⏳ 预警：%s[/color]" % GameState.pending_crisis["name"])
 
 	hand_panel.visible = false
 	_show_popup("结算反馈", "\n".join(lines), "继续", _on_resolve_continue)
@@ -1556,6 +1563,12 @@ func _on_game_end(report: Dictionary) -> void:
 
 func _show_report(r: Dictionary) -> void:
 	var body := ""
+	var title := "四年 · 生态报告"
+	if r.get("is_failure", false):
+		title = "生态崩溃 · 修复失败"
+		body += "[color=#ff7060][b]第 %d 回合，%s[/b][/color]\n\n" % [
+			r.get("turns_survived", 0), r.get("failure_reason", "生态崩溃")]
+		body += "你的修复工作被迫中止。这不是终点——换一个策略，再试一次。\n\n"
 	body += "[b]生态维度[/b]（%s）\n" % r["eco"]["grade"]
 	for n in r["eco"]["notes"]:
 		body += "  · %s\n" % n
@@ -1566,12 +1579,14 @@ func _show_report(r: Dictionary) -> void:
 	for n in r["manage"]["notes"]:
 		body += "  · %s\n" % n
 	body += "\n[b]知识卡收集[/b]：%d / %d　[b]科研点[/b]：%d\n" % [r["knowledge_count"], r["total_knowledge"], r["research_points"]]
+	body += "[color=#8a8a8a]本局种子：%d（同种子可复现，便于对照实验）[/color]\n" % r.get("seed", 0)
 	body += "\n[b]反思[/b]\n%s" % r["reflection"]
-	_show_popup("四年 · 生态报告", body, "重新开始", _restart)
+	_show_popup(title, body, "重新开始（新种子）", _restart)
 
 
 func _restart() -> void:
 	_current_event = ""
+	GameState.run_seed = 0  # 清零种子 → 下一局重新随机
 	GameState.reset_game()
 	_update_hud()
 	_update_3d()
