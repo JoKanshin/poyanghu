@@ -70,7 +70,8 @@ func _setup_camera() -> void:
 	var cam := get_node("../Camera3D") as Camera3D
 	cam.projection = Camera3D.PROJECTION_ORTHOGONAL
 	cam.size = 15.0
-	cam.position = Vector3(10, 14, 10)
+	# 饥荒式 2.5D：正交 + 45° 方位角 + 约 57° 俯角（顶面与侧面均可见，立体感强）
+	cam.position = Vector3(6, 13, 6)
 	cam.look_at(Vector3(0, 0, 0), Vector3.UP)
 
 
@@ -90,6 +91,9 @@ func _build_3d() -> void:
 	lake_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	lake_mesh.material_override = lake_mat
 	lake_view.add_child(lake_mesh)
+
+	# 棋盘网格线（生息演算式棋盘感）
+	_build_grid(lake_view)
 
 	# 草洲（8 块）
 	var grass_positions := [
@@ -141,6 +145,36 @@ func _build_3d() -> void:
 	# 延迟挂到场景，避免父节点初始化期 add_child 冲突
 	var root := get_parent() as Node3D
 	root.add_child.call_deferred(lake_view)
+
+
+## 生成棋盘网格线（生息演算式棋盘感）
+func _build_grid(parent: Node3D) -> void:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_LINES)
+	var half := 18.0      # 网格半宽（覆盖 36×36）
+	var step := 2.0       # 格子大小 2 米
+	var y := 0.12         # 略高于地面与湖面
+	var n := int(half / step)  # 每方向 9 条线（-18..18）
+	for i in range(-n, n + 1):
+		var c := i * step
+		# 横向线（沿 X）
+		st.add_vertex(Vector3(-half, y, c))
+		st.add_vertex(Vector3(half, y, c))
+		# 纵向线（沿 Z）
+		st.add_vertex(Vector3(c, y, -half))
+		st.add_vertex(Vector3(c, y, half))
+	var grid_mesh := st.commit()
+
+	var mi := MeshInstance3D.new()
+	mi.name = "GridLines"
+	mi.mesh = grid_mesh
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = Color(1.0, 1.0, 1.0, 0.28)
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mi.material_override = mat
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	parent.add_child(mi)
 
 
 func _process(delta: float) -> void:
