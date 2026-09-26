@@ -11,7 +11,7 @@ const INTEREST_RATE := 0.05      # 结转利息（每回合，利滚利，利率
 const MAX_ACTIONS := 3           # 每回合最多执行行动数（行动位）
 
 # 困难模式参数
-const HARD_FAILURE_THRESHOLD := 35   # 困难模式：任一指标低于此值即判负
+const HARD_FAILURE_THRESHOLD := 30   # 困难模式：任一指标低于此值即判负
 const HARD_FUNDING_PENALTY := 25     # 困难模式：每回合基础拨款削减（万）
 const HARD_PENALTY_MULT := 1.5       # 困难模式：扣分（负向变动）惩罚倍率
 
@@ -1001,7 +1001,7 @@ func end_turn() -> void:
 	# 下一回合由主场景在展示完结算反馈后调用 start_new_turn()
 
 
-## 检查是否有指标跌破失败线（普通 20 / 困难 35：上级对政绩不满，将你撤换）
+## 检查是否有指标跌破失败线（简单 20 / 困难 30：上级对政绩不满，将你撤换）
 func _check_failure() -> bool:
 	var threshold: int = HARD_FAILURE_THRESHOLD if hard_mode else 20
 	for metric in metrics:

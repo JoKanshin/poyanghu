@@ -1340,7 +1340,7 @@ func _build_menu() -> void:
 	d_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	dvb.add_child(d_title)
 
-	var normal_btn := _make_button("普通模式", _on_difficulty_normal, 18)
+	var normal_btn := _make_button("简单模式", _on_difficulty_normal, 18)
 	normal_btn.custom_minimum_size = Vector2(0, 48)
 	dvb.add_child(normal_btn)
 
@@ -1367,7 +1367,7 @@ func _build_menu() -> void:
 	seed_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	svb.add_child(seed_title)
 
-	menu_mode_label = _make_label("模式：普通", 12, Color(0.82, 0.86, 0.9))
+	menu_mode_label = _make_label("模式：简单", 12, Color(0.82, 0.86, 0.9))
 	menu_mode_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	svb.add_child(menu_mode_label)
 
@@ -1411,7 +1411,7 @@ func _on_title_start() -> void:
 
 func _on_difficulty_normal() -> void:
 	GameState.hard_mode = false
-	menu_mode_label.text = "模式：普通"
+	menu_mode_label.text = "模式：简单"
 	menu_difficulty_panel.visible = false
 	menu_seed_panel.visible = true
 	menu_hint.text = ""
