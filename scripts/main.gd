@@ -1621,7 +1621,7 @@ func _build_hand_panel() -> void:
 		card_infos.append({
 			"panel": panel, "card_id": card["id"],
 			"base_pos": Vector2.ZERO, "theta": 0.0, "radial": Vector2.UP,
-			"selected": false, "shaking": false,
+			"selected": false, "shaking": false, "hovered": false,
 		})
 	_layout_fan.call_deferred()
 	_update_hud()
@@ -1860,26 +1860,97 @@ func _update_card_hover(delta: float) -> void:
 		return
 	var mouse_global := get_viewport().get_mouse_position()
 	var box_tf := card_box.get_global_transform()
-	for info in card_infos:
+	# 1) 命中判定：用「静止位置」base_pos，牌弹起后会整体上移，
+	#    若用实时 position 判定，鼠标停在牌底附近会「弹起→落回→再弹起」地抖。
+	var hits: Array = []   # 命中的 card_infos 下标
+	for i in card_infos.size():
+		var info: Dictionary = card_infos[i]
 		var panel: PanelContainer = info["panel"]
 		if not is_instance_valid(panel):
 			continue
 		if info.get("shaking", false):
+			info["hovered"] = false
+			continue
+		if _point_in_card(panel, info["base_pos"], mouse_global, box_tf):
+			hits.append(i)
+	# 2) 重叠时只留最上层那张：从子列表末尾（最后绘制 = 最上层）往前找第一个命中的
+	var hovered_idx: int = -1
+	if hits.size() == 1:
+		hovered_idx = hits[0]
+	elif hits.size() > 1:
+		var children: Array = card_box.get_children()
+		for c in range(children.size() - 1, -1, -1):
+			for i in hits:
+				if card_infos[i]["panel"] == children[c]:
+					hovered_idx = i
+					break
+			if hovered_idx != -1:
+				break
+	# 3) 驱动弹起 / 放大（与帧率无关的平滑，替代固定系数 lerp）
+	for i in card_infos.size():
+		var info: Dictionary = card_infos[i]
+		var panel: PanelContainer = info["panel"]
+		if not is_instance_valid(panel) or info.get("shaking", false):
 			continue  # 抖动动画期间不要抢它的 position
-		var hovering: bool = _point_in_card(panel, mouse_global, box_tf)
+		var hovering: bool = (i == hovered_idx)
+		info["hovered"] = hovering
+		# 抬起：鼠标悬停的牌 + 已选定的牌（已选牌保持"抬起来挂在那儿"的状态）
 		var raised: bool = hovering or info["selected"]
 		# 弹起方向：沿径向向外（远离圆心，即向上弹出）
 		var target: Vector2 = info["base_pos"] + info["radial"] * (26.0 if raised else 0.0)
-		# 与帧率无关的平滑（每秒 12 倍速收敛），替代固定系数 lerp
 		panel.position = panel.position.lerp(target, 1.0 - exp(-12.0 * delta))
+		var s: float = 1.06 if hovering else 1.0
+		panel.scale = panel.scale.lerp(Vector2(s, s), 1.0 - exp(-14.0 * delta))
+	_update_card_stack()
 
 
-## 判断全局坐标点是否在旋转后的卡牌矩形内
-func _point_in_card(panel: PanelContainer, mouse_global: Vector2, box_tf: Transform2D) -> bool:
+## 手牌分三层叠放（像斗地主那样，选中的牌整体浮起一排）：
+##   底层 = 未选中的牌 → 中层 = 已选中的牌 → 顶层 = 鼠标正悬停的那张
+## Godot 里兄弟节点越靠后越晚绘制、也就越在上层，所以把三组按这个顺序排进子列表即可。
+## 各层内部保持原本的左右顺序；鼠标一移开，悬停那张就插回它自己那一层（不留痕迹）。
+## 只改「绘制与拾取顺序」，不动任何坐标，所以不会和扇形布局打架。
+func _update_card_stack() -> void:
+	if card_infos.is_empty():
+		return
+	var front: PanelContainer = null
+	for info in card_infos:
+		if info.get("hovered", false) and is_instance_valid(info["panel"]):
+			front = info["panel"]
+			break
+	var plain: Array = []   # 未选中
+	var picked: Array = []  # 已选中
+	for info in card_infos:
+		var panel: PanelContainer = info["panel"]
+		if not is_instance_valid(panel) or panel == front:
+			continue
+		if info["selected"]:
+			picked.append(panel)
+		else:
+			plain.append(panel)
+	var want: Array = plain.duplicate()
+	want.append_array(picked)
+	if front != null:
+		want.append(front)
+	# 与当前顺序一致就不动，避免每帧无谓重排
+	var cur: Array = card_box.get_children()
+	if cur.size() == want.size():
+		var same := true
+		for i in want.size():
+			if cur[i] != want[i]:
+				same = false
+				break
+		if same:
+			return
+	for i in want.size():
+		card_box.move_child(want[i], i)
+
+
+## 判断全局坐标点是否在旋转后的卡牌矩形内（按「静止位置」base_pos 判定，见 _update_card_hover）
+func _point_in_card(panel: PanelContainer, base_pos: Vector2, mouse_global: Vector2, box_tf: Transform2D) -> bool:
 	# 鼠标 → card_box 局部坐标
 	var local: Vector2 = box_tf.affine_inverse() * mouse_global
 	# 相对牌底中心(pivot)的向量
-	var offset: Vector2 = local - (panel.position + panel.pivot_offset)
+	var offset: Vector2 = local - (base_pos + panel.pivot_offset)
 	# 逆旋转到卡牌自身坐标系
 	var ang := -panel.rotation
 	var rotated := Vector2(
