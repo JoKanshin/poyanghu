@@ -147,6 +147,8 @@ func _setup_camera() -> void:
 func _build_3d() -> void:
 	var lake_view := Node3D.new()
 	lake_view.name = "LakeView"
+	# 沙盘等比放大（改这个系数即可整体缩放，不影响布局）
+	lake_view.scale = Vector3(1.3, 1.3, 1.3)
 
 	# 湖面（鄱阳湖形不规则多边形 + 注入河流）
 	lake_mat = ShaderMaterial.new()
