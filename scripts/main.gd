@@ -147,26 +147,20 @@ func _build_3d() -> void:
 	var lake_view := Node3D.new()
 	lake_view.name = "LakeView"
 
-	# 湖面
-	lake_mesh = MeshInstance3D.new()
-	var pm := PlaneMesh.new()
-	pm.size = Vector2(18, 18)
-	lake_mesh.mesh = pm
-	lake_mesh.position = Vector3(0, 0.08, 0)
+	# 湖面（鄱阳湖形不规则多边形 + 注入河流）
 	lake_mat = ShaderMaterial.new()
 	lake_mat.shader = _make_water_shader()
 	lake_mat.set_shader_parameter("water_color", lake_color)
-	lake_mesh.material_override = lake_mat
-	lake_view.add_child(lake_mesh)
+	_build_lake_shape(lake_view)
 
 	# 棋盘网格线（生息演算式棋盘感）
 	_build_grid(lake_view)
 
-	# 草洲（8 块，改湿地地貌分层）
+	# 草洲（8 块，湿地中的草岛）
 	var grass_positions := [
-		Vector3(-7, 0.05, -5), Vector3(-4, 0.05, -7), Vector3(6, 0.05, -4),
-		Vector3(8, 0.05, 2), Vector3(-8, 0.05, 4), Vector3(3, 0.05, 7),
-		Vector3(-2, 0.05, 8), Vector3(-6, 0.05, -2),
+		Vector3(-6, 0.05, -5), Vector3(-4, 0.05, -6.5), Vector3(5.5, 0.05, -4),
+		Vector3(6.5, 0.05, 1.5), Vector3(-6.5, 0.05, 3.5), Vector3(3, 0.05, 5.5),
+		Vector3(0, 0.05, 6.5), Vector3(-5, 0.05, -1.5),
 	]
 	for p in grass_positions:
 		var mi := MeshInstance3D.new()
@@ -213,6 +207,64 @@ func _build_3d() -> void:
 	# 延迟挂到场景，避免父节点初始化期 add_child 冲突
 	var root := get_parent() as Node3D
 	root.add_child.call_deferred(lake_view)
+
+
+## 构建鄱阳湖形水面：不规则多边形（北宽南窄、带南部通道），并注入河流
+func _build_lake_shape(parent: Node3D) -> void:
+	# 鄱阳湖轮廓（XZ 平面多边形，简化自真实湖形）
+	var outline: PackedVector2Array = [
+		Vector2(-6.0, -6.5), Vector2(-4.0, -7.2), Vector2(-1.5, -7.4),
+		Vector2(1.5, -7.4), Vector2(4.0, -7.0), Vector2(6.0, -5.8),
+		Vector2(7.2, -3.8), Vector2(7.6, -1.2), Vector2(7.4, 1.2),
+		Vector2(6.4, 3.2), Vector2(5.0, 4.5), Vector2(3.0, 5.3),
+		Vector2(1.2, 5.7), Vector2(0.6, 6.4), Vector2(0.3, 7.1),
+		Vector2(0.0, 7.7), Vector2(-0.6, 7.4), Vector2(-1.2, 6.7),
+		Vector2(-2.0, 5.9), Vector2(-3.2, 5.2), Vector2(-5.0, 4.3),
+		Vector2(-6.4, 2.8), Vector2(-7.2, 0.8), Vector2(-7.6, -1.7),
+		Vector2(-7.4, -4.2), Vector2(-6.6, -5.5),
+	]
+	lake_mesh = _make_flat_polygon(outline, 0.08, lake_mat)
+	lake_mesh.name = "PoyangLake"
+	parent.add_child(lake_mesh)
+	_build_rivers(parent)
+
+
+## 河流：细长水面条带，注入湖体（赣江/修水/饶河/信江）
+func _build_rivers(parent: Node3D) -> void:
+	var rivers := [
+		{"a": Vector2(0.0, 7.6), "b": Vector2(0.0, 15.0), "w": 1.6},      # 赣江（南）
+		{"a": Vector2(-7.0, -5.5), "b": Vector2(-14.0, -10.0), "w": 1.2}, # 修水（西北）
+		{"a": Vector2(7.4, -0.5), "b": Vector2(13.5, 0.0), "w": 1.1},     # 饶河（东）
+		{"a": Vector2(5.6, 4.0), "b": Vector2(12.0, 10.0), "w": 1.0},     # 信江（东南）
+	]
+	for r in rivers:
+		var a: Vector2 = r["a"]
+		var b: Vector2 = r["b"]
+		var w: float = r["w"]
+		var d: Vector2 = (b - a).normalized()
+		var p: Vector2 = Vector2(-d.y, d.x)  # 垂直方向
+		var quad: PackedVector2Array = [
+			a + p * w * 0.5, a - p * w * 0.5, b - p * w * 0.3, b + p * w * 0.3,
+		]
+		var river := _make_flat_polygon(quad, 0.08, lake_mat)
+		river.name = "River"
+		parent.add_child(river)
+
+
+## 用多边形构建一块平面水面（在 y 平面，unshaded 水面材质）
+func _make_flat_polygon(points: PackedVector2Array, y: float, mat: Material) -> MeshInstance3D:
+	var indices := Geometry2D.triangulate_polygon(points)
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	for i in indices:
+		var p: Vector2 = points[i]
+		st.set_normal(Vector3.UP)
+		st.add_vertex(Vector3(p.x, y, p.y))
+	var mi := MeshInstance3D.new()
+	mi.mesh = st.commit()
+	mi.material_override = mat
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	return mi
 
 
 ## 为鸟类找一个栖息点：优先乔木树冠，其次草洲/挺水植物
