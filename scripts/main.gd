@@ -1464,10 +1464,6 @@ func _build_menu() -> void:
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	tvb.add_child(title)
 
-	var sub := _make_label("生态修复 · 回合制沙盘", 14, Color(0.82, 0.86, 0.9))
-	sub.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	tvb.add_child(sub)
-
 	var title_start := _make_button("开始游戏", _on_title_start, 20)
 	title_start.custom_minimum_size = Vector2(0, 52)
 	tvb.add_child(title_start)
@@ -1527,7 +1523,6 @@ func _build_menu() -> void:
 	svb.add_child(seed_l)
 
 	seed_input = LineEdit.new()
-	seed_input.placeholder_text = "输入数字种子，例如 20260925"
 	seed_input.add_theme_font_size_override("font_size", _snap_px(18))
 	seed_input.custom_minimum_size = Vector2(0, 42)
 	svb.add_child(seed_input)
