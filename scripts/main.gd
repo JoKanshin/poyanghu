@@ -67,6 +67,7 @@ var grass_nodes: Array = []
 var grass_mats: Array = []
 var bird_nodes: Array = []
 var fish_nodes: Array = []
+var island_nodes: Array = []      # 人工浮岛节点
 var house_slots: Array = []       # 每项 {"house": Node3D, "reeds": Node3D, "mats": Array}
 var species_views: Dictionary = {}  # sid -> {rigs[], bases[], states[], timers[], targets[]}
 var plant_views: Dictionary = {}    # pid -> {meshes[], kind}
@@ -197,6 +198,9 @@ func _build_3d() -> void:
 		mi.material_override = mat
 		lake_view.add_child(mi)
 		fish_nodes.append(mi)
+
+	# 人工浮岛（初始隐藏，打出「人工浮岛」牌后显示）
+	_build_floating_islands(lake_view)
 
 	# 渔村（湖边一排房子）
 	_build_village(lake_view)
@@ -443,6 +447,52 @@ func _make_backdrop_tree(rng: RandomNumberGenerator) -> Node3D:
 		canopy.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		tree.add_child(canopy)
 	return tree
+
+
+## 人工浮岛：水面上的绿色浮床（打出「人工浮岛」牌后显示，拆除牌后隐藏）
+func _build_floating_islands(parent: Node3D) -> void:
+	var island_positions := [
+		Vector3(-4, 0, -2.5), Vector3(0, 0, -0.5), Vector3(3.5, 0, 2), Vector3(-2, 0, 3.5),
+	]
+	for p in island_positions:
+		var island := _make_floating_island()
+		island.position = p
+		island.visible = false
+		parent.add_child(island)
+		island_nodes.append(island)
+
+
+## 单个浮岛模型：棕色浮床底座 + 绿色植被 + 几株挺水植物
+func _make_floating_island() -> Node3D:
+	var island := Node3D.new()
+	# 浮床底座
+	var base := MeshInstance3D.new()
+	var bm := BoxMesh.new()
+	bm.size = Vector3(1.8, 0.16, 1.4)
+	base.mesh = bm
+	base.material_override = _mat(Color(0.55, 0.42, 0.30))
+	base.position = Vector3(0, 0.17, 0)
+	island.add_child(base)
+	# 植被层
+	var veg := MeshInstance3D.new()
+	var vm := BoxMesh.new()
+	vm.size = Vector3(1.4, 0.28, 1.0)
+	veg.mesh = vm
+	veg.material_override = _mat(Color(0.40, 0.66, 0.36))
+	veg.position = Vector3(0, 0.38, 0)
+	island.add_child(veg)
+	# 几株挺水植物点缀
+	for k in 3:
+		var sprout := MeshInstance3D.new()
+		var sm := CylinderMesh.new()
+		sm.top_radius = 0.02
+		sm.bottom_radius = 0.05
+		sm.height = 0.5 + (k % 2) * 0.15
+		sprout.mesh = sm
+		sprout.material_override = _mat(Color(0.45, 0.70, 0.38))
+		sprout.position = Vector3((k - 1) * 0.5, 0.38 + (0.5 + (k % 2) * 0.15) / 2.0, (k % 2 - 0.5) * 0.3)
+		island.add_child(sprout)
+	return island
 
 
 ## 湖边社区：房子数量随用地（settlement）增减，原地拆除处长出湿地芦苇；颜色随社区信任度明暗变化
@@ -1152,6 +1202,10 @@ func _update_3d() -> void:
 	var nfish := int(m["fish"] / 12.0)
 	for i in fish_nodes.size():
 		fish_nodes[i].visible = i < nfish
+
+	# 人工浮岛：数量随 floating_islands 状态
+	for i in island_nodes.size():
+		island_nodes[i].visible = i < GameState.floating_islands
 
 	# 物种个体数量随物种种群增减
 	_update_species_views()
