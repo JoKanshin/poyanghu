@@ -1561,9 +1561,15 @@ func _build_menu() -> void:
 	var t_sep := HSeparator.new()
 	kvb.add_child(t_sep)
 
+	var t_scroll := ScrollContainer.new()
+	t_scroll.custom_minimum_size = Vector2(0, 380)
+	t_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	kvb.add_child(t_scroll)
+
 	talent_list = VBoxContainer.new()
+	talent_list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	talent_list.add_theme_constant_override("separation", 6)
-	kvb.add_child(talent_list)
+	t_scroll.add_child(talent_list)
 
 	talent_unlock_btn = _make_button("点亮下一个天赋", _on_talent_unlock, 16)
 	talent_unlock_btn.custom_minimum_size = Vector2(0, 44)

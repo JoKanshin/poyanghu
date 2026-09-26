@@ -688,6 +688,10 @@ func _roll_starting_metrics() -> Dictionary:
 	# 天赋加成：定点指标加成 + 全指标加成
 	base["water_level"] += int(Talents.get_bonus("start_water"))
 	base["vegetation"] += int(Talents.get_bonus("start_veg"))
+	base["fish"] += int(Talents.get_bonus("start_fish"))
+	base["birds"] += int(Talents.get_bonus("start_birds"))
+	base["water_quality"] += int(Talents.get_bonus("start_quality"))
+	base["community"] += int(Talents.get_bonus("start_community"))
 	var all_bonus := int(Talents.get_bonus("start_all"))
 	for k in base:
 		base[k] += all_bonus
@@ -847,7 +851,8 @@ func _eval_condition_simple(cond: String) -> bool:
 ## 某张卡某档位的成本（万，取整）
 func tier_cost(card_id: String, tier: String) -> int:
 	var card := _find_card(card_id)
-	return int(round(card["cost"] * TIER_COST_MULT[tier]))
+	var discount := 1.0 + Talents.get_bonus("card_cost")
+	return maxi(1, int(round(card["cost"] * TIER_COST_MULT[tier] * discount)))
 
 
 ## 从卡池随机抽 n 张（不重复，洗牌后取前 n）
@@ -859,7 +864,10 @@ func draw_cards(n: int) -> Array:
 
 ## 能否执行：资金够 + 行动位够
 func can_execute(card_id: String, tier: String) -> bool:
-	if used_action_ids.size() >= MAX_ACTIONS + int(Talents.get_bonus("actions")):
+	var max_actions := MAX_ACTIONS
+	if turn == 1:
+		max_actions += int(Talents.get_bonus("first_turn_actions"))
+	if used_action_ids.size() >= max_actions:
 		return false
 	return funds >= tier_cost(card_id, tier)
 
@@ -999,12 +1007,14 @@ func end_turn() -> void:
 	resolve_synergies()      # 卡牌协同（在自然演化前结算，让玩家看到组合收益）
 	natural_evolution()
 
-	# 结转规则：未用资金计息（利滚利），最多 MAX_CARRY 万，溢出转科研点
-	carry = int(round(funds * (1.0 + INTEREST_RATE)))
-	if carry > MAX_CARRY:
-		var overflow := carry - MAX_CARRY
+	# 结转规则：未用资金计息（利滚利），最多 max_carry 万，溢出转科研点（天赋可提升）
+	var max_carry := MAX_CARRY + int(Talents.get_bonus("carry"))
+	var rate := INTEREST_RATE + Talents.get_bonus("interest")
+	carry = int(round(funds * (1.0 + rate)))
+	if carry > max_carry:
+		var overflow := carry - max_carry
 		research_points += overflow / 10
-		carry = MAX_CARRY
+		carry = max_carry
 	funds = 0
 
 	# 失败判定：任一指标跌破 20 → 被撤换，提前结束
@@ -1113,11 +1123,10 @@ func generate_report() -> Dictionary:
 	var social := _eval_social()
 	var manage := _eval_manage()
 	var reflection := _build_reflection()
-	# 本局天赋点：生态/社会/管理 三维各 ≥60 得 1 点（0~3）
-	var earned := 0
-	if eco["score"] >= 60: earned += 1
-	if social["score"] >= 60: earned += 1
-	if manage["score"] >= 60: earned += 1
+	# 本局天赋点：需玩到 12 轮以上且平均评分达标（普通 >80 / 困难 >70），达标得 2 点
+	var avg_score: float = (eco["score"] + social["score"] + manage["score"]) / 3.0
+	var threshold: float = 70.0 if hard_mode else 80.0
+	var earned: int = 2 if (turn >= 12 and avg_score > threshold) else 0
 	return {
 		"eco": eco, "social": social, "manage": manage,
 		"reflection": reflection,

@@ -4,16 +4,40 @@ extends Node
 
 const SAVE_PATH := "user://talents.json"
 
-# 线性天赋树：按数组顺序依次点亮
+# 线性天赋树：按数组顺序依次点亮（基础 8 条 + 升级/扩展，共 30 条）
 const TALENTS := [
-	{"id": "fund_boost",    "name": "启动资金", "desc": "每回合基础拨款 +20 万", "bonus": {"key": "funding",       "value": 20}},
-	{"id": "cost_cut",      "name": "精简开支", "desc": "每回合运营成本 -5 万",   "bonus": {"key": "operation",     "value": -5}},
-	{"id": "water_start",   "name": "蓄水有方", "desc": "开局水位 +10",           "bonus": {"key": "start_water",   "value": 10}},
-	{"id": "veg_start",     "name": "植被苗圃", "desc": "开局植被 +10",           "bonus": {"key": "start_veg",     "value": 10}},
-	{"id": "extra_action",  "name": "运筹帷幄", "desc": "每回合行动位 +1",        "bonus": {"key": "actions",       "value": 1}},
-	{"id": "crisis_calm",   "name": "未雨绸缪", "desc": "危机触发概率 -10%",      "bonus": {"key": "crisis_chance", "value": -0.10}},
-	{"id": "extra_card",    "name": "广开思路", "desc": "每回合多抽 1 张卡",      "bonus": {"key": "cards",         "value": 1}},
-	{"id": "all_boost",     "name": "生态专家", "desc": "开局全指标 +5",          "bonus": {"key": "start_all",     "value": 5}},
+	# === 基础天赋 1-8 ===
+	{"id": "fund_boost",     "name": "启动资金",   "desc": "每回合拨款 +5 万",     "bonus": {"key": "funding",           "value": 5}},
+	{"id": "cost_cut",       "name": "精简开支",   "desc": "运营成本 −2 万",       "bonus": {"key": "operation",         "value": -2}},
+	{"id": "water_start",    "name": "蓄水有方",   "desc": "开局水位 +3",           "bonus": {"key": "start_water",       "value": 3}},
+	{"id": "veg_start",      "name": "植被苗圃",   "desc": "开局植被 +3",           "bonus": {"key": "start_veg",         "value": 3}},
+	{"id": "extra_card",     "name": "广开思路",   "desc": "每回合多抽 1 张卡",     "bonus": {"key": "cards",             "value": 1}},
+	{"id": "crisis_calm",    "name": "未雨绸缪",   "desc": "危机概率 −3%",          "bonus": {"key": "crisis_chance",     "value": -0.03}},
+	{"id": "first_action",   "name": "运筹帷幄",   "desc": "首回合行动位 +1",       "bonus": {"key": "first_turn_actions", "value": 1}},
+	{"id": "all_boost",      "name": "生态专家",   "desc": "开局全指标 +2",         "bonus": {"key": "start_all",         "value": 2}},
+	# === 升级与扩展 9-30 ===
+	{"id": "fund_boost2",    "name": "启动资金 II", "desc": "每回合拨款 +5 万",    "bonus": {"key": "funding",           "value": 5}},
+	{"id": "cost_cut2",      "name": "精简开支 II", "desc": "运营成本 −2 万",      "bonus": {"key": "operation",         "value": -2}},
+	{"id": "water_start2",   "name": "蓄水有方 II", "desc": "开局水位 +3",          "bonus": {"key": "start_water",       "value": 3}},
+	{"id": "veg_start2",     "name": "植被苗圃 II", "desc": "开局植被 +3",          "bonus": {"key": "start_veg",         "value": 3}},
+	{"id": "fish_start",     "name": "鱼苗繁育",    "desc": "开局鱼类 +3",           "bonus": {"key": "start_fish",        "value": 3}},
+	{"id": "bird_start",     "name": "候鸟驿站",    "desc": "开局候鸟 +3",           "bonus": {"key": "start_birds",       "value": 3}},
+	{"id": "quality_start",  "name": "净水工程",    "desc": "开局水质 +3",           "bonus": {"key": "start_quality",     "value": 3}},
+	{"id": "community_start","name": "民心工程",    "desc": "开局社区 +3",           "bonus": {"key": "start_community",   "value": 3}},
+	{"id": "crisis_calm2",   "name": "未雨绸缪 II", "desc": "危机概率 −3%",         "bonus": {"key": "crisis_chance",     "value": -0.03}},
+	{"id": "all_boost2",     "name": "生态专家 II", "desc": "开局全指标 +2",        "bonus": {"key": "start_all",         "value": 2}},
+	{"id": "fish_start2",    "name": "鱼苗繁育 II", "desc": "开局鱼类 +3",          "bonus": {"key": "start_fish",        "value": 3}},
+	{"id": "bird_start2",    "name": "候鸟驿站 II", "desc": "开局候鸟 +3",          "bonus": {"key": "start_birds",       "value": 3}},
+	{"id": "quality_start2", "name": "净水工程 II", "desc": "开局水质 +3",          "bonus": {"key": "start_quality",     "value": 3}},
+	{"id": "community_start2","name": "民心工程 II","desc": "开局社区 +3",          "bonus": {"key": "start_community",   "value": 3}},
+	{"id": "carry_boost",    "name": "扩大蓄水",    "desc": "结转上限 +10 万",      "bonus": {"key": "carry",             "value": 10}},
+	{"id": "carry_boost2",   "name": "扩大蓄水 II", "desc": "结转上限 +10 万",      "bonus": {"key": "carry",             "value": 10}},
+	{"id": "interest_boost", "name": "资金周转",    "desc": "结转利息 +3%",         "bonus": {"key": "interest",          "value": 0.03}},
+	{"id": "interest_boost2","name": "资金周转 II","desc": "结转利息 +3%",          "bonus": {"key": "interest",          "value": 0.03}},
+	{"id": "cost_discount",  "name": "精打细算",    "desc": "卡牌成本 −10%",        "bonus": {"key": "card_cost",         "value": -0.10}},
+	{"id": "cost_discount2", "name": "精打细算 II","desc": "卡牌成本 −10%",        "bonus": {"key": "card_cost",         "value": -0.10}},
+	{"id": "extra_card2",    "name": "广开思路 II", "desc": "每回合多抽 1 张卡",    "bonus": {"key": "cards",             "value": 1}},
+	{"id": "first_action2",  "name": "运筹帷幄 II", "desc": "首回合行动位 +1",      "bonus": {"key": "first_turn_actions", "value": 1}},
 ]
 
 var points: int = 0
