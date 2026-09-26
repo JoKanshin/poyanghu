@@ -40,10 +40,13 @@ func _load() -> void:
 
 
 func save() -> void:
+	# 确保存档目录存在（Godot 通常会自建，这里兜底防数据丢失）
+	DirAccess.make_dir_recursive_absolute(OS.get_user_data_dir())
 	var f := FileAccess.open(SAVE_PATH, FileAccess.WRITE)
 	if f == null:
 		return
 	f.store_string(JSON.stringify({"points": points, "unlocked": unlocked}))
+	f.close()  # 显式落盘，避免关闭游戏时未写入
 
 
 func has(id: String) -> bool:
