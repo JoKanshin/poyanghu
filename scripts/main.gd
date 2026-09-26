@@ -156,9 +156,6 @@ func _build_3d() -> void:
 	lake_mat.set_shader_parameter("water_color", lake_color)
 	_build_lake_shape(lake_view)
 
-	# 棋盘网格线（生息演算式棋盘感）
-	_build_grid(lake_view)
-
 	# 草洲（8 块，主湖区中的草岛，避开河流入湖口）
 	var grass_positions := [
 		Vector3(-5, 0.05, -1.5), Vector3(-1, 0.05, -2), Vector3(3.5, 0.05, -1.5),
@@ -219,15 +216,15 @@ func _build_3d() -> void:
 func _build_lake_shape(parent: Node3D) -> void:
 	# 鄱阳湖轮廓（XZ 平面多边形，北为 -z，南为 +z；北窄为入江水道，南宽为主湖区）
 	var outline: PackedVector2Array = [
-		Vector2(-1.4, -14.0), Vector2(1.4, -14.0),
-		Vector2(1.8, -11.0), Vector2(2.2, -8.0), Vector2(2.8, -5.5),
+		Vector2(-2.0, -14.0), Vector2(2.0, -14.0),
+		Vector2(2.4, -11.0), Vector2(2.8, -8.0), Vector2(3.4, -5.5),
 		Vector2(6.5, -5.0), Vector2(8.5, -3.0), Vector2(9.4, 0.0),
 		Vector2(9.0, 3.0), Vector2(7.6, 5.5),
 		Vector2(5.8, 7.6), Vector2(3.4, 8.4), Vector2(0.0, 8.9),
 		Vector2(-3.4, 8.4), Vector2(-5.8, 7.6),
 		Vector2(-7.6, 5.5), Vector2(-9.0, 3.0), Vector2(-9.4, 0.0),
 		Vector2(-8.5, -3.0), Vector2(-6.5, -5.0),
-		Vector2(-2.8, -5.5), Vector2(-2.2, -8.0), Vector2(-1.8, -11.0),
+		Vector2(-3.4, -5.5), Vector2(-2.8, -8.0), Vector2(-2.4, -11.0),
 	]
 	lake_mesh = _make_flat_polygon(outline, 0.08, lake_mat)
 	lake_mesh.name = "PoyangLake"
