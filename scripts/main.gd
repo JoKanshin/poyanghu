@@ -158,9 +158,9 @@ func _build_3d() -> void:
 
 	# 草洲（8 块，主湖区中的草岛）
 	var grass_positions := [
-		Vector3(-4.5, 0.05, -2), Vector3(-1.5, 0.05, -2.5), Vector3(4, 0.05, -2),
-		Vector3(5, 0.05, 0.5), Vector3(2, 0.05, 1.5), Vector3(4, 0.05, 3.5),
-		Vector3(0, 0.05, 4), Vector3(-3, 0.05, 3.5),
+		Vector3(-7, 0.05, -3), Vector3(-3, 0.05, -3.5), Vector3(4.5, 0.05, -4),
+		Vector3(7.5, 0.05, -0.5), Vector3(2, 0.05, 0), Vector3(6.5, 0.05, 4),
+		Vector3(1.5, 0.05, 5.5), Vector3(-4, 0.05, 6),
 	]
 	for p in grass_positions:
 		var mi := MeshInstance3D.new()
@@ -213,15 +213,15 @@ func _build_3d() -> void:
 func _build_lake_shape(parent: Node3D) -> void:
 	# 鄱阳湖轮廓（XZ 平面多边形，北为 -z，南为 +z；北窄为入江水道，南宽为主湖区）
 	var outline: PackedVector2Array = [
-		Vector2(-1.0, -11.0), Vector2(1.0, -11.0),
-		Vector2(1.3, -8.5), Vector2(1.6, -5.5), Vector2(2.0, -4.0),
-		Vector2(5.0, -3.5), Vector2(6.5, -2.0), Vector2(7.2, 0.0),
-		Vector2(6.8, 2.0), Vector2(5.5, 3.5), Vector2(4.0, 4.8),
-		Vector2(2.0, 5.5), Vector2(0.6, 5.8), Vector2(-0.6, 5.8),
-		Vector2(-2.0, 5.5), Vector2(-4.0, 4.8), Vector2(-5.5, 3.5),
-		Vector2(-6.8, 2.0), Vector2(-7.2, 0.0), Vector2(-6.5, -2.0),
-		Vector2(-5.0, -3.5), Vector2(-2.0, -4.0), Vector2(-1.6, -5.5),
-		Vector2(-1.3, -8.5),
+		Vector2(-1.4, -14.0), Vector2(1.4, -14.0),
+		Vector2(1.8, -11.0), Vector2(2.2, -8.0), Vector2(2.8, -5.5),
+		Vector2(6.5, -5.0), Vector2(8.5, -3.0), Vector2(9.4, 0.0),
+		Vector2(8.8, 2.5), Vector2(7.0, 4.5),
+		Vector2(5.0, 6.2), Vector2(2.5, 7.2), Vector2(0.8, 7.5), Vector2(-0.8, 7.5),
+		Vector2(-2.5, 7.2), Vector2(-5.0, 6.2),
+		Vector2(-7.0, 4.5), Vector2(-8.8, 2.5), Vector2(-9.4, 0.0),
+		Vector2(-8.5, -3.0), Vector2(-6.5, -5.0),
+		Vector2(-2.8, -5.5), Vector2(-2.2, -8.0), Vector2(-1.8, -11.0),
 	]
 	lake_mesh = _make_flat_polygon(outline, 0.08, lake_mat)
 	lake_mesh.name = "PoyangLake"
@@ -229,37 +229,61 @@ func _build_lake_shape(parent: Node3D) -> void:
 	_build_rivers(parent)
 
 
-## 河流：长江（北，自西向东）+ 赣江（南，自南向北）+ 修水/饶河
+## 由中心线生成河流轮廓（两侧各偏移半宽，中心线可弯曲）
+func _river_outline(center: PackedVector2Array, width: float) -> PackedVector2Array:
+	var left: PackedVector2Array = []
+	var right: PackedVector2Array = []
+	var n := center.size()
+	for i in n:
+		var prev: Vector2 = center[clampi(i - 1, 0, n - 1)]
+		var nxt: Vector2 = center[clampi(i + 1, 0, n - 1)]
+		var dir: Vector2 = (nxt - prev)
+		if dir.length() < 0.0001:
+			dir = Vector2(1, 0)
+		dir = dir.normalized()
+		var normal := Vector2(-dir.y, dir.x)  # 垂直方向
+		var half := width * 0.5
+		left.append(center[i] + normal * half)
+		right.append(center[i] - normal * half)
+	var outline := left.duplicate()
+	for i in range(n - 1, -1, -1):
+		outline.append(right[i])
+	return outline
+
+
+## 河流：长江（北，蜿蜒自西向东）+ 赣江（南，自南向北，与之垂直）+ 修水/饶河
 func _build_rivers(parent: Node3D) -> void:
-	# 长江：北侧横向大河，湖体北口（入江水道 z=-11）汇入其中
-	var yangtze := _make_flat_polygon(PackedVector2Array([
-		Vector2(-16.0, -12.0), Vector2(16.0, -12.0),
-		Vector2(16.0, -10.0), Vector2(-16.0, -10.0),
-	]), 0.08, lake_mat)
+	# 长江：北侧蜿蜒大河，湖体北口（入江水道 z=-14）汇入其中
+	var yangtze_center := PackedVector2Array([
+		Vector2(-18.0, -14.0), Vector2(-13.0, -15.5), Vector2(-8.0, -13.5),
+		Vector2(-3.0, -15.0), Vector2(2.0, -13.8), Vector2(7.0, -15.2),
+		Vector2(12.0, -13.6), Vector2(18.0, -14.8),
+	])
+	var yangtze := _make_flat_polygon(_river_outline(yangtze_center, 2.6), 0.08, lake_mat)
 	yangtze.name = "Yangtze"
 	parent.add_child(yangtze)
 
-	# 赣江：南侧，自南向北注入湖体南部（第一大支流）
-	var gan := _make_flat_polygon(PackedVector2Array([
-		Vector2(-0.9, 5.0), Vector2(0.9, 5.0),
-		Vector2(0.7, 14.0), Vector2(-0.7, 14.0),
-	]), 0.08, lake_mat)
+	# 赣江：南侧，自南向北注入湖体南部（第一大支流，与长江近垂直）
+	var gan_center := PackedVector2Array([
+		Vector2(0.0, 7.0), Vector2(0.0, 12.0), Vector2(0.0, 17.0), Vector2(0.0, 21.0),
+	])
+	var gan := _make_flat_polygon(_river_outline(gan_center, 1.8), 0.08, lake_mat)
 	gan.name = "GanRiver"
 	parent.add_child(gan)
 
 	# 修水：西北注入
-	var xiu := _make_flat_polygon(PackedVector2Array([
-		Vector2(-4.4, -3.2), Vector2(-3.2, -3.8),
-		Vector2(-11.0, -8.5), Vector2(-12.6, -9.0),
-	]), 0.08, lake_mat)
+	var xiu_center := PackedVector2Array([
+		Vector2(-6.0, -3.5), Vector2(-9.5, -6.0), Vector2(-12.5, -8.0), Vector2(-15.0, -10.5),
+	])
+	var xiu := _make_flat_polygon(_river_outline(xiu_center, 1.1), 0.08, lake_mat)
 	xiu.name = "XiuRiver"
 	parent.add_child(xiu)
 
 	# 饶河：东侧注入
-	var rao := _make_flat_polygon(PackedVector2Array([
-		Vector2(6.2, 2.0), Vector2(7.2, 0.8),
-		Vector2(13.5, 1.6), Vector2(13.0, 3.2),
-	]), 0.08, lake_mat)
+	var rao_center := PackedVector2Array([
+		Vector2(8.0, 1.5), Vector2(11.0, 0.5), Vector2(14.0, 1.5), Vector2(16.5, 2.5),
+	])
+	var rao := _make_flat_polygon(_river_outline(rao_center, 1.0), 0.08, lake_mat)
 	rao.name = "RaoRiver"
 	parent.add_child(rao)
 
