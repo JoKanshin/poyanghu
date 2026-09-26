@@ -5,8 +5,9 @@ extends Node
 # ==================== 常量 ====================
 const TOTAL_TURNS := 16          # 一局 16 回合 = 4 年 × 4 季
 const BASE_FUNDING := 100        # 每回合基础拨款（万）
-const OPERATION_COST := 25       # 固定运营支出（万）
+const OPERATION_COST := 20       # 固定运营支出（万）
 const MAX_CARRY := 60            # 结转上限（万）
+const INTEREST_RATE := 0.05      # 结转利息（每回合，利滚利，利率从低）
 const MAX_ACTIONS := 3           # 每回合最多执行行动数（行动位）
 
 # 六项指标的中文名与量纲说明
@@ -59,6 +60,8 @@ const ACTION_SPECIES_BONUS := {
 	"water_control": {"xiaotiane": 8},
 	"bird_canteen": {"baihe": 6, "baizhenhe": 6},
 	"patrol": {"dongfangbaihuan": 6},
+	"water_replenish": {"xiaotiane": 8},
+	"habitat_protect": {"baihe": 8, "xiaotiane": 6},
 }
 
 # ==================== 植物数据 ====================
@@ -102,6 +105,10 @@ const ACTION_PLANT_BONUS := {
 	"veg_restore": {"kucao": 18, "taicao": 14},
 	"water_control": {"luwei": 10, "lian": 10},
 	"water_monitor": {"kucao": 8},
+	"water_replenish": {"luwei": 8, "lian": 8},
+	"wetland_restore": {"kucao": 12, "taicao": 12, "lihao": 10},
+	"floating_island": {"lian": 6},
+	"grazing_ban": {"taicao": 10},
 }
 
 # ==================== 行动卡数据 ====================
@@ -238,6 +245,138 @@ const ACTION_CARDS := [
 			"deep":     {"effects": [{"metric": "water_quality", "delta": 5, "delay": 0}]},
 		},
 		"side_note": {"deep": "科研点数 +3，预报更准"},
+	},
+	{
+		"id": "water_replenish", "name": "生态补水（引江济湖）", "category": "ecology",
+		"desc": "跨流域引水补充湖区水量，缓解枯水、恢复浅滩生境。",
+		"cost": 40,
+		"tiers": {
+			"basic":    {"effects": [{"metric": "water_level", "delta": 5, "delay": 0}]},
+			"effective": {"effects": [{"metric": "water_level", "delta": 11, "delay": 0}, {"metric": "vegetation", "delta": 3, "delay": 1}]},
+			"deep":     {"effects": [{"metric": "water_level", "delta": 19, "delay": 0}, {"metric": "vegetation", "delta": 6, "delay": 1}, {"metric": "community", "delta": -3, "delay": 0}]},
+		},
+		"side_note": {"deep": "引水挤占下游农业用水，社区信任 -3"},
+	},
+	{
+		"id": "wetland_restore", "name": "退田还湿（湿地生态修复）", "category": "ecology",
+		"desc": "将环湖低产农田退还为湿地，重建自然水文节律。",
+		"cost": 50,
+		"tiers": {
+			"basic":    {"effects": [{"metric": "vegetation", "delta": 4, "delay": 1}]},
+			"effective": {"effects": [{"metric": "vegetation", "delta": 10, "delay": 2}, {"metric": "water_quality", "delta": 5, "delay": 2}, {"metric": "community", "delta": -2, "delay": 0}]},
+			"deep":     {"effects": [{"metric": "vegetation", "delta": 18, "delay": 2}, {"metric": "water_quality", "delta": 9, "delay": 2}, {"metric": "birds", "delta": 6, "delay": 3}, {"metric": "community", "delta": -4, "delay": 0}]},
+		},
+		"side_note": {"effective": "退田农户短期受损，社区信任 -2"},
+	},
+	{
+		"id": "floating_island", "name": "人工浮岛（生态浮床）", "category": "ecology",
+		"desc": "布置人工浮岛与生态浮床，吸附氮磷、净化水体。",
+		"cost": 30,
+		"tiers": {
+			"basic":    {"effects": [{"metric": "water_quality", "delta": 3, "delay": 0}]},
+			"effective": {"effects": [{"metric": "water_quality", "delta": 7, "delay": 0}, {"metric": "vegetation", "delta": 3, "delay": 1}]},
+			"deep":     {"effects": [{"metric": "water_quality", "delta": 13, "delay": 0}, {"metric": "vegetation", "delta": 5, "delay": 1}]},
+		},
+		"side_note": {},
+	},
+	{
+		"id": "dredge", "name": "底泥清淤疏浚", "category": "ecology",
+		"desc": "疏浚淤积底泥，削减内源污染、恢复湖床通透性。",
+		"cost": 40,
+		"tiers": {
+			"basic":    {"effects": [{"metric": "water_quality", "delta": 3, "delay": 1}]},
+			"effective": {"effects": [{"metric": "water_quality", "delta": 7, "delay": 1}, {"metric": "fish", "delta": 2, "delay": 2}]},
+			"deep":     {"effects": [{"metric": "water_quality", "delta": 13, "delay": 1}, {"metric": "fish", "delta": 5, "delay": 2}, {"metric": "vegetation", "delta": -3, "delay": 0}]},
+		},
+		"side_note": {"deep": "机械清淤扰动湖床，短期植被 -3"},
+	},
+	{
+		"id": "habitat_protect", "name": "越冬栖息地保护", "category": "ecology",
+		"desc": "划定并管护候鸟越冬栖息地，控制人为干扰与栖息地破碎化。",
+		"cost": 30,
+		"tiers": {
+			"basic":    {"effects": [{"metric": "birds", "delta": 2, "delay": 0}]},
+			"effective": {"effects": [{"metric": "birds", "delta": 7, "delay": 1}, {"metric": "vegetation", "delta": 2, "delay": 2}]},
+			"deep":     {"effects": [{"metric": "birds", "delta": 13, "delay": 1}, {"metric": "vegetation", "delta": 4, "delay": 2}]},
+		},
+		"side_note": {},
+	},
+	{
+		"id": "ecotourism", "name": "生态旅游与观鸟经济", "category": "social",
+		"desc": "发展观鸟旅游与生态体验，让保护产生社区收益。",
+		"cost": 30,
+		"tiers": {
+			"basic":    {"effects": [{"metric": "community", "delta": 3, "delay": 0}]},
+			"effective": {"effects": [{"metric": "community", "delta": 6, "delay": 0}, {"metric": "birds", "delta": 3, "delay": 1}]},
+			"deep":     {"effects": [{"metric": "community", "delta": 11, "delay": 0}, {"metric": "birds", "delta": 6, "delay": 1}, {"metric": "water_quality", "delta": -2, "delay": 0}]},
+		},
+		"side_note": {"deep": "游客激增带来环境压力，水质 -2"},
+	},
+	{
+		"id": "damage_insurance", "name": "野生动物致害保险", "category": "social",
+		"desc": "建立候鸟致害补偿保险，农户损失及时赔付。",
+		"cost": 20,
+		"tiers": {
+			"basic":    {"effects": [{"metric": "community", "delta": 3, "delay": 0}]},
+			"effective": {"effects": [{"metric": "community", "delta": 7, "delay": 0}, {"metric": "birds", "delta": 2, "delay": 1}]},
+			"deep":     {"effects": [{"metric": "community", "delta": 12, "delay": 0}, {"metric": "birds", "delta": 4, "delay": 1}]},
+		},
+		"side_note": {"deep": "保险兜底后农户不再驱赶候鸟"},
+	},
+	{
+		"id": "eco_brand", "name": "生态产品认证与助销", "category": "social",
+		"desc": "认证湖区生态农产品并拓展销路，让绿色生产有利可图。",
+		"cost": 30,
+		"tiers": {
+			"basic":    {"effects": [{"metric": "community", "delta": 2, "delay": 1}]},
+			"effective": {"effects": [{"metric": "community", "delta": 6, "delay": 1}, {"metric": "water_quality", "delta": 3, "delay": 2}]},
+			"deep":     {"effects": [{"metric": "community", "delta": 11, "delay": 1}, {"metric": "water_quality", "delta": 6, "delay": 2}, {"metric": "vegetation", "delta": 3, "delay": 2}]},
+		},
+		"side_note": {"effective": "减少化肥农药投入，水质间接改善"},
+	},
+	{
+		"id": "fish_restock", "name": "增殖放流", "category": "manage",
+		"desc": "投放鱼苗，恢复鱼类资源量与江湖洄游通道。",
+		"cost": 30,
+		"tiers": {
+			"basic":    {"effects": [{"metric": "fish", "delta": 3, "delay": 1}]},
+			"effective": {"effects": [{"metric": "fish", "delta": 8, "delay": 2}, {"metric": "community", "delta": 2, "delay": 2}]},
+			"deep":     {"effects": [{"metric": "fish", "delta": 15, "delay": 2}, {"metric": "community", "delta": 4, "delay": 2}]},
+		},
+		"side_note": {"deep": "渔民共享放流收益，社区信任 +4"},
+	},
+	{
+		"id": "smart_patrol", "name": "智慧巡护（无人机遥感）", "category": "manage",
+		"desc": "无人机与遥感全天候巡护，监测非法捕捞、火情与水质。",
+		"cost": 40,
+		"tiers": {
+			"basic":    {"effects": [{"metric": "fish", "delta": 2, "delay": 0}]},
+			"effective": {"effects": [{"metric": "fish", "delta": 6, "delay": 1}, {"metric": "water_quality", "delta": 2, "delay": 1}]},
+			"deep":     {"effects": [{"metric": "fish", "delta": 12, "delay": 1}, {"metric": "water_quality", "delta": 4, "delay": 1}]},
+		},
+		"side_note": {},
+	},
+	{
+		"id": "wetland_law", "name": "湿地保护立法", "category": "manage",
+		"desc": "推动地方湿地保护条例，划定禁渔区与生态红线。",
+		"cost": 50,
+		"tiers": {
+			"basic":    {"effects": [{"metric": "fish", "delta": 2, "delay": 2}]},
+			"effective": {"effects": [{"metric": "fish", "delta": 6, "delay": 2}, {"metric": "birds", "delta": 4, "delay": 2}, {"metric": "community", "delta": 3, "delay": 2}]},
+			"deep":     {"effects": [{"metric": "fish", "delta": 11, "delay": 2}, {"metric": "birds", "delta": 7, "delay": 2}, {"metric": "community", "delta": 5, "delay": 2}]},
+		},
+		"side_note": {"effective": "立法见效慢，2 回合后逐步显现"},
+	},
+	{
+		"id": "grazing_ban", "name": "封洲禁牧", "category": "manage",
+		"desc": "禁止湖洲过度放牧，保护洲滩草甸植被。",
+		"cost": 20,
+		"tiers": {
+			"basic":    {"effects": [{"metric": "vegetation", "delta": 2, "delay": 0}]},
+			"effective": {"effects": [{"metric": "vegetation", "delta": 5, "delay": 0}, {"metric": "community", "delta": -2, "delay": 0}]},
+			"deep":     {"effects": [{"metric": "vegetation", "delta": 9, "delay": 0}, {"metric": "community", "delta": -4, "delay": 0}]},
+		},
+		"side_note": {"effective": "牧民失去放牧地，社区信任 -2"},
 	},
 ]
 
@@ -390,6 +529,31 @@ const SYNERGIES := [
 		"id": "coexist", "name": "人鸟共处", "requires": ["bird_canteen", "community_comp"],
 		"desc": "候鸟食堂配合社区补偿，把冲突转化为共管",
 		"bonus": [{"metric": "birds", "delta": 6}, {"metric": "community", "delta": 5}],
+	},
+	{
+		"id": "clear_water", "name": "清源活水", "requires": ["dredge", "floating_island"],
+		"desc": "清淤与浮岛协同，内源外源污染一起削减",
+		"bonus": [{"metric": "water_quality", "delta": 8}, {"metric": "vegetation", "delta": 4}],
+	},
+	{
+		"id": "sky_net", "name": "天网巡护", "requires": ["smart_patrol", "patrol"],
+		"desc": "无人机侦察配合地面执法，非法捕捞无所遁形",
+		"bonus": [{"metric": "fish", "delta": 9}, {"metric": "water_quality", "delta": 3}],
+	},
+	{
+		"id": "river_link", "name": "江湖连通", "requires": ["fish_restock", "water_replenish"],
+		"desc": "引水恢复洄游通道，放流鱼苗直达新家园",
+		"bonus": [{"metric": "fish", "delta": 8}, {"metric": "water_level", "delta": 3}],
+	},
+	{
+		"id": "green_livelihood", "name": "绿色生计", "requires": ["eco_brand", "industry_switch"],
+		"desc": "认证品牌叠加转产投资，绿色产业形成闭环",
+		"bonus": [{"metric": "community", "delta": 7}, {"metric": "water_quality", "delta": 5}],
+	},
+	{
+		"id": "bird_tourism", "name": "观鸟经济", "requires": ["ecotourism", "habitat_protect"],
+		"desc": "栖息地保护好，观鸟旅游才有持续客流",
+		"bonus": [{"metric": "birds", "delta": 7}, {"metric": "community", "delta": 5}],
 	},
 ]
 
@@ -701,8 +865,8 @@ func natural_evolution() -> void:
 	_apply_delta("water_level", _randi_range(-5, 3))
 
 	# 水质：无治理则缓慢恶化
-	if used_action_ids.has("water_monitor") or used_action_ids.has("research"):
-		pass  # 本回合有监测/科研投入 → 水质不恶化
+	if used_action_ids.has("water_monitor") or used_action_ids.has("research") or used_action_ids.has("smart_patrol"):
+		pass  # 本回合有监测/科研/智慧巡护投入 → 水质不恶化
 	else:
 		_apply_delta("water_quality", -2)
 
@@ -777,12 +941,12 @@ func end_turn() -> void:
 	resolve_synergies()      # 卡牌协同（在自然演化前结算，让玩家看到组合收益）
 	natural_evolution()
 
-	# 结转规则：最多 MAX_CARRY 万，溢出转科研点
-	if funds > MAX_CARRY:
-		var overflow := funds - MAX_CARRY
+	# 结转规则：未用资金计息（利滚利），最多 MAX_CARRY 万，溢出转科研点
+	carry = int(round(funds * (1.0 + INTEREST_RATE)))
+	if carry > MAX_CARRY:
+		var overflow := carry - MAX_CARRY
 		research_points += overflow / 10
-		funds = MAX_CARRY
-	carry = funds
+		carry = MAX_CARRY
 	funds = 0
 
 	# 失败判定：任一指标归零 → 生态崩溃，提前结束

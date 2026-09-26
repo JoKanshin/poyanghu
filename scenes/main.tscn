@@ -1,6 +1,6 @@
 [gd_scene format=3 uid="uid://bxv48pbooddxq"]
 
-[ext_resource type="Script" path="res://scripts/main.gd" id="1_o5qli"]
+[ext_resource type="Script" uid="uid://dlru3k152qklw" path="res://scripts/main.gd" id="1_o5qli"]
 
 [sub_resource type="ProceduralSkyMaterial" id="ProceduralSkyMaterial_sgp6g"]
 sky_top_color = Color(0.38, 0.45, 0.55, 1)

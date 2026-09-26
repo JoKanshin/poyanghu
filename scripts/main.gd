@@ -43,6 +43,11 @@ var popup_button: Button
 var _popup_continue: Callable = Callable()
 var _current_event: String = ""
 
+# 主菜单
+var menu_root: Control
+var seed_input: LineEdit
+var menu_hint: Label
+
 # 3D 表现节点
 var lake_mesh: MeshInstance3D
 var lake_mat: ShaderMaterial
@@ -55,6 +60,8 @@ var village_nodes: Array = []     # 多栋房子
 var village_mats: Array = []
 var species_views: Dictionary = {}  # sid -> {rigs[], bases[], states[], timers[], targets[]}
 var plant_views: Dictionary = {}    # pid -> {meshes[], kind}
+var plant_positions: Dictionary = {} # pid -> Array[Vector3]  每局随机散落的位置
+var _plant_pos_seed: int = -1        # 已生成位置对应的种子，换局时重新散落
 
 
 func _ready() -> void:
@@ -66,9 +73,8 @@ func _ready() -> void:
 	GameState.funds_changed.connect(_update_hud)
 	GameState.event_triggered.connect(_on_event)
 	GameState.game_ended.connect(_on_game_end)
-	GameState.reset_game()
-	_update_hud()
-	_update_3d()
+	# 先显示主菜单：玩家输入种子后点“开始游戏”才真正开局
+	_show_menu()
 	# 窗口尺寸/全屏变化时自适应相机，避免全屏后沙盘被裁或留黑边
 	get_viewport().size_changed.connect(_fit_camera_to_window)
 	_fit_camera_to_window()
@@ -874,6 +880,7 @@ func _build_plant_model(rig: Node3D, pid: String, kind: String) -> void:
 
 
 func _update_plant_views() -> void:
+	_ensure_plant_positions()
 	for pid in GameState.PLANTS:
 		var pop: int = GameState.plant_pop.get(pid, 0)
 		var count: int = int(pop / 7.0)  # 0-100 → 0-14
@@ -904,19 +911,55 @@ func _update_plant_views() -> void:
 				tw2.tween_callback(func() -> void: rig.visible = false)
 
 
-func _plant_position(pid: String, kind: String, i: int) -> Vector3:
+func _plant_position(pid: String, _kind: String, i: int) -> Vector3:
+	var pts: Array = plant_positions.get(pid, [])
+	if i < pts.size():
+		return pts[i]
+	return Vector3.ZERO
+
+
+## 每局按种子随机散落植物位置：打破原来的成排成条网格，改为自然散布
+func _ensure_plant_positions() -> void:
+	if _plant_pos_seed == GameState.run_seed:
+		return
+	_plant_pos_seed = GameState.run_seed
+	var rng := RandomNumberGenerator.new()
+	rng.seed = GameState.run_seed
+	for pid in GameState.PLANTS:
+		var kind: String = GameState.PLANTS[pid]["kind"]
+		var pts: Array = []
+		for i in 14:
+			pts.append(_scatter_plant(kind, pts, rng))
+		plant_positions[pid] = pts
+
+
+## 在各自生境区域内随机取点，同类之间保持最小间距，避免叠成一团
+func _scatter_plant(kind: String, placed: Array, rng: RandomNumberGenerator) -> Vector3:
+	for attempt in 40:
+		var p := _plant_zone_point(kind, rng)
+		var ok := true
+		for q in placed:
+			if p.distance_to(q) < 1.4:
+				ok = false
+				break
+		if ok:
+			return p
+	return _plant_zone_point(kind, rng)
+
+
+## 各植物的生境区域（沿用原分布范围，仅把固定网格改为随机取点）
+func _plant_zone_point(kind: String, rng: RandomNumberGenerator) -> Vector3:
 	match kind:
-		"submerged":
-			return Vector3(-6 + (i % 6) * 2.4, 0.0, -2 + int(i / 6) * 2.5)
-		"floating":
-			return Vector3(2 + (i % 5) * 2.5, 0.06, -4 + int(i / 5) * 2.5)
-		"emergent":
-			return Vector3(-9 + (i % 7) * 2.6, 0.5, 3 + int(i / 7) * 2.5)
-		"tree":
-			# 乔木在岸边 / 草洲外围
-			return Vector3(-13 + (i % 5) * 6.0, 0.0, -12 + int(i / 5) * 2.6)
-		_:
-			return Vector3(-8 + (i % 7) * 2.4, 0.05, 5 + int(i / 7) * 2.4)
+		"submerged":  # 苦草：水下浅水区
+			return Vector3(rng.randf_range(-6.0, 6.0), 0.0, rng.randf_range(-2.0, 3.0))
+		"floating":   # 莲/荷叶：开阔水面
+			return Vector3(rng.randf_range(2.0, 12.0), 0.06, rng.randf_range(-4.0, 1.0))
+		"emergent":   # 芦苇：岸边浅滩
+			return Vector3(rng.randf_range(-9.0, 6.6), 0.5, rng.randf_range(3.0, 5.5))
+		"tree":       # 乔木：岸线 / 草洲外围
+			return Vector3(rng.randf_range(-13.0, 11.0), 0.0, rng.randf_range(-12.0, -6.8))
+		_:            # 草洲
+			return Vector3(rng.randf_range(-8.0, 6.4), 0.05, rng.randf_range(5.0, 7.4))
 
 
 func _update_3d() -> void:
@@ -987,7 +1030,7 @@ func _build_ui() -> void:
 	var sep1 := HSeparator.new()
 	lv.add_child(sep1)
 
-	funds_label = _make_label("资金：75 万", 17, Color(1, 0.95, 0.6))
+	funds_label = _make_label("资金：80 万", 17, Color(1, 0.95, 0.6))
 	lv.add_child(funds_label)
 	research_label = _make_label("科研点：0", 14, Color(0.82, 0.9, 1))
 	lv.add_child(research_label)
@@ -1119,6 +1162,92 @@ func _build_ui() -> void:
 	popup_button.custom_minimum_size = Vector2(0, 44)
 	pv.add_child(popup_button)
 
+	# 主菜单（独立 CanvasLayer，盖在 HUD 与沙盘之上）
+	_build_menu()
+
+
+# ==================== 主菜单 ====================
+func _build_menu() -> void:
+	var layer := CanvasLayer.new()
+	layer.name = "MenuLayer"
+	layer.layer = 10  # 确保在 HUD 之上
+	add_child(layer)
+
+	menu_root = Control.new()
+	menu_root.set_anchors_preset(Control.PRESET_FULL_RECT)
+	menu_root.mouse_filter = Control.MOUSE_FILTER_STOP
+	layer.add_child(menu_root)
+
+	# 半透明暗色底：既挡住 HUD，又隐约露出背后的沙盘
+	var bg := ColorRect.new()
+	bg.color = Color(0.04, 0.06, 0.05, 0.80)
+	bg.set_anchors_preset(Control.PRESET_FULL_RECT)
+	menu_root.add_child(bg)
+
+	var center := CenterContainer.new()
+	center.set_anchors_preset(Control.PRESET_FULL_RECT)
+	menu_root.add_child(center)
+
+	var panel := PanelContainer.new()
+	panel.custom_minimum_size = Vector2(420, 0)
+	_panel_style(panel, Color(0.20, 0.14, 0.09, 0.97))
+	center.add_child(panel)
+
+	var vb := VBoxContainer.new()
+	vb.add_theme_constant_override("separation", 14)
+	panel.add_child(vb)
+
+	var title := _make_label("拯救鄱阳湖", 34, Color(1, 0.9, 0.55))
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	vb.add_child(title)
+
+	var sub := _make_label("生态修复 · 回合制沙盘", 14, Color(0.82, 0.86, 0.9))
+	sub.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	vb.add_child(sub)
+
+	var seed_l := _make_label("自定义种子（留空或 0 则随机）", 14, Color(0.9, 0.92, 0.94))
+	vb.add_child(seed_l)
+
+	seed_input = LineEdit.new()
+	seed_input.placeholder_text = "输入数字种子，例如 20260925"
+	seed_input.add_theme_font_size_override("font_size", 18)
+	seed_input.custom_minimum_size = Vector2(0, 42)
+	vb.add_child(seed_input)
+
+	menu_hint = _make_label("", 12, Color(1, 0.6, 0.5))
+	menu_hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	vb.add_child(menu_hint)
+
+	var start_btn := _make_button("开始游戏", _on_start_pressed, 20)
+	start_btn.custom_minimum_size = Vector2(0, 48)
+	vb.add_child(start_btn)
+
+
+func _show_menu() -> void:
+	menu_root.visible = true
+	menu_hint.text = ""
+	if seed_input != null:
+		seed_input.grab_focus()
+
+
+func _hide_menu() -> void:
+	menu_root.visible = false
+
+
+func _on_start_pressed() -> void:
+	var s := seed_input.text.strip_edges()
+	if s == "" or s == "0":
+		GameState.run_seed = 0
+	elif s.is_valid_int() and int(s) >= 0:
+		GameState.run_seed = int(s)
+	else:
+		menu_hint.text = "种子需为非负整数（留空则随机）"
+		return
+	_hide_menu()
+	GameState.reset_game()
+	_update_hud()
+	_update_3d()
+
 
 func _make_metric_row(metric: String) -> VBoxContainer:
 	var vb := VBoxContainer.new()
@@ -1176,7 +1305,7 @@ func _on_event(text: String) -> void:
 
 
 func _enter_allocate() -> void:
-	current_hand = GameState.draw_cards(6)
+	current_hand = GameState.draw_cards(7)
 	play_deal_anim = true
 	_build_hand_panel()
 	hand_panel.visible = true
@@ -1518,7 +1647,7 @@ func _finish_turn() -> void:
 			names.append(_card_name(cid))
 		lines.append("  ⚠ 以下行动因资金不足未能执行：%s" % "、".join(names))
 	lines.append("")
-	lines.append("结转资金：%d 万（上限 %d 万）" % [GameState.carry, GameState.MAX_CARRY])
+	lines.append("结转资金：%d 万（未用资金享 %d%% 利息，上限 %d 万）" % [GameState.carry, int(GameState.INTEREST_RATE * 100), GameState.MAX_CARRY])
 	# 下回合危机预警
 	if not GameState.pending_crisis.is_empty():
 		lines.append("")
@@ -1581,15 +1710,13 @@ func _show_report(r: Dictionary) -> void:
 	body += "\n[b]知识卡收集[/b]：%d / %d　[b]科研点[/b]：%d\n" % [r["knowledge_count"], r["total_knowledge"], r["research_points"]]
 	body += "[color=#8a8a8a]本局种子：%d（同种子可复现，便于对照实验）[/color]\n" % r.get("seed", 0)
 	body += "\n[b]反思[/b]\n%s" % r["reflection"]
-	_show_popup(title, body, "重新开始（新种子）", _restart)
+	_show_popup(title, body, "返回主菜单", _restart)
 
 
 func _restart() -> void:
 	_current_event = ""
-	GameState.run_seed = 0  # 清零种子 → 下一局重新随机
-	GameState.reset_game()
-	_update_hud()
-	_update_3d()
+	# 回到主菜单，让玩家可重新输入种子（留空则随机）
+	_show_menu()
 
 
 # ==================== 通用弹窗 ====================
