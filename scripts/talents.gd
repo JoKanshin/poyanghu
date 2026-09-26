@@ -84,6 +84,11 @@ func next_talent_id() -> String:
 	return TALENTS[unlocked.size()]["id"]
 
 
+## 点亮下一个天赋所需的天赋点：前 15 条 1 点，第 16 条起 2 点
+func next_cost() -> int:
+	return 2 if unlocked.size() >= 15 else 1
+
+
 ## 已点亮天赋中指定 key 的加成之和
 func get_bonus(key: String) -> float:
 	var sum := 0.0
@@ -97,10 +102,11 @@ func get_bonus(key: String) -> float:
 ## 点亮下一个天赋（线性）
 func unlock_next() -> bool:
 	var nid := next_talent_id()
-	if nid == "" or points < 1:
+	var cost := next_cost()
+	if nid == "" or points < cost:
 		return false
 	unlocked.append(nid)
-	points -= 1
+	points -= cost
 	save()
 	return true
 

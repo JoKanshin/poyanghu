@@ -1665,7 +1665,8 @@ func _refresh_talent_panel() -> void:
 		var status_l := _make_label("已点亮" if lit else "未点亮", 12, Color(0.55, 0.9, 0.55) if lit else Color(0.55, 0.55, 0.55))
 		row.add_child(status_l)
 		talent_list.add_child(row)
-	talent_unlock_btn.disabled = not (Talents.points >= 1 and Talents.next_talent_id() != "")
+	talent_unlock_btn.text = "点亮下一个天赋（%d 点）" % Talents.next_cost()
+	talent_unlock_btn.disabled = not (Talents.points >= Talents.next_cost() and Talents.next_talent_id() != "")
 
 
 func _hide_menu() -> void:
