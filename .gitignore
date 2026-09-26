@@ -1,0 +1,9 @@
+# Godot 4+ specific ignores
+.godot/
+/android/
+
+# Claude Code local config
+.claude/
+
+# 构建产物（导出包体积大，不入库）
+build/
