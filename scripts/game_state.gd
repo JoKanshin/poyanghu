@@ -390,17 +390,6 @@ const ACTION_CARDS := [
 		},
 		"side_note": {"effective": "牧民失去放牧地，社区信任 -2"},
 	},
-	{
-		"id": "remove_island", "name": "拆除浮岛", "category": "manage",
-		"desc": "拆除人工浮岛，回收浮床设施。",
-		"cost": 5,
-		"tiers": {
-			"basic":    {"effects": []},
-			"effective": {"effects": []},
-			"deep":     {"effects": [{"metric": "water_quality", "delta": -4, "delay": 0}]},
-		},
-		"side_note": {"deep": "拆除浮床后净化能力下降，水质 -4"},
-	},
 ]
 
 # ==================== 知识卡数据 ====================
@@ -916,10 +905,10 @@ func execute_action(card_id: String, tier: String) -> bool:
 	if ACTION_SETTLEMENT_DELTA.has(card_id):
 		_apply_settlement(ACTION_SETTLEMENT_DELTA[card_id])
 
-	# 人工浮岛：打出「人工浮岛」→ 沙盘出现浮岛；「拆除浮岛」→ 清除
+	# 人工浮岛：打出「人工浮岛」→ 沙盘出现浮岛；「底泥清淤疏浚」→ 清除
 	if card_id == "floating_island":
 		floating_islands = 4
-	elif card_id == "remove_island":
+	elif card_id == "dredge":
 		floating_islands = 0
 
 	funds_changed.emit()
