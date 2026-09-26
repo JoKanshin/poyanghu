@@ -54,6 +54,10 @@ var menu_seed_panel: PanelContainer
 var menu_mode_label: Label
 var seed_input: LineEdit
 var menu_hint: Label
+var menu_talent_panel: PanelContainer
+var talent_points_label: Label
+var talent_list: VBoxContainer
+var talent_unlock_btn: Button
 
 # 3D 表现节点
 var lake_mesh: MeshInstance3D
@@ -1325,6 +1329,10 @@ func _build_menu() -> void:
 	title_start.custom_minimum_size = Vector2(0, 52)
 	tvb.add_child(title_start)
 
+	var talent_btn := _make_button("天赋树", _show_talent_panel, 16)
+	talent_btn.custom_minimum_size = Vector2(0, 40)
+	tvb.add_child(talent_btn)
+
 	# --- 第 2 页：选择难度 ---
 	menu_difficulty_panel = PanelContainer.new()
 	menu_difficulty_panel.custom_minimum_size = Vector2(420, 0)
@@ -1393,6 +1401,40 @@ func _build_menu() -> void:
 	back_btn.custom_minimum_size = Vector2(0, 40)
 	svb.add_child(back_btn)
 
+	# --- 第 4 页：天赋树 ---
+	menu_talent_panel = PanelContainer.new()
+	menu_talent_panel.custom_minimum_size = Vector2(480, 0)
+	_panel_style(menu_talent_panel, Color(0.20, 0.14, 0.09, 0.97))
+	menu_talent_panel.visible = false
+	center.add_child(menu_talent_panel)
+
+	var kvb := VBoxContainer.new()
+	kvb.add_theme_constant_override("separation", 10)
+	menu_talent_panel.add_child(kvb)
+
+	var t_title := _make_label("天赋树", 24, Color(1, 0.9, 0.55))
+	t_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	kvb.add_child(t_title)
+
+	talent_points_label = _make_label("天赋点：0", 14, Color(1, 0.95, 0.6))
+	talent_points_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	kvb.add_child(talent_points_label)
+
+	var t_sep := HSeparator.new()
+	kvb.add_child(t_sep)
+
+	talent_list = VBoxContainer.new()
+	talent_list.add_theme_constant_override("separation", 6)
+	kvb.add_child(talent_list)
+
+	talent_unlock_btn = _make_button("点亮下一个天赋", _on_talent_unlock, 16)
+	talent_unlock_btn.custom_minimum_size = Vector2(0, 44)
+	kvb.add_child(talent_unlock_btn)
+
+	var t_back := _make_button("返回", _on_talent_back, 16)
+	t_back.custom_minimum_size = Vector2(0, 40)
+	kvb.add_child(t_back)
+
 
 func _show_menu() -> void:
 	menu_root.visible = true
@@ -1400,6 +1442,7 @@ func _show_menu() -> void:
 	menu_title_panel.visible = true
 	menu_difficulty_panel.visible = false
 	menu_seed_panel.visible = false
+	menu_talent_panel.visible = false
 
 
 func _on_title_start() -> void:
@@ -1439,6 +1482,46 @@ func _on_seed_back() -> void:
 	menu_hint.text = ""
 	menu_seed_panel.visible = false
 	menu_difficulty_panel.visible = true
+
+
+func _show_talent_panel() -> void:
+	menu_title_panel.visible = false
+	menu_difficulty_panel.visible = false
+	menu_seed_panel.visible = false
+	menu_talent_panel.visible = true
+	_refresh_talent_panel()
+
+
+func _on_talent_back() -> void:
+	menu_talent_panel.visible = false
+	menu_title_panel.visible = true
+
+
+func _on_talent_unlock() -> void:
+	Talents.unlock_next()
+	_refresh_talent_panel()
+
+
+## 重建天赋列表 + 刷新点数与按钮状态
+func _refresh_talent_panel() -> void:
+	for c in talent_list.get_children():
+		talent_list.remove_child(c)
+		c.queue_free()
+	talent_points_label.text = "天赋点：%d" % Talents.points
+	for t in Talents.TALENTS:
+		var lit := Talents.has(t["id"])
+		var row := HBoxContainer.new()
+		row.add_theme_constant_override("separation", 8)
+		var name_l := _make_label(t["name"], 14, Color(1, 0.95, 0.6) if lit else Color(0.6, 0.6, 0.6))
+		name_l.custom_minimum_size = Vector2(80, 0)
+		row.add_child(name_l)
+		var desc_l := _make_label(t["desc"], 12, Color(0.82, 0.86, 0.9) if lit else Color(0.55, 0.58, 0.6))
+		desc_l.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		row.add_child(desc_l)
+		var status_l := _make_label("已点亮" if lit else "未点亮", 12, Color(0.55, 0.9, 0.55) if lit else Color(0.55, 0.55, 0.55))
+		row.add_child(status_l)
+		talent_list.add_child(row)
+	talent_unlock_btn.disabled = not (Talents.points >= 1 and Talents.next_talent_id() != "")
 
 
 func _hide_menu() -> void:
@@ -1521,7 +1604,7 @@ func _on_event(text: String) -> void:
 
 func _enter_allocate() -> void:
 	_slide_side_panels(false)  # 新回合开始，侧边栏弹回
-	current_hand = GameState.draw_cards(7)
+	current_hand = GameState.draw_cards(7 + int(Talents.get_bonus("cards")))
 	play_deal_anim = true
 	_build_hand_panel()
 	hand_panel.visible = true
@@ -1910,6 +1993,9 @@ func _on_game_end(report: Dictionary) -> void:
 
 
 func _show_report(r: Dictionary) -> void:
+	var earned: int = r.get("talent_points", 0)
+	if earned > 0:
+		Talents.award(earned)
 	var body := ""
 	var title := "四年 · 生态报告"
 	if r.get("is_failure", false):
@@ -1928,6 +2014,8 @@ func _show_report(r: Dictionary) -> void:
 		body += "  · %s\n" % n
 	body += "\n[b]知识卡收集[/b]：%d / %d　[b]科研点[/b]：%d\n" % [r["knowledge_count"], r["total_knowledge"], r["research_points"]]
 	body += "[color=#8a8a8a]本局种子：%d（同种子可复现，便于对照实验）[/color]\n" % r.get("seed", 0)
+	if earned > 0:
+		body += "[color=#ffd060]获得天赋点：+%d[/color]\n" % earned
 	body += "\n[b]反思[/b]\n%s" % r["reflection"]
 	_show_popup(title, body, "返回主菜单", _restart)
 

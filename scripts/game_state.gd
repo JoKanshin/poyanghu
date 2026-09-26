@@ -683,6 +683,12 @@ func _roll_starting_metrics() -> Dictionary:
 		"birds": 50,
 		"community": 55,
 	}
+	# 天赋加成：定点指标加成 + 全指标加成
+	base["water_level"] += int(Talents.get_bonus("start_water"))
+	base["vegetation"] += int(Talents.get_bonus("start_veg"))
+	var all_bonus := int(Talents.get_bonus("start_all"))
+	for k in base:
+		base[k] += all_bonus
 	var out := {}
 	for k in base:
 		# 每项在 ±9 内偏移，并保证不低于失败线（25）
@@ -739,8 +745,10 @@ func start_new_turn() -> void:
 	# 困难模式：初始/每回合资金削减
 	if hard_mode:
 		funding -= HARD_FUNDING_PENALTY
+	# 天赋加成：基础拨款 + 运营成本减免
+	funding += int(Talents.get_bonus("funding"))
 
-	funds = carry + funding - OPERATION_COST
+	funds = carry + funding - (OPERATION_COST + int(Talents.get_bonus("operation")))
 	carry = 0
 
 	metrics_changed.emit()
@@ -790,6 +798,8 @@ func _maybe_warn_crisis() -> void:
 		chance = 0.55 + float(turn) / float(TOTAL_TURNS) * 0.25
 	else:
 		chance = 0.38 + float(turn) / float(TOTAL_TURNS) * 0.22
+	# 天赋加成：降低危机触发概率
+	chance += Talents.get_bonus("crisis_chance")
 	if randf() > chance:
 		return
 	# 加权抽选：与当前生态状态呼应的危机会更容易出现
@@ -847,7 +857,7 @@ func draw_cards(n: int) -> Array:
 
 ## 能否执行：资金够 + 行动位够
 func can_execute(card_id: String, tier: String) -> bool:
-	if used_action_ids.size() >= MAX_ACTIONS:
+	if used_action_ids.size() >= MAX_ACTIONS + int(Talents.get_bonus("actions")):
 		return false
 	return funds >= tier_cost(card_id, tier)
 
@@ -1095,6 +1105,11 @@ func generate_report() -> Dictionary:
 	var social := _eval_social()
 	var manage := _eval_manage()
 	var reflection := _build_reflection()
+	# 本局天赋点：生态/社会/管理 三维各 ≥60 得 1 点（0~3）
+	var earned := 0
+	if eco["score"] >= 60: earned += 1
+	if social["score"] >= 60: earned += 1
+	if manage["score"] >= 60: earned += 1
 	return {
 		"eco": eco, "social": social, "manage": manage,
 		"reflection": reflection,
@@ -1106,6 +1121,7 @@ func generate_report() -> Dictionary:
 		"research_points": research_points,
 		"knowledge_count": knowledge_unlocked.size(),
 		"total_knowledge": KNOWLEDGE_CARDS.size(),
+		"talent_points": earned,
 	}
 
 
