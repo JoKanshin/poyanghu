@@ -3,22 +3,22 @@
 [ext_resource type="Script" uid="uid://dlru3k152qklw" path="res://scripts/main.gd" id="1_o5qli"]
 
 [sub_resource type="ProceduralSkyMaterial" id="ProceduralSkyMaterial_sgp6g"]
-sky_top_color = Color(0.38, 0.45, 0.55, 1)
-sky_horizon_color = Color(0.65, 0.67, 0.7, 1)
-ground_bottom_color = Color(0.2, 0.17, 0.13, 1)
-ground_horizon_color = Color(0.65, 0.67, 0.7, 1)
+sky_top_color = Color(0.72, 0.82, 0.9, 1)
+sky_horizon_color = Color(0.92, 0.92, 0.86, 1)
+ground_bottom_color = Color(0.78, 0.74, 0.66, 1)
+ground_horizon_color = Color(0.92, 0.92, 0.86, 1)
 
 [sub_resource type="Sky" id="Sky_o5qli"]
 sky_material = SubResource("ProceduralSkyMaterial_sgp6g")
 
 [sub_resource type="Environment" id="Environment_0wfyh"]
 background_mode = 2
-background_color = Color(0.65882355, 0.8352941, 0.8862745, 1)
+background_color = Color(0.72, 0.82, 0.86, 1)
 sky = SubResource("Sky_o5qli")
 ambient_light_source = 3
 
 [sub_resource type="StandardMaterial3D" id="StandardMaterial3D_sgp6g"]
-albedo_color = Color(0.41960785, 0.5568628, 0.3529412, 1)
+albedo_color = Color(0.66, 0.74, 0.52, 1)
 
 [sub_resource type="BoxMesh" id="BoxMesh_o5qli"]
 size = Vector3(40, 0.5, 40)

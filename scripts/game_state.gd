@@ -10,6 +10,11 @@ const MAX_CARRY := 60            # 结转上限（万）
 const INTEREST_RATE := 0.05      # 结转利息（每回合，利滚利，利率从低）
 const MAX_ACTIONS := 3           # 每回合最多执行行动数（行动位）
 
+# 困难模式参数
+const HARD_FAILURE_THRESHOLD := 35   # 困难模式：任一指标低于此值即判负
+const HARD_FUNDING_PENALTY := 25     # 困难模式：每回合基础拨款削减（万）
+const HARD_PENALTY_MULT := 1.5       # 困难模式：扣分（负向变动）惩罚倍率
+
 # 六项指标的中文名与量纲说明
 const METRIC_NAMES := {
 	"water_level": "水位",
@@ -28,27 +33,27 @@ const TIER_NAMES := {"basic": "基础投入", "effective": "有效投入", "deep
 # 每个物种有生态角色；数量受相关指标与行动联动。地图上按数量显示会动的个体。
 const SPECIES := {
 	"baihe": {
-		"name": "白鹤", "color": Color(0.95, 0.95, 0.95),
+		"name": "白鹤", "color": Color(0.97, 0.97, 0.95),
 		"role": "旗舰物种：取食苦草块茎，是人鸟冲突的核心。",
 		"drivers": ["birds", "vegetation"],
 	},
 	"dongfangbaihuan": {
-		"name": "东方白鹳", "color": Color(0.15, 0.15, 0.22),
+		"name": "东方白鹳", "color": Color(0.40, 0.40, 0.47),
 		"role": "鱼类取食者：湿地健康的指示物种。",
 		"drivers": ["birds", "fish"],
 	},
 	"xiaotiane": {
-		"name": "小天鹅", "color": Color(0.90, 0.90, 0.85),
+		"name": "小天鹅", "color": Color(0.93, 0.93, 0.89),
 		"role": "浅水滤食者：对碟形湖水位变化最敏感。",
 		"drivers": ["birds", "water_level"],
 	},
 	"baizhenhe": {
-		"name": "白枕鹤", "color": Color(0.78, 0.78, 0.72),
+		"name": "白枕鹤", "color": Color(0.86, 0.86, 0.80),
 		"role": "杂食性：喜在农田与草洲交界处觅食稻谷。",
 		"drivers": ["birds", "community"],
 	},
 	"yanlei": {
-		"name": "雁类", "color": Color(0.62, 0.57, 0.47),
+		"name": "雁类", "color": Color(0.72, 0.68, 0.60),
 		"role": "草洲取食者：数量庞大，是食物链的基础。",
 		"drivers": ["birds", "vegetation"],
 	},
@@ -69,32 +74,32 @@ const ACTION_SPECIES_BONUS := {
 # kind: submerged 沉水 / emergent 挺水 / floating 浮叶 / marsh 草洲
 const PLANTS := {
 	"kucao": {
-		"name": "苦草", "color": Color(0.20, 0.55, 0.32), "kind": "submerged",
+		"name": "苦草", "color": Color(0.42, 0.66, 0.46), "kind": "submerged",
 		"role": "沉水植物，白鹤越冬主食。",
 		"drivers": ["vegetation", "water_quality"],
 	},
 	"luwei": {
-		"name": "芦苇", "color": Color(0.55, 0.62, 0.34), "kind": "emergent",
+		"name": "芦苇", "color": Color(0.70, 0.74, 0.52), "kind": "emergent",
 		"role": "挺水植物，净化水质、为鸟类提供筑巢地。",
 		"drivers": ["vegetation", "water_level"],
 	},
 	"lian": {
-		"name": "莲", "color": Color(0.30, 0.58, 0.34), "kind": "floating",
+		"name": "莲", "color": Color(0.52, 0.72, 0.56), "kind": "floating",
 		"role": "浮叶植物，白鹤取食莲藕，人鸟冲突焦点。",
 		"drivers": ["vegetation", "water_level"],
 	},
 	"lihao": {
-		"name": "藜蒿", "color": Color(0.60, 0.66, 0.38), "kind": "marsh",
+		"name": "藜蒿", "color": Color(0.72, 0.76, 0.54), "kind": "marsh",
 		"role": "草洲先锋植物，固土防冲刷。",
 		"drivers": ["vegetation", "community"],
 	},
 	"taicao": {
-		"name": "苔草", "color": Color(0.42, 0.58, 0.30), "kind": "marsh",
+		"name": "苔草", "color": Color(0.58, 0.70, 0.50), "kind": "marsh",
 		"role": "草洲优势种，雁类的主要食物。",
 		"drivers": ["vegetation", "water_quality"],
 	},
 	"chishan": {
-		"name": "池杉", "color": Color(0.26, 0.46, 0.24), "kind": "tree",
+		"name": "池杉", "color": Color(0.50, 0.66, 0.46), "kind": "tree",
 		"role": "岸边乔木，为候鸟提供筑巢与停歇的栖息地。",
 		"drivers": ["vegetation"],
 	},
@@ -109,6 +114,13 @@ const ACTION_PLANT_BONUS := {
 	"wetland_restore": {"kucao": 12, "taicao": 12, "lihao": 10},
 	"floating_island": {"lian": 6},
 	"grazing_ban": {"taicao": 10},
+}
+
+# 行动卡 → 环湖人类围垦强度（settlement）变化：正值扩张、负值收缩
+const ACTION_SETTLEMENT_DELTA := {
+	"wetland_restore": -35,  # 退田还湿：农田退还湿地
+	"industry_switch": -20,  # 转产投资：退捕退耕
+	"grazing_ban": -15,      # 封洲禁牧：放牧点撤除
 }
 
 # ==================== 行动卡数据 ====================
@@ -500,6 +512,17 @@ const CRISES := [
 		"hit": "【危机爆发】蓝藻水华暴发——水面被绿色藻膜覆盖，水体缺氧，候鸟中毒与食物短缺同时发生。",
 		"effects": [{"metric": "water_quality", "delta": -12}, {"metric": "birds", "delta": -8}],
 	},
+	{
+		"id": "wetland_encroach", "name": "围湖造田", "weight": 1.0, "cond": "community < 55",
+		"warn": "【社区动向】部分村民在湿地边缘围垦造田、搭建临时房，有向湖区推进的迹象。",
+		"hit": "【危机爆发】围湖造田蔓延——环湖湿地被侵占，临时房屋与圩田向湖推进。",
+		"effects": [
+			{"metric": "vegetation", "delta": -8},
+			{"metric": "water_quality", "delta": -4},
+			{"metric": "birds", "delta": -5},
+		],
+		"settlement": 30,
+	},
 ]
 
 # ==================== 卡牌协同（组合出招）====================
@@ -597,6 +620,8 @@ var game_over: bool = false
 var total_spent: int = 0            # 累计卡牌支出（用于资金效率评价）
 # ===== 肉鸽机制状态 =====
 var run_seed: int = 0               # 本局种子（同种子可复现，用于反事实对照）
+var settlement: int = 70            # 环湖人类围垦强度 0-100，仅用于 3D 房子表现
+var hard_mode: bool = false         # 困难模式（主菜单选择）
 var pending_crisis: Dictionary = {} # 待爆发的危机（本回合预警，下回合生效）
 var last_crisis_name: String = ""   # 上回合爆发的危机名（用于结算展示）
 var triggered_synergies: Array = [] # 本回合触发的协同
@@ -623,6 +648,7 @@ func reset_game() -> void:
 	funds = 0
 	research_points = 0
 	total_spent = 0
+	settlement = 70
 	effects_queue = []
 	used_action_ids = []
 	knowledge_unlocked = []
@@ -659,12 +685,12 @@ func _roll_starting_metrics() -> Dictionary:
 	}
 	var out := {}
 	for k in base:
-		# 每项在 ±9 内偏移，并保证不越界
-		out[k] = clampi(base[k] + _randi_range(-9, 9), 18, 88)
+		# 每项在 ±9 内偏移，并保证不低于失败线（25）
+		out[k] = clampi(base[k] + _randi_range(-9, 9), 25, 88)
 	# 至少保证有一项明显偏弱，制造"这局的软肋"
 	var weak_keys: Array = out.keys()
 	var weak: String = weak_keys[_randi_range(0, weak_keys.size() - 1)]
-	out[weak] = clampi(out[weak] - 12, 15, 88)
+	out[weak] = clampi(out[weak] - 12, 25, 88)
 	return out
 
 
@@ -710,6 +736,9 @@ func start_new_turn() -> void:
 		funding += 15
 	elif metrics["community"] <= 30:
 		funding -= 15
+	# 困难模式：初始/每回合资金削减
+	if hard_mode:
+		funding -= HARD_FUNDING_PENALTY
 
 	funds = carry + funding - OPERATION_COST
 	carry = 0
@@ -738,8 +767,11 @@ func _resolve_pending_crisis() -> void:
 	for e in c["effects"]:
 		_apply_delta(e["metric"], e["delta"])
 		_add_log("   %s %+d" % [METRIC_NAMES[e["metric"]], e["delta"]])
+	if c.has("settlement"):
+		_apply_settlement(c["settlement"])
 	_sync_species()
 	_sync_plants()
+	metrics_changed.emit()
 	event_triggered.emit(c["hit"])
 
 
@@ -752,8 +784,12 @@ func _maybe_warn_crisis() -> void:
 	# 从第 3 回合起才开始抽危机，给玩家缓冲
 	if turn < 3:
 		return
-	# 基础概率 38%，随回合推进略升（后期压力更大）
-	var chance := 0.38 + float(turn) / float(TOTAL_TURNS) * 0.22
+	# 基础概率 38%（困难模式 55%），随回合推进略升（后期压力更大）
+	var chance: float
+	if hard_mode:
+		chance = 0.55 + float(turn) / float(TOTAL_TURNS) * 0.25
+	else:
+		chance = 0.38 + float(turn) / float(TOTAL_TURNS) * 0.22
 	if randf() > chance:
 		return
 	# 加权抽选：与当前生态状态呼应的危机会更容易出现
@@ -853,6 +889,10 @@ func execute_action(card_id: String, tier: String) -> bool:
 		for pid in ACTION_PLANT_BONUS[card_id]:
 			plant_pop[pid] = clampi(plant_pop[pid] + ACTION_PLANT_BONUS[card_id][pid], 0, 100)
 
+	# 行动对环湖用地（房子数量）的影响
+	if ACTION_SETTLEMENT_DELTA.has(card_id):
+		_apply_settlement(ACTION_SETTLEMENT_DELTA[card_id])
+
 	funds_changed.emit()
 	metrics_changed.emit()
 	return true
@@ -949,7 +989,7 @@ func end_turn() -> void:
 		carry = MAX_CARRY
 	funds = 0
 
-	# 失败判定：任一指标归零 → 生态崩溃，提前结束
+	# 失败判定：任一指标跌破 20 → 被撤换，提前结束
 	if _check_failure():
 		return
 
@@ -961,15 +1001,16 @@ func end_turn() -> void:
 	# 下一回合由主场景在展示完结算反馈后调用 start_new_turn()
 
 
-## 检查是否有指标归零（失败条件）
+## 检查是否有指标跌破失败线（普通 20 / 困难 35：上级对政绩不满，将你撤换）
 func _check_failure() -> bool:
+	var threshold: int = HARD_FAILURE_THRESHOLD if hard_mode else 20
 	for metric in metrics:
-		if metrics[metric] <= 0:
+		if metrics[metric] < threshold:
 			is_failure = true
 			game_over = true
 			failure_metric = metric
-			failure_reason = FAILURE_TEXT.get(metric, "%s 崩溃。" % METRIC_NAMES.get(metric, metric))
-			_add_log("✖ %s" % failure_reason)
+			failure_reason = "上级对你的政绩不满意，将你撤换。"
+			_add_log("✖ %s（%s 跌破 %d）" % [failure_reason, METRIC_NAMES.get(metric, metric), threshold])
 			game_ended.emit(generate_report())
 			return true
 	return false
@@ -1019,7 +1060,18 @@ func _eval_condition(cond: String) -> bool:
 func _apply_delta(metric: String, delta: int) -> void:
 	if not metrics.has(metric):
 		return
+	# 困难模式：扣分（负向变动）惩罚加成
+	if hard_mode and delta < 0:
+		delta = roundi(delta * HARD_PENALTY_MULT)
 	metrics[metric] = clampi(metrics[metric] + delta, 0, 100)
+
+
+## 环湖人类围垦强度变化（仅驱动 3D 房子数量，不参与指标/失败判定）
+func _apply_settlement(delta: int) -> void:
+	var before := settlement
+	settlement = clampi(settlement + delta, 0, 100)
+	if settlement != before:
+		_add_log("环湖人类围垦%s（%d）" % ["扩张" if delta > 0 else "收缩", delta])
 
 
 func _find_card(card_id: String) -> Dictionary:

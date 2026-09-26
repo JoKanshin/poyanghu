@@ -22,11 +22,14 @@ var left_panel: PanelContainer
 var turn_label: Label
 var season_label: Label
 var funds_label: Label
+var spent_label: Label
 var research_label: Label
 var event_label: Label
 var right_panel: PanelContainer
 var metric_bars: Dictionary = {}
 var hand_panel: PanelContainer
+var end_turn_btn: Button
+var bottom_right: VBoxContainer
 var card_box: Control
 var selected_label: Label
 var current_hand: Array = []   # 当前手牌（card dict 数组）
@@ -45,19 +48,22 @@ var _current_event: String = ""
 
 # 主菜单
 var menu_root: Control
+var menu_title_panel: PanelContainer
+var menu_difficulty_panel: PanelContainer
+var menu_seed_panel: PanelContainer
+var menu_mode_label: Label
 var seed_input: LineEdit
 var menu_hint: Label
 
 # 3D 表现节点
 var lake_mesh: MeshInstance3D
 var lake_mat: ShaderMaterial
-var lake_color: Color = Color(0.20, 0.50, 0.80, 0.88)
+var lake_color: Color = Color(0.62, 0.80, 0.86, 0.88)
 var grass_nodes: Array = []
 var grass_mats: Array = []
 var bird_nodes: Array = []
 var fish_nodes: Array = []
-var village_nodes: Array = []     # 多栋房子
-var village_mats: Array = []
+var house_slots: Array = []       # 每项 {"house": Node3D, "reeds": Node3D, "mats": Array}
 var species_views: Dictionary = {}  # sid -> {rigs[], bases[], states[], timers[], targets[]}
 var plant_views: Dictionary = {}    # pid -> {meshes[], kind}
 var plant_positions: Dictionary = {} # pid -> Array[Vector3]  每局随机散落的位置
@@ -65,8 +71,10 @@ var _plant_pos_seed: int = -1        # 已生成位置对应的种子，换局�
 
 
 func _ready() -> void:
+	_setup_pixel_font()
 	_setup_camera()
 	_build_3d()
+	_build_pixelate_layer()
 	_build_ui()
 	GameState.metrics_changed.connect(_update_hud)
 	GameState.metrics_changed.connect(_update_3d)
@@ -109,24 +117,24 @@ func _setup_camera() -> void:
 	var ground_mesh := get_node_or_null("../Ground/GroundMesh") as MeshInstance3D
 	if ground_mesh:
 		var gm := StandardMaterial3D.new()
-		gm.albedo_color = Color(0.40, 0.53, 0.30)
+		gm.albedo_color = Color(0.66, 0.74, 0.52)
 		gm.roughness = 1.0
 		ground_mesh.material_override = gm
 
-	# 暖色方向光（湿地黄昏氛围）
+	# 柔白方向光（明亮通透，粉彩感）
 	var light := get_node("../DirectionalLight3D") as DirectionalLight3D
-	light.light_color = Color(1.0, 0.92, 0.78)
+	light.light_color = Color(1.0, 0.97, 0.92)
 	light.light_energy = 1.15
 	light.rotation_degrees = Vector3(-45, -35, 0)
 	light.shadow_enabled = true
 
-	# 提高环境光，避免远景布景背光发黑
+	# 提亮环境光，画面更柔和明亮
 	var env_node := get_node("../WorldEnvironment") as WorldEnvironment
 	if env_node and env_node.environment:
 		var env := env_node.environment
 		env.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
-		env.ambient_light_color = Color(0.62, 0.66, 0.58)
-		env.ambient_light_energy = 0.85
+		env.ambient_light_color = Color(0.76, 0.78, 0.72)
+		env.ambient_light_energy = 0.95
 		env.tonemap_mode = Environment.TONE_MAPPER_FILMIC
 
 
@@ -163,7 +171,7 @@ func _build_3d() -> void:
 		mi.mesh = cm
 		mi.position = p
 		var mat := StandardMaterial3D.new()
-		mat.albedo_color = Color(0.45, 0.62, 0.30)
+		mat.albedo_color = Color(0.64, 0.76, 0.50)
 		mi.material_override = mat
 		lake_view.add_child(mi)
 		grass_nodes.append(mi)
@@ -187,7 +195,7 @@ func _build_3d() -> void:
 		mi.mesh = sm
 		mi.position = Vector3(-5 + i * 1.6, -0.15, 2 - (i % 3) * 1.8)
 		var mat := StandardMaterial3D.new()
-		mat.albedo_color = Color(0.55, 0.55, 0.62)
+		mat.albedo_color = Color(0.70, 0.76, 0.82)
 		mi.material_override = mat
 		lake_view.add_child(mi)
 		fish_nodes.append(mi)
@@ -266,7 +274,7 @@ func _build_backdrop_grass(parent: Node3D) -> void:
 			st.set_normal(up); st.add_vertex(v11)
 	var ground := MeshInstance3D.new()
 	ground.mesh = st.commit()
-	ground.material_override = _mat(Color(0.42, 0.55, 0.32))
+	ground.material_override = _mat(Color(0.66, 0.74, 0.54))
 	ground.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	ground.position = Vector3(0, -0.28, 0)  # 略低于沙盘地面，避免z-fighting
 	backdrop.add_child(ground)
@@ -295,7 +303,7 @@ func _build_backdrop_grass(parent: Node3D) -> void:
 		bm.radius = rng.randf_range(0.7, 1.4)
 		bm.height = bm.radius * 1.1
 		bush.mesh = bm
-		bush.material_override = _mat(Color(0.30, 0.44, 0.22).lightened(rng.randf_range(0.0, 0.14)))
+		bush.material_override = _mat(Color(0.52, 0.64, 0.44).lightened(rng.randf_range(0.0, 0.14)))
 		bush.position = Vector3(x, _backdrop_height(x, z) + bm.radius * 0.4, z)
 		bush.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		backdrop.add_child(bush)
@@ -324,7 +332,7 @@ func _make_backdrop_tree(rng: RandomNumberGenerator) -> Node3D:
 	tm.bottom_radius = 0.20
 	tm.height = h * 0.45
 	trunk.mesh = tm
-	trunk.material_override = _mat(Color(0.33, 0.24, 0.16))
+	trunk.material_override = _mat(Color(0.55, 0.45, 0.36))
 	trunk.position = Vector3(0, h * 0.225, 0)
 	tree.add_child(trunk)
 	var layers := 2 + rng.randi() % 2
@@ -336,28 +344,32 @@ func _make_backdrop_tree(rng: RandomNumberGenerator) -> Node3D:
 		cm.bottom_radius = r
 		cm.height = h * 0.42
 		canopy.mesh = cm
-		var green := rng.randf_range(0.20, 0.34)
-		canopy.material_override = _mat(Color(green * 0.75, green + 0.20, green * 0.85))
+		var green := rng.randf_range(0.55, 0.72)
+		canopy.material_override = _mat(Color(green * 0.80, green, green * 0.82))
 		canopy.position = Vector3(0, h * 0.42 + layer * h * 0.20, 0)
 		canopy.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		tree.add_child(canopy)
 	return tree
 
 
-## 湖边社区：一排房子，数量/颜色随社区信任度变化
+## 湖边社区：房子数量随用地（settlement）增减，原地拆除处长出湿地芦苇；颜色随社区信任度明暗变化
 func _build_village(parent: Node3D) -> void:
 	var house_positions := [
 		Vector3(-11, 0, -7), Vector3(-12.5, 0, -5.2), Vector3(-13, 0, -3.4),
-		Vector3(-12.2, 0, -1.6), Vector3(-10.6, 0, 0.2),
+		Vector3(-12.2, 0, -1.6), Vector3(-10.6, 0, 0.2),   # 原有 5 栋（离湖较远）
+		Vector3(-9.0, 0, -4.2), Vector3(-8.0, 0, -1.0),    # 新增 2 栋（侵占，靠湖）
 	]
 	for p in house_positions:
 		var house := _make_house()
 		house.position = p
 		parent.add_child(house)
-		village_nodes.append(house)
-		var mats := _collect_mats(house)
-		for m in mats:
-			village_mats.append(m)
+		var reeds := _make_reed_clump()
+		reeds.position = p
+		reeds.visible = false
+		parent.add_child(reeds)
+		house_slots.append({
+			"house": house, "reeds": reeds, "mats": _collect_mats(house),
+		})
 
 
 func _make_house() -> Node3D:
@@ -368,7 +380,7 @@ func _make_house() -> Node3D:
 	wm.size = Vector3(1.4, 1.0, 1.1)
 	wall.mesh = wm
 	wall.position = Vector3(0, 0.5, 0)
-	wall.material_override = _mat(Color(0.78, 0.62, 0.44))
+	wall.material_override = _mat(Color(0.93, 0.87, 0.76))
 	house.add_child(wall)
 	# 屋顶（三棱柱）
 	var roof := MeshInstance3D.new()
@@ -376,7 +388,7 @@ func _make_house() -> Node3D:
 	rm.size = Vector3(1.7, 0.6, 1.4)
 	roof.mesh = rm
 	roof.position = Vector3(0, 1.3, 0)
-	roof.material_override = _mat(Color(0.48, 0.30, 0.24))
+	roof.material_override = _mat(Color(0.82, 0.60, 0.52))
 	house.add_child(roof)
 	# 门
 	var door := MeshInstance3D.new()
@@ -384,9 +396,46 @@ func _make_house() -> Node3D:
 	dm.size = Vector3(0.3, 0.5, 0.05)
 	door.mesh = dm
 	door.position = Vector3(0, 0.25, 0.58)
-	door.material_override = _mat(Color(0.35, 0.24, 0.16))
+	door.material_override = _mat(Color(0.60, 0.48, 0.38))
 	house.add_child(door)
 	return house
+
+
+## 退还湿地的芦苇丛（房子拆除后的替代植被）：低矮底垫 + 几根细高秆芦苇
+func _make_reed_clump() -> Node3D:
+	var clump := Node3D.new()
+	# 底垫：低矮泥/草地，表示田地已退为湿地
+	var pad := MeshInstance3D.new()
+	var pm := BoxMesh.new()
+	pm.size = Vector3(1.5, 0.12, 1.3)
+	pad.mesh = pm
+	pad.material_override = _mat(Color(0.58, 0.70, 0.48))
+	pad.position = Vector3(0, 0.06, 0)
+	clump.add_child(pad)
+	# 芦苇：细高秆 + 顶部穗
+	var reed_col := Color(0.62, 0.72, 0.50)
+	for k in 5:
+		var ang := k * 1.26
+		var h := 1.5 + (k % 3) * 0.22
+		var stalk := MeshInstance3D.new()
+		var sm := CylinderMesh.new()
+		sm.top_radius = 0.03
+		sm.bottom_radius = 0.05
+		sm.height = h
+		stalk.mesh = sm
+		stalk.material_override = _mat(reed_col)
+		stalk.position = Vector3(cos(ang) * 0.34, 0.06 + h / 2.0, sin(ang) * 0.30)
+		clump.add_child(stalk)
+		var tassel := MeshInstance3D.new()
+		var tm := CylinderMesh.new()
+		tm.top_radius = 0.02
+		tm.bottom_radius = 0.07
+		tm.height = 0.28
+		tassel.mesh = tm
+		tassel.material_override = _mat(reed_col.lightened(0.28))
+		tassel.position = Vector3(cos(ang) * 0.34, 0.06 + h, sin(ang) * 0.30)
+		clump.add_child(tassel)
+	return clump
 
 
 func _collect_mats(n: Node) -> Array:
@@ -407,7 +456,7 @@ func _make_water_shader() -> Shader:
 shader_type spatial;
 render_mode blend_mix, depth_draw_never, cull_disabled, unshaded;
 
-uniform vec4 water_color : source_color = vec4(0.2, 0.5, 0.8, 0.88);
+uniform vec4 water_color : source_color = vec4(0.62, 0.80, 0.86, 0.88);
 uniform float wave_speed = 0.55;
 uniform float wave_strength = 0.06;
 
@@ -423,6 +472,39 @@ void fragment() {
 }
 """
 	return sh
+
+
+## 全屏像素化后处理：把屏幕 UV 量化到 pixel_size 大小的块，形成块状像素
+func _make_pixelate_shader() -> Shader:
+	var sh := Shader.new()
+	sh.code = """
+shader_type canvas_item;
+uniform float pixel_size : hint_range(1.0, 16.0) = 3.5;
+uniform sampler2D screen_texture : hint_screen_texture;
+
+void fragment() {
+	// 最近邻像素化：按块取左上角像素，整块同色
+	vec2 block = SCREEN_PIXEL_SIZE * pixel_size;
+	vec2 uv = floor(SCREEN_UV / block) * block;
+	COLOR = texture(screen_texture, uv);
+}
+"""
+	return sh
+
+
+## 像素化图层：位于 UICanvas(layer=1) 之下，只像素化 3D，HUD/文字保持清晰
+func _build_pixelate_layer() -> void:
+	var layer := CanvasLayer.new()
+	layer.name = "PixelateLayer"
+	layer.layer = 0  # 只像素化 3D，UI/文字保持清晰锐利
+	add_child(layer)
+	var rect := ColorRect.new()
+	rect.set_anchors_preset(Control.PRESET_FULL_RECT)
+	rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var sm := ShaderMaterial.new()
+	sm.shader = _make_pixelate_shader()
+	rect.material = sm
+	layer.add_child(rect)
 
 
 ## 生成棋盘网格线（生息演算式棋盘感）
@@ -468,7 +550,7 @@ func _build_mudflats(parent: Node3D) -> void:
 		mi.mesh = cm
 		mi.position = p
 		var mat := StandardMaterial3D.new()
-		mat.albedo_color = Color(0.52, 0.42, 0.28)
+		mat.albedo_color = Color(0.80, 0.72, 0.60)
 		mi.material_override = mat
 		parent.add_child(mi)
 
@@ -614,12 +696,12 @@ func _build_species_views(parent: Node3D) -> void:
 
 ## 用几何体拼出鸟类剪影（可辨识）
 func _build_bird_body(rig: Node3D, sid: String) -> void:
-	var white := Color(0.94, 0.94, 0.93)
-	var dark := Color(0.13, 0.13, 0.18)
-	var grey := Color(0.68, 0.67, 0.63)
-	var red := Color(0.80, 0.15, 0.12)
-	var yellow := Color(0.92, 0.72, 0.25)
-	var brown := Color(0.55, 0.48, 0.38)
+	var white := Color(0.96, 0.96, 0.94)
+	var dark := Color(0.35, 0.35, 0.40)
+	var grey := Color(0.78, 0.78, 0.74)
+	var red := Color(0.85, 0.45, 0.42)
+	var yellow := Color(0.95, 0.85, 0.55)
+	var brown := Color(0.72, 0.62, 0.50)
 
 	# 躯干（椭球）
 	var body := MeshInstance3D.new()
@@ -816,7 +898,7 @@ func _build_plant_model(rig: Node3D, pid: String, kind: String) -> void:
 			fm.radius = 0.09
 			fm.height = 0.18
 			flower.mesh = fm
-			flower.material_override = _mat(Color(0.92, 0.65, 0.78))
+			flower.material_override = _mat(Color(0.94, 0.80, 0.86))
 			flower.position = Vector3(0, 0.22, 0)
 			rig.add_child(flower)
 		"emergent":
@@ -848,7 +930,7 @@ func _build_plant_model(rig: Node3D, pid: String, kind: String) -> void:
 			trm.bottom_radius = 0.16
 			trm.height = 1.6
 			trunk.mesh = trm
-			trunk.material_override = _mat(Color(0.36, 0.25, 0.16))
+			trunk.material_override = _mat(Color(0.55, 0.45, 0.36))
 			trunk.position = Vector3(0, 0.8, 0)
 			rig.add_child(trunk)
 			for layer in 3:
@@ -966,12 +1048,12 @@ func _update_3d() -> void:
 	var m: Dictionary = GameState.metrics
 	var wscale := lerpf(0.55, 1.35, float(m["water_level"]) / 100.0)
 	lake_mesh.scale = Vector3(wscale, 1.0, wscale)
-	lake_color = Color(0.18, 0.45 + 0.35 * (float(m["water_level"]) / 100.0), 0.80, 0.88)
+	lake_color = Color(0.58, 0.74 + 0.12 * (float(m["water_level"]) / 100.0), 0.88, 0.88)
 	lake_mat.set_shader_parameter("water_color", lake_color)
 
 	for i in grass_nodes.size():
 		var v := float(m["vegetation"]) / 100.0
-		grass_mats[i].albedo_color = Color(0.55 - 0.3 * v, 0.35 + 0.35 * v, 0.20 + 0.15 * v)
+		grass_mats[i].albedo_color = Color(0.72 - 0.20 * v, 0.66 + 0.12 * v, 0.55 - 0.05 * v)
 		grass_nodes[i].visible = m["vegetation"] > (10 + i * 8)
 
 	var nfish := int(m["fish"] / 12.0)
@@ -984,16 +1066,23 @@ func _update_3d() -> void:
 	# 植物数量随植被指标增减
 	_update_plant_views()
 
-	# 社区房子：信任度高则更多房子亮灯（暖色），低则灰暗
-	var cv := float(m["community"]) / 100.0
-	var lit_count := int(cv / 20.0)  # 0-100 → 0-5 栋亮
-	for i in village_mats.size():
-		var house_cv: float = 1.0 if i < lit_count else 0.45
-		village_mats[i].albedo_color = Color(
-			0.45 + 0.35 * house_cv,
-			0.32 + 0.25 * house_cv,
-			0.22 + 0.1 * house_cv
-		)
+	# 环湖房子：settlement 决定数量（退田还湿减少、围湖造田增多），拆除处变芦苇
+	var active := clampi(roundi(GameState.settlement / 100.0 * 7.0), 0, 7)
+	# 社区信任：暖色亮灯的房子数量随信任度变化
+	var lit := roundi(float(m["community"]) / 100.0 * active)
+	for i in house_slots.size():
+		var slot: Dictionary = house_slots[i]
+		var is_house: bool = i < active
+		slot["house"].visible = is_house
+		slot["reeds"].visible = not is_house
+		if is_house:
+			var warm := 1.0 if i < lit else 0.45
+			for mat in slot["mats"]:
+				mat.albedo_color = Color(
+					0.72 + 0.21 * warm,
+					0.66 + 0.21 * warm,
+					0.56 + 0.20 * warm
+				)
 
 
 # ==================== UI ====================
@@ -1011,8 +1100,8 @@ func _build_ui() -> void:
 	left_panel.offset_left = 6
 	left_panel.offset_right = 210
 	left_panel.offset_top = 6
-	left_panel.offset_bottom = 300
-	_panel_style(left_panel, Color(0.20, 0.14, 0.09, 0.86))
+	left_panel.offset_bottom = 190
+	_panel_style(left_panel, Color(0.20, 0.14, 0.09, 0.60))
 	canvas.add_child(left_panel)
 
 	var lv := VBoxContainer.new()
@@ -1030,20 +1119,29 @@ func _build_ui() -> void:
 	var sep1 := HSeparator.new()
 	lv.add_child(sep1)
 
-	funds_label = _make_label("资金：80 万", 17, Color(1, 0.95, 0.6))
-	lv.add_child(funds_label)
+	var spent_row := HBoxContainer.new()
+	spent_row.add_theme_constant_override("separation", 6)
+	spent_row.add_child(_make_icon(_icon_grid_for("coin"), Color(0.72, 0.62, 0.50), 14))
+	spent_label = _make_label("已消耗：0 万", 12, Color(0.82, 0.86, 0.9))
+	spent_label.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	spent_row.add_child(spent_label)
+	lv.add_child(spent_row)
+
+	var funds_row := HBoxContainer.new()
+	funds_row.add_theme_constant_override("separation", 6)
+	funds_row.add_child(_make_icon(_icon_grid_for("coin"), Color(0.95, 0.78, 0.25), 18))
+	funds_label = _make_label("80 万", 17, Color(1, 0.95, 0.6))
+	funds_label.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	funds_row.add_child(funds_label)
+	lv.add_child(funds_row)
+
+	var research_row := HBoxContainer.new()
+	research_row.add_theme_constant_override("separation", 6)
+	research_row.add_child(_make_icon(_icon_grid_for("research"), Color(0.82, 0.9, 1), 14))
 	research_label = _make_label("科研点：0", 14, Color(0.82, 0.9, 1))
-	lv.add_child(research_label)
-
-	var sep2 := HSeparator.new()
-	lv.add_child(sep2)
-
-	var ev_title := _make_label("特殊事件", 15, Color(1, 0.75, 0.5))
-	lv.add_child(ev_title)
-	event_label = _make_label("暂无", 13, Color(0.9, 0.92, 0.94))
-	event_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	event_label.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	lv.add_child(event_label)
+	research_label.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	research_row.add_child(research_label)
+	lv.add_child(research_row)
 
 	# --- 右侧：六项指标（收窄为竖条）---
 	right_panel = PanelContainer.new()
@@ -1055,7 +1153,7 @@ func _build_ui() -> void:
 	right_panel.offset_right = -6
 	right_panel.offset_top = 6
 	right_panel.offset_bottom = 266
-	_panel_style(right_panel, Color(0.20, 0.14, 0.09, 0.86))
+	_panel_style(right_panel, Color(0.20, 0.14, 0.09, 0.60))
 	canvas.add_child(right_panel)
 
 	var rv := VBoxContainer.new()
@@ -1065,6 +1163,22 @@ func _build_ui() -> void:
 	rv.add_child(r_title)
 	for metric in GameState.METRIC_NAMES:
 		rv.add_child(_make_metric_row(metric))
+
+	# --- 顶部事件横幅（单行、居中、不遮挡沙盘）---
+	event_label = _make_label("暂无", 13, Color(0.95, 0.95, 0.92))
+	event_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	event_label.clip_text = true
+	event_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	event_label.anchor_left = 0.0
+	event_label.anchor_top = 0.0
+	event_label.anchor_right = 1.0
+	event_label.offset_left = 220
+	event_label.offset_right = -220
+	event_label.offset_top = 4
+	event_label.offset_bottom = 30
+	event_label.add_theme_color_override("font_outline_color", Color(0.05, 0.08, 0.06, 0.8))
+	event_label.add_theme_constant_override("outline_size", 5)
+	canvas.add_child(event_label)
 
 	# --- 底部中间：手牌（无背景框，卡牌直接浮在沙盘上）---
 	hand_panel = PanelContainer.new()
@@ -1086,35 +1200,6 @@ func _build_ui() -> void:
 	hv.add_theme_constant_override("separation", 6)
 	hand_panel.add_child(hv)
 
-	var h_top_wrap := PanelContainer.new()
-	var bar_sb := StyleBoxFlat.new()
-	bar_sb.bg_color = Color(0.16, 0.11, 0.07, 0.9)
-	bar_sb.border_color = Color(0.45, 0.32, 0.18, 1.0)
-	bar_sb.set_border_width_all(2)
-	bar_sb.corner_radius_top_left = 6
-	bar_sb.corner_radius_top_right = 6
-	bar_sb.corner_radius_bottom_left = 6
-	bar_sb.corner_radius_bottom_right = 6
-	bar_sb.content_margin_left = 12
-	bar_sb.content_margin_right = 12
-	bar_sb.content_margin_top = 6
-	bar_sb.content_margin_bottom = 6
-	h_top_wrap.add_theme_stylebox_override("panel", bar_sb)
-	h_top_wrap.z_index = 10  # 操作条浮在卡牌之上
-	hv.add_child(h_top_wrap)
-
-	var h_top := HBoxContainer.new()
-	h_top.add_theme_constant_override("separation", 16)
-	h_top_wrap.add_child(h_top)
-	var h_hint := _make_label("每回合最多执行 3 个行动（点击卡牌直接执行）", 13, Color(0.92, 0.94, 0.96))
-	h_hint.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	h_top.add_child(h_hint)
-	selected_label = _make_label("已选：0/3", 14, Color(1, 0.9, 0.5))
-	h_top.add_child(selected_label)
-	var end_btn := _make_button("结束本回合 ▶", _finish_turn, 16)
-	end_btn.custom_minimum_size = Vector2(140, 34)
-	h_top.add_child(end_btn)
-
 	# 牌区（扇形手牌，手动定位，无背景）
 	card_box = Control.new()
 	card_box.size_flags_vertical = Control.SIZE_EXPAND_FILL
@@ -1122,6 +1207,36 @@ func _build_ui() -> void:
 	card_box.mouse_filter = Control.MOUSE_FILTER_PASS
 	card_box.resized.connect(_on_card_box_resized)
 	hv.add_child(card_box)
+
+	# 右下角：行动次数提醒（缩短）+ 结束回合按钮（沙盘素材之外的空白角落）
+	bottom_right = VBoxContainer.new()
+	bottom_right.anchor_left = 1.0
+	bottom_right.anchor_top = 1.0
+	bottom_right.anchor_right = 1.0
+	bottom_right.anchor_bottom = 1.0
+	bottom_right.offset_left = -180
+	bottom_right.offset_right = -14
+	bottom_right.offset_top = -104
+	bottom_right.offset_bottom = -14
+	bottom_right.add_theme_constant_override("separation", 4)
+	bottom_right.visible = false
+	canvas.add_child(bottom_right)
+
+	selected_label = _make_label("已选：0/3", 14, Color(1, 0.9, 0.5))
+	selected_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	selected_label.add_theme_color_override("font_outline_color", Color(0.05, 0.08, 0.06, 0.8))
+	selected_label.add_theme_constant_override("outline_size", 4)
+	bottom_right.add_child(selected_label)
+
+	var action_hint := _make_label("每回合最多 3 个行动", 12, Color(0.92, 0.94, 0.96))
+	action_hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	action_hint.add_theme_color_override("font_outline_color", Color(0.05, 0.08, 0.06, 0.8))
+	action_hint.add_theme_constant_override("outline_size", 4)
+	bottom_right.add_child(action_hint)
+
+	end_turn_btn = _make_button("结束本回合 ▶", _finish_turn, 20)
+	end_turn_btn.custom_minimum_size = Vector2(166, 48)
+	bottom_right.add_child(end_turn_btn)
 
 	# --- 弹窗（顶层）---
 	popup_root = Control.new()
@@ -1131,7 +1246,7 @@ func _build_ui() -> void:
 	canvas.add_child(popup_root)
 
 	dim = ColorRect.new()
-	dim.color = Color(0, 0, 0, 0.55)
+	dim.color = Color(0, 0, 0, 0.10)
 	dim.set_anchors_preset(Control.PRESET_FULL_RECT)
 	dim.mouse_filter = Control.MOUSE_FILTER_STOP
 	popup_root.add_child(dim)
@@ -1143,7 +1258,7 @@ func _build_ui() -> void:
 
 	popup_panel = PanelContainer.new()
 	popup_panel.custom_minimum_size = Vector2(600, 0)
-	_panel_style(popup_panel, Color(0.24, 0.17, 0.11, 0.98))
+	_panel_style(popup_panel, Color(0.24, 0.17, 0.11, 0.55))
 	popup_center.add_child(popup_panel)
 
 	var pv := VBoxContainer.new()
@@ -1155,7 +1270,7 @@ func _build_ui() -> void:
 	popup_body.bbcode_enabled = true
 	popup_body.fit_content = true
 	popup_body.custom_minimum_size = Vector2(540, 0)
-	popup_body.add_theme_font_size_override("normal_font_size", 16)
+	popup_body.add_theme_font_size_override("normal_font_size", _snap_px(16))
 	popup_body.add_theme_color_override("default_color", Color(0.95, 0.95, 0.95))
 	pv.add_child(popup_body)
 	popup_button = _make_button("继续", _on_popup_button, 18)
@@ -1188,46 +1303,142 @@ func _build_menu() -> void:
 	center.set_anchors_preset(Control.PRESET_FULL_RECT)
 	menu_root.add_child(center)
 
-	var panel := PanelContainer.new()
-	panel.custom_minimum_size = Vector2(420, 0)
-	_panel_style(panel, Color(0.20, 0.14, 0.09, 0.97))
-	center.add_child(panel)
+	# --- 第 1 页：标题 / 开始游戏 ---
+	menu_title_panel = PanelContainer.new()
+	menu_title_panel.custom_minimum_size = Vector2(420, 0)
+	_panel_style(menu_title_panel, Color(0.20, 0.14, 0.09, 0.97))
+	center.add_child(menu_title_panel)
 
-	var vb := VBoxContainer.new()
-	vb.add_theme_constant_override("separation", 14)
-	panel.add_child(vb)
+	var tvb := VBoxContainer.new()
+	tvb.add_theme_constant_override("separation", 16)
+	menu_title_panel.add_child(tvb)
 
-	var title := _make_label("拯救鄱阳湖", 34, Color(1, 0.9, 0.55))
+	var title := _make_label("拯救鄱阳湖", 36, Color(1, 0.9, 0.55))
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	vb.add_child(title)
+	tvb.add_child(title)
 
 	var sub := _make_label("生态修复 · 回合制沙盘", 14, Color(0.82, 0.86, 0.9))
 	sub.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	vb.add_child(sub)
+	tvb.add_child(sub)
 
-	var seed_l := _make_label("自定义种子（留空或 0 则随机）", 14, Color(0.9, 0.92, 0.94))
-	vb.add_child(seed_l)
+	var title_start := _make_button("开始游戏", _on_title_start, 20)
+	title_start.custom_minimum_size = Vector2(0, 52)
+	tvb.add_child(title_start)
+
+	# --- 第 2 页：选择难度 ---
+	menu_difficulty_panel = PanelContainer.new()
+	menu_difficulty_panel.custom_minimum_size = Vector2(420, 0)
+	_panel_style(menu_difficulty_panel, Color(0.20, 0.14, 0.09, 0.97))
+	menu_difficulty_panel.visible = false
+	center.add_child(menu_difficulty_panel)
+
+	var dvb := VBoxContainer.new()
+	dvb.add_theme_constant_override("separation", 14)
+	menu_difficulty_panel.add_child(dvb)
+
+	var d_title := _make_label("选择难度", 24, Color(1, 0.9, 0.55))
+	d_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	dvb.add_child(d_title)
+
+	var normal_btn := _make_button("普通模式", _on_difficulty_normal, 18)
+	normal_btn.custom_minimum_size = Vector2(0, 48)
+	dvb.add_child(normal_btn)
+
+	var hard_btn := _make_button("困难模式", _on_difficulty_hard, 18)
+	hard_btn.custom_minimum_size = Vector2(0, 48)
+	dvb.add_child(hard_btn)
+
+	var d_back := _make_button("返回", _on_difficulty_back, 16)
+	d_back.custom_minimum_size = Vector2(0, 40)
+	dvb.add_child(d_back)
+
+	# --- 第 3 页：自定义种子 ---
+	menu_seed_panel = PanelContainer.new()
+	menu_seed_panel.custom_minimum_size = Vector2(420, 0)
+	_panel_style(menu_seed_panel, Color(0.20, 0.14, 0.09, 0.97))
+	menu_seed_panel.visible = false
+	center.add_child(menu_seed_panel)
+
+	var svb := VBoxContainer.new()
+	svb.add_theme_constant_override("separation", 14)
+	menu_seed_panel.add_child(svb)
+
+	var seed_title := _make_label("自定义种子", 24, Color(1, 0.9, 0.55))
+	seed_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	svb.add_child(seed_title)
+
+	menu_mode_label = _make_label("模式：普通", 12, Color(0.82, 0.86, 0.9))
+	menu_mode_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	svb.add_child(menu_mode_label)
+
+	var seed_l := _make_label("留空或 0 则随机", 14, Color(0.9, 0.92, 0.94))
+	seed_l.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	svb.add_child(seed_l)
 
 	seed_input = LineEdit.new()
 	seed_input.placeholder_text = "输入数字种子，例如 20260925"
-	seed_input.add_theme_font_size_override("font_size", 18)
+	seed_input.add_theme_font_size_override("font_size", _snap_px(18))
 	seed_input.custom_minimum_size = Vector2(0, 42)
-	vb.add_child(seed_input)
+	svb.add_child(seed_input)
 
 	menu_hint = _make_label("", 12, Color(1, 0.6, 0.5))
 	menu_hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	vb.add_child(menu_hint)
+	svb.add_child(menu_hint)
 
-	var start_btn := _make_button("开始游戏", _on_start_pressed, 20)
-	start_btn.custom_minimum_size = Vector2(0, 48)
-	vb.add_child(start_btn)
+	var seed_start := _make_button("开始游戏", _on_start_pressed, 20)
+	seed_start.custom_minimum_size = Vector2(0, 48)
+	svb.add_child(seed_start)
+
+	var back_btn := _make_button("返回", _on_seed_back, 16)
+	back_btn.custom_minimum_size = Vector2(0, 40)
+	svb.add_child(back_btn)
 
 
 func _show_menu() -> void:
 	menu_root.visible = true
 	menu_hint.text = ""
+	menu_title_panel.visible = true
+	menu_difficulty_panel.visible = false
+	menu_seed_panel.visible = false
+
+
+func _on_title_start() -> void:
+	menu_title_panel.visible = false
+	menu_difficulty_panel.visible = true
+	menu_seed_panel.visible = false
+	menu_hint.text = ""
+
+
+func _on_difficulty_normal() -> void:
+	GameState.hard_mode = false
+	menu_mode_label.text = "模式：普通"
+	menu_difficulty_panel.visible = false
+	menu_seed_panel.visible = true
+	menu_hint.text = ""
 	if seed_input != null:
 		seed_input.grab_focus()
+
+
+func _on_difficulty_hard() -> void:
+	GameState.hard_mode = true
+	menu_mode_label.text = "模式：困难"
+	menu_difficulty_panel.visible = false
+	menu_seed_panel.visible = true
+	menu_hint.text = ""
+	if seed_input != null:
+		seed_input.grab_focus()
+
+
+func _on_difficulty_back() -> void:
+	menu_difficulty_panel.visible = false
+	menu_title_panel.visible = true
+	menu_hint.text = ""
+
+
+func _on_seed_back() -> void:
+	menu_hint.text = ""
+	menu_seed_panel.visible = false
+	menu_difficulty_panel.visible = true
 
 
 func _hide_menu() -> void:
@@ -1254,7 +1465,9 @@ func _make_metric_row(metric: String) -> VBoxContainer:
 	vb.add_theme_constant_override("separation", 1)
 
 	var head := HBoxContainer.new()
+	head.add_theme_constant_override("separation", 4)
 	vb.add_child(head)
+	head.add_child(_make_icon(_icon_grid_for(metric), METRIC_COLORS[metric], 14))
 	head.add_child(_make_label(GameState.METRIC_NAMES[metric], 12, Color(0.95, 0.95, 0.95)))
 	var val := _make_label("0", 12, METRIC_COLORS[metric])
 	val.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -1290,7 +1503,8 @@ func _update_hud() -> void:
 	var year: int = int((t - 1) / 4) + 1
 	var season: String = SEASONS[(t - 1) % 4]
 	season_label.text = "第 %d 年 · %s" % [year, season]
-	funds_label.text = "资金：%d 万" % GameState.funds
+	spent_label.text = "已消耗：%d 万" % GameState.total_spent
+	funds_label.text = "%d 万" % GameState.funds
 	research_label.text = "科研点：%d" % GameState.research_points
 	event_label.text = _current_event if _current_event != "" else "暂无"
 	_update_selected_label()
@@ -1301,14 +1515,17 @@ func _on_event(text: String) -> void:
 	_current_event = text
 	_update_hud()
 	hand_panel.visible = false
+	bottom_right.visible = false
 	_show_popup("第 %d 回合 · 事件" % GameState.turn, text, "开始分配资金", _enter_allocate)
 
 
 func _enter_allocate() -> void:
+	_slide_side_panels(false)  # 新回合开始，侧边栏弹回
 	current_hand = GameState.draw_cards(7)
 	play_deal_anim = true
 	_build_hand_panel()
 	hand_panel.visible = true
+	bottom_right.visible = true
 
 
 func _build_hand_panel() -> void:
@@ -1374,7 +1591,7 @@ func _layout_fan() -> void:
 			max_y = maxf(max_y, p.y)
 
 	# 第三遍：整体平移 —— 水平居中于容器，底部贴边（留下上方空间供悬停弹起）
-	var bottom_margin := 10.0
+	var bottom_margin := 4.0
 	var dx: float = area_size.x / 2.0 - (min_x + max_x) / 2.0
 	var dy: float = (area_size.y - bottom_margin) - max_y
 	for i in n:
@@ -1654,6 +1871,8 @@ func _finish_turn() -> void:
 		lines.append("[color=#ffb060]⏳ 预警：%s[/color]" % GameState.pending_crisis["name"])
 
 	hand_panel.visible = false
+	bottom_right.visible = false
+	_slide_side_panels(true)  # 结算后侧边栏收回屏幕外，让出沙盘
 	_show_popup("结算反馈", "\n".join(lines), "继续", _on_resolve_continue)
 
 
@@ -1694,7 +1913,7 @@ func _show_report(r: Dictionary) -> void:
 	var body := ""
 	var title := "四年 · 生态报告"
 	if r.get("is_failure", false):
-		title = "生态崩溃 · 修复失败"
+		title = "被撤换 · 修复失败"
 		body += "[color=#ff7060][b]第 %d 回合，%s[/b][/color]\n\n" % [
 			r.get("turns_survived", 0), r.get("failure_reason", "生态崩溃")]
 		body += "你的修复工作被迫中止。这不是终点——换一个策略，再试一次。\n\n"
@@ -1737,18 +1956,20 @@ func _show_popup(title: String, body: String, button_text: String, on_continue: 
 	var tw2 := popup_panel.create_tween()
 	tw2.set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
 	tw2.tween_property(popup_panel, "scale", Vector2.ONE, 0.24)
-	# 正文逐字揭示（长文本慢一点，短文本快一点，上限 0.7s）
-	popup_body.visible_ratio = 0.0
-	var reveal_time: float = clampf(body.length() * 0.006, 0.25, 0.7)
+	# 正文打字机效果：逐字从左到右、从上到下依次打出
+	popup_body.visible_ratio = 1.0
+	popup_body.visible_characters = 0
+	var total := popup_body.get_total_character_count()
+	var reveal_time: float = clampf(total * 0.016, 0.3, 2.5)
 	var tw3 := popup_body.create_tween()
 	tw3.set_trans(Tween.TRANS_LINEAR)
-	tw3.tween_property(popup_body, "visible_ratio", 1.0, reveal_time).set_delay(0.1)
+	tw3.tween_property(popup_body, "visible_characters", total, reveal_time).set_delay(0.1)
 
 
 func _on_popup_button() -> void:
-	# 若正文还在逐字揭示中，第一次点击先把文字补全（避免误关）
-	if popup_body.visible_ratio < 1.0:
-		popup_body.visible_ratio = 1.0
+	# 若正文还在逐字打字中，第一次点击先把文字补全（避免误关）
+	if popup_body.visible_characters < popup_body.get_total_character_count():
+		popup_body.visible_characters = -1
 		return
 	popup_root.visible = false
 	var cb := _popup_continue
@@ -1761,7 +1982,7 @@ func _on_popup_button() -> void:
 func _make_label(text: String, size: int, color: Color) -> Label:
 	var l := Label.new()
 	l.text = text
-	l.add_theme_font_size_override("font_size", size)
+	l.add_theme_font_size_override("font_size", _snap_px(size))
 	l.add_theme_color_override("font_color", color)
 	return l
 
@@ -1769,7 +1990,7 @@ func _make_label(text: String, size: int, color: Color) -> Label:
 func _make_button(text: String, cb: Callable, size: int) -> Button:
 	var b := Button.new()
 	b.text = text
-	b.add_theme_font_size_override("font_size", size)
+	b.add_theme_font_size_override("font_size", _snap_px(size))
 	b.add_theme_color_override("font_color", Color(0.96, 0.90, 0.76))
 	b.add_theme_color_override("font_hover_color", Color(1.0, 0.95, 0.82))
 	b.add_theme_color_override("font_pressed_color", Color(0.90, 0.82, 0.66))
@@ -1813,3 +2034,155 @@ func _panel_style(p: PanelContainer, color: Color) -> void:
 	sb.content_margin_top = 10
 	sb.content_margin_bottom = 10
 	p.add_theme_stylebox_override("panel", sb)
+
+
+## 左侧/右侧信息面板滑出屏幕（结算后）或滑回（下一回合开始）
+func _slide_side_panels(out: bool) -> void:
+	if left_panel == null or right_panel == null:
+		return
+	var tw := create_tween()
+	tw.set_parallel(true)
+	tw.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_IN_OUT)
+	if out:
+		var lw := left_panel.offset_right - left_panel.offset_left
+		var rw := right_panel.offset_right - right_panel.offset_left
+		tw.tween_property(left_panel, "offset_left", -lw - 6, 0.35)
+		tw.tween_property(left_panel, "offset_right", -6, 0.35)
+		tw.tween_property(right_panel, "offset_left", -6, 0.35)
+		tw.tween_property(right_panel, "offset_right", rw - 6, 0.35)
+	else:
+		tw.tween_property(left_panel, "offset_left", 6, 0.35)
+		tw.tween_property(left_panel, "offset_right", 210, 0.35)
+		tw.tween_property(right_panel, "offset_left", -190, 0.35)
+		tw.tween_property(right_panel, "offset_right", -6, 0.35)
+
+
+# ==================== 像素图标 ====================
+## 从字符网格生成像素图标纹理（'#'=描边, 'X'=主色, 'o'=高光, '.'=透明）
+func _pixel_icon(grid: String, main: Color, dark: Color, light: Color) -> ImageTexture:
+	var rows: Array = []
+	for r in grid.split("\n"):
+		var line: String = (r as String).strip_edges()
+		if line != "":
+			rows.append(line)
+	var h := rows.size()
+	var w := (rows[0] as String).length()
+	var img := Image.create(w, h, false, Image.FORMAT_RGBA8)
+	for y in h:
+		var line: String = rows[y]
+		for x in w:
+			match line[x]:
+				"#": img.set_pixel(x, y, dark)
+				"X": img.set_pixel(x, y, main)
+				"o": img.set_pixel(x, y, light)
+				_: img.set_pixel(x, y, Color(0, 0, 0, 0))
+	return ImageTexture.create_from_image(img)
+
+
+## 生成指定显示尺寸的像素图标控件（最近邻放大保持锐利）
+func _make_icon(grid: String, main: Color, px: int) -> TextureRect:
+	var tr := TextureRect.new()
+	tr.texture = _pixel_icon(grid, main, main.darkened(0.38), main.lightened(0.32))
+	tr.custom_minimum_size = Vector2(px, px)
+	tr.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+	tr.stretch_mode = TextureRect.STRETCH_SCALE
+	tr.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	return tr
+
+
+## 各数值/指标对应的像素图标网格
+func _icon_grid_for(kind: String) -> String:
+	match kind:
+		"coin":
+			return """..####..
+.#XXXX#.
+#XooXXX#
+#XooXXX#
+#XXXXXX#
+#XXXXXX#
+.#XXXX#.
+..####.."""
+		"water_level":
+			return """...##...
+..#XX#..
+.#XooX#.
+.#XXXX#.
+.#XXXX#.
+..#XX#..
+...##...
+........"""
+		"vegetation":
+			return """....#...
+....##..
+..###X#.
+.###XX#.
+.###XX#.
+..###...
+....#...
+........"""
+		"water_quality":
+			return """...##...
+...##...
+..#XX#..
+.#XXXX#.
+#XXXXXX#
+#XXXXXX#
+.#XXXX#.
+..####.."""
+		"fish":
+			return """........
+..##....
+.####..#
+#######.
+.####..#
+..##....
+........
+........"""
+		"birds":
+			return """........
+..##....
+.#####.#
+#######.
+.####...
+..##....
+........
+........"""
+		"community":
+			return """........
+.##..##.
+#XX##XX#
+#XXXXXX#
+#XXXXXX#
+.#XXXX#.
+..####..
+...##..."""
+		"research":
+			return """........
+.#######
+.#######
+.#######
+.#.#.#.#
+.#######
+........
+........"""
+	return ""
+
+
+# ==================== 像素字体 ====================
+## 加载中文像素字体（缝合像素/融合像素，OFL 授权）并设为全局默认字体
+func _setup_pixel_font() -> void:
+	var zh := FontFile.new()
+	if zh.load_dynamic_font("res://fonts/fusion-pixel-12px-monospaced-zh_hans.ttf") != OK:
+		return
+	var latin := FontFile.new()
+	if latin.load_dynamic_font("res://fonts/fusion-pixel-12px-monospaced-latin.ttf") == OK:
+		zh.fallbacks = [latin]
+	# 关抗锯齿 + 整数像素对齐，保证像素字体锐利
+	zh.antialiasing = TextServer.FONT_ANTIALIASING_NONE
+	zh.subpixel_positioning = TextServer.SUBPIXEL_POSITIONING_DISABLED
+	ThemeDB.fallback_font = zh
+
+
+## 把字号吸附到像素字体的原生尺寸（12px 的整数倍），避免缩放发虚
+func _snap_px(s: int) -> int:
+	return maxi(12, int(round(s / 12.0)) * 12)
