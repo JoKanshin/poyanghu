@@ -156,11 +156,11 @@ func _build_3d() -> void:
 	# 棋盘网格线（生息演算式棋盘感）
 	_build_grid(lake_view)
 
-	# 草洲（8 块，主湖区中的草岛）
+	# 草洲（8 块，主湖区中的草岛，避开河流入湖口）
 	var grass_positions := [
-		Vector3(-7, 0.05, -3), Vector3(-3, 0.05, -3.5), Vector3(4.5, 0.05, -4),
-		Vector3(7.5, 0.05, -0.5), Vector3(2, 0.05, 0), Vector3(6.5, 0.05, 4),
-		Vector3(1.5, 0.05, 5.5), Vector3(-4, 0.05, 6),
+		Vector3(-5, 0.05, -1.5), Vector3(-1, 0.05, -2), Vector3(3.5, 0.05, -1.5),
+		Vector3(6, 0.05, 0.5), Vector3(1.5, 0.05, 1.5), Vector3(4.5, 0.05, 3.5),
+		Vector3(0, 0.05, 5), Vector3(-3.5, 0.05, 4.5),
 	]
 	for p in grass_positions:
 		var mi := MeshInstance3D.new()
@@ -633,8 +633,8 @@ func _build_grid(parent: Node3D) -> void:
 ## 湿地泥滩（浅水与草洲之间的过渡带，暖褐色）
 func _build_mudflats(parent: Node3D) -> void:
 	var positions := [
-		Vector3(-11, 0.03, 0), Vector3(11, 0.03, -1), Vector3(0, 0.03, -11),
-		Vector3(1, 0.03, 11), Vector3(-5, 0.03, 9), Vector3(5, 0.03, -9),
+		Vector3(-12, 0.03, 0), Vector3(12, 0.03, -2), Vector3(-3, 0.03, -12),
+		Vector3(3, 0.03, 12), Vector3(-9, 0.03, 7), Vector3(9, 0.03, -8),
 	]
 	for p in positions:
 		var mi := MeshInstance3D.new()
