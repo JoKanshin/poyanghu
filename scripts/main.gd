@@ -2259,11 +2259,12 @@ func _icon_grid_for(kind: String) -> String:
 # ==================== 像素字体 ====================
 ## 加载中文像素字体（缝合像素/融合像素，OFL 授权）并设为全局默认字体
 func _setup_pixel_font() -> void:
-	var zh := FontFile.new()
-	if zh.load_dynamic_font("res://fonts/fusion-pixel-12px-monospaced-zh_hans.ttf") != OK:
+	# 用 load() 读导入后的 FontFile，导出包（.pck）里也能正确加载
+	var zh: FontFile = load("res://fonts/fusion-pixel-12px-monospaced-zh_hans.ttf")
+	if zh == null:
 		return
-	var latin := FontFile.new()
-	if latin.load_dynamic_font("res://fonts/fusion-pixel-12px-monospaced-latin.ttf") == OK:
+	var latin: FontFile = load("res://fonts/fusion-pixel-12px-monospaced-latin.ttf")
+	if latin != null:
 		zh.fallbacks = [latin]
 	# 关抗锯齿 + 整数像素对齐，保证像素字体锐利
 	zh.antialiasing = TextServer.FONT_ANTIALIASING_NONE
