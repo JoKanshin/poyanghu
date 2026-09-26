@@ -156,11 +156,11 @@ func _build_3d() -> void:
 	# 棋盘网格线（生息演算式棋盘感）
 	_build_grid(lake_view)
 
-	# 草洲（8 块，湿地中的草岛）
+	# 草洲（8 块，主湖区中的草岛）
 	var grass_positions := [
-		Vector3(-6, 0.05, -5), Vector3(-4, 0.05, -6.5), Vector3(5.5, 0.05, -4),
-		Vector3(6.5, 0.05, 1.5), Vector3(-6.5, 0.05, 3.5), Vector3(3, 0.05, 5.5),
-		Vector3(0, 0.05, 6.5), Vector3(-5, 0.05, -1.5),
+		Vector3(-4.5, 0.05, -2), Vector3(-1.5, 0.05, -2.5), Vector3(4, 0.05, -2),
+		Vector3(5, 0.05, 0.5), Vector3(2, 0.05, 1.5), Vector3(4, 0.05, 3.5),
+		Vector3(0, 0.05, 4), Vector3(-3, 0.05, 3.5),
 	]
 	for p in grass_positions:
 		var mi := MeshInstance3D.new()
@@ -209,19 +209,19 @@ func _build_3d() -> void:
 	root.add_child.call_deferred(lake_view)
 
 
-## 构建鄱阳湖形水面：不规则多边形（北宽南窄、带南部通道），并注入河流
+## 构建鄱阳湖形水面：南宽北狭的「宝葫芦」形，北部狭长入江水道连长江
 func _build_lake_shape(parent: Node3D) -> void:
-	# 鄱阳湖轮廓（XZ 平面多边形，简化自真实湖形）
+	# 鄱阳湖轮廓（XZ 平面多边形，北为 -z，南为 +z；北窄为入江水道，南宽为主湖区）
 	var outline: PackedVector2Array = [
-		Vector2(-6.0, -6.5), Vector2(-4.0, -7.2), Vector2(-1.5, -7.4),
-		Vector2(1.5, -7.4), Vector2(4.0, -7.0), Vector2(6.0, -5.8),
-		Vector2(7.2, -3.8), Vector2(7.6, -1.2), Vector2(7.4, 1.2),
-		Vector2(6.4, 3.2), Vector2(5.0, 4.5), Vector2(3.0, 5.3),
-		Vector2(1.2, 5.7), Vector2(0.6, 6.4), Vector2(0.3, 7.1),
-		Vector2(0.0, 7.7), Vector2(-0.6, 7.4), Vector2(-1.2, 6.7),
-		Vector2(-2.0, 5.9), Vector2(-3.2, 5.2), Vector2(-5.0, 4.3),
-		Vector2(-6.4, 2.8), Vector2(-7.2, 0.8), Vector2(-7.6, -1.7),
-		Vector2(-7.4, -4.2), Vector2(-6.6, -5.5),
+		Vector2(-1.0, -11.0), Vector2(1.0, -11.0),
+		Vector2(1.3, -8.5), Vector2(1.6, -5.5), Vector2(2.0, -4.0),
+		Vector2(5.0, -3.5), Vector2(6.5, -2.0), Vector2(7.2, 0.0),
+		Vector2(6.8, 2.0), Vector2(5.5, 3.5), Vector2(4.0, 4.8),
+		Vector2(2.0, 5.5), Vector2(0.6, 5.8), Vector2(-0.6, 5.8),
+		Vector2(-2.0, 5.5), Vector2(-4.0, 4.8), Vector2(-5.5, 3.5),
+		Vector2(-6.8, 2.0), Vector2(-7.2, 0.0), Vector2(-6.5, -2.0),
+		Vector2(-5.0, -3.5), Vector2(-2.0, -4.0), Vector2(-1.6, -5.5),
+		Vector2(-1.3, -8.5),
 	]
 	lake_mesh = _make_flat_polygon(outline, 0.08, lake_mat)
 	lake_mesh.name = "PoyangLake"
@@ -229,26 +229,39 @@ func _build_lake_shape(parent: Node3D) -> void:
 	_build_rivers(parent)
 
 
-## 河流：细长水面条带，注入湖体（赣江/修水/饶河/信江）
+## 河流：长江（北，自西向东）+ 赣江（南，自南向北）+ 修水/饶河
 func _build_rivers(parent: Node3D) -> void:
-	var rivers := [
-		{"a": Vector2(0.0, 7.6), "b": Vector2(0.0, 15.0), "w": 1.6},      # 赣江（南）
-		{"a": Vector2(-7.0, -5.5), "b": Vector2(-14.0, -10.0), "w": 1.2}, # 修水（西北）
-		{"a": Vector2(7.4, -0.5), "b": Vector2(13.5, 0.0), "w": 1.1},     # 饶河（东）
-		{"a": Vector2(5.6, 4.0), "b": Vector2(12.0, 10.0), "w": 1.0},     # 信江（东南）
-	]
-	for r in rivers:
-		var a: Vector2 = r["a"]
-		var b: Vector2 = r["b"]
-		var w: float = r["w"]
-		var d: Vector2 = (b - a).normalized()
-		var p: Vector2 = Vector2(-d.y, d.x)  # 垂直方向
-		var quad: PackedVector2Array = [
-			a + p * w * 0.5, a - p * w * 0.5, b - p * w * 0.3, b + p * w * 0.3,
-		]
-		var river := _make_flat_polygon(quad, 0.08, lake_mat)
-		river.name = "River"
-		parent.add_child(river)
+	# 长江：北侧横向大河，湖体北口（入江水道 z=-11）汇入其中
+	var yangtze := _make_flat_polygon(PackedVector2Array([
+		Vector2(-16.0, -12.0), Vector2(16.0, -12.0),
+		Vector2(16.0, -10.0), Vector2(-16.0, -10.0),
+	]), 0.08, lake_mat)
+	yangtze.name = "Yangtze"
+	parent.add_child(yangtze)
+
+	# 赣江：南侧，自南向北注入湖体南部（第一大支流）
+	var gan := _make_flat_polygon(PackedVector2Array([
+		Vector2(-0.9, 5.0), Vector2(0.9, 5.0),
+		Vector2(0.7, 14.0), Vector2(-0.7, 14.0),
+	]), 0.08, lake_mat)
+	gan.name = "GanRiver"
+	parent.add_child(gan)
+
+	# 修水：西北注入
+	var xiu := _make_flat_polygon(PackedVector2Array([
+		Vector2(-4.4, -3.2), Vector2(-3.2, -3.8),
+		Vector2(-11.0, -8.5), Vector2(-12.6, -9.0),
+	]), 0.08, lake_mat)
+	xiu.name = "XiuRiver"
+	parent.add_child(xiu)
+
+	# 饶河：东侧注入
+	var rao := _make_flat_polygon(PackedVector2Array([
+		Vector2(6.2, 2.0), Vector2(7.2, 0.8),
+		Vector2(13.5, 1.6), Vector2(13.0, 3.2),
+	]), 0.08, lake_mat)
+	rao.name = "RaoRiver"
+	parent.add_child(rao)
 
 
 ## 用多边形构建一块平面水面（在 y 平面，unshaded 水面材质）
