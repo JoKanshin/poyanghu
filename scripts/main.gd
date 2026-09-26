@@ -216,15 +216,15 @@ func _build_3d() -> void:
 func _build_lake_shape(parent: Node3D) -> void:
 	# 鄱阳湖轮廓（XZ 平面多边形，北为 -z，南为 +z；北窄为入江水道，南宽为主湖区）
 	var outline: PackedVector2Array = [
-		Vector2(-2.0, -14.0), Vector2(2.0, -14.0),
-		Vector2(2.4, -11.0), Vector2(2.8, -8.0), Vector2(3.4, -5.5),
+		Vector2(-2.0, -15.5), Vector2(2.0, -15.5),
+		Vector2(2.4, -11.5), Vector2(2.8, -8.0), Vector2(3.4, -5.5),
 		Vector2(6.5, -5.0), Vector2(8.5, -3.0), Vector2(9.4, 0.0),
 		Vector2(9.0, 3.0), Vector2(7.6, 5.5),
 		Vector2(5.8, 7.6), Vector2(3.4, 8.4), Vector2(0.0, 8.9),
 		Vector2(-3.4, 8.4), Vector2(-5.8, 7.6),
 		Vector2(-7.6, 5.5), Vector2(-9.0, 3.0), Vector2(-9.4, 0.0),
 		Vector2(-8.5, -3.0), Vector2(-6.5, -5.0),
-		Vector2(-3.4, -5.5), Vector2(-2.8, -8.0), Vector2(-2.4, -11.0),
+		Vector2(-3.4, -5.5), Vector2(-2.8, -8.0), Vector2(-2.4, -11.5),
 	]
 	lake_mesh = _make_flat_polygon(outline, 0.08, lake_mat)
 	lake_mesh.name = "PoyangLake"
@@ -268,7 +268,7 @@ func _build_rivers(parent: Node3D) -> void:
 
 	# 赣江：南侧，自南向北注入湖体南部（第一大支流，与长江近垂直）
 	var gan_center := PackedVector2Array([
-		Vector2(0.0, 8.0), Vector2(0.0, 13.0), Vector2(0.0, 18.0), Vector2(0.0, 22.0),
+		Vector2(0.0, 6.0), Vector2(0.0, 13.0), Vector2(0.0, 18.0), Vector2(0.0, 22.0),
 	])
 	var gan := _make_flat_polygon(_river_outline(gan_center, 1.8), 0.08, lake_mat)
 	gan.name = "GanRiver"
