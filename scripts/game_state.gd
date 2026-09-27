@@ -872,6 +872,7 @@ func reset_game() -> void:
 		run_seed = randi()
 	seed(run_seed)
 	metrics = _roll_starting_metrics()
+	_guard_starting_metrics()
 	_sync_species()
 	_sync_plants()
 	start_new_turn()
@@ -909,6 +910,16 @@ func _roll_starting_metrics() -> Dictionary:
 	var weak: String = weak_keys[_randi_range(0, weak_keys.size() - 1)]
 	out[weak] = clampi(out[weak] - 12, floor, 88)
 	return out
+
+
+## 开局不该"站在悬崖上"：任何低于「该项致死线 + 2」的开局值都抬上来。
+## 背景：困难档社区信任致死线是 50、而开局下限只有 48 → 实测 9.3% 的局
+## 玩家还没出手就在第一回合被判负（必现的 bug 级体验，且与"难度"无关）。
+func _guard_starting_metrics() -> void:
+	for m in metrics.keys():
+		var safe: int = failure_threshold_for(str(m)) + 2
+		if int(metrics[m]) < safe:
+			metrics[m] = safe
 
 
 ## 将物种数量同步到目标值（由驱动指标决定）
@@ -985,7 +996,7 @@ func _resolve_pending_crisis() -> void:
 	_mark_warning_hit(str(c["id"]), turn)
 	_add_log("⚠ %s" % c["hit"])
 	for e in c["effects"]:
-		_apply_delta(e["metric"], e["delta"])
+		_apply_delta(e["metric"], e["delta"], false)   # 危机伤害不叠负向倍率，见 _apply_delta 注释
 		_add_log("   %s %+d" % [METRIC_NAMES[e["metric"]], e["delta"]])
 	if c.has("settlement"):
 		_apply_settlement(c["settlement"])
@@ -1456,11 +1467,15 @@ func _eval_condition(cond: String) -> bool:
 	return false
 
 
-func _apply_delta(metric: String, delta: int) -> void:
+## 指标增减。apply_penalty = false 时不吃「负向倍率」（危机伤害走这条路）。
+func _apply_delta(metric: String, delta: int, apply_penalty: bool = true) -> void:
 	if not metrics.has(metric):
 		return
-	# 扣分（负向变动）惩罚加成，倍率随难度递增
-	if delta < 0:
+	# 扣分（负向变动）惩罚加成，倍率随难度递增。
+	# ⚠ 危机伤害**不吃**这个倍率：危机数值（-14 之类）本身就是设计好的惩罚，
+	#   再乘 1.5 / 2.0 会让困难档"任何一次危机都是一击必杀"——对策卡给的是正向数值
+	#   （正向不乘倍率），+8 永远追不上 -28，"预警 → 对策卡 → 应对"的核心循环就废了。
+	if delta < 0 and apply_penalty:
 		delta = roundi(delta * PENALTY_MULT[difficulty])
 	metrics[metric] = clampi(metrics[metric] + delta, 0, 100)
 
