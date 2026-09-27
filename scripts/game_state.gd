@@ -506,7 +506,9 @@ const KNOWLEDGE_CARDS := {
 
 # ==================== 危机事件池（肉鸽随机性核心）====================
 # 每回合有概率抽中危机；危机提前 1 回合预警，下回合生效。
-# weight：基础权重；cond：满足时权重翻倍，让危机与当前生态状态呼应。
+# weight：同一轮候选之间的相对权重；cond：只有当前状态吻合的危机才会进入候选。
+# 防连出与冷却：刚爆发的那个不会紧接着再来；爆发过的在 CRISIS_COOLDOWN_TURNS 回合内不再抽中。
+const CRISIS_COOLDOWN_TURNS := 3
 const CRISES := [
 	{
 		"id": "drought", "name": "极端干旱", "weight": 1.0, "cond": "water_level < 45",
@@ -688,6 +690,7 @@ var difficulty: int = Difficulty.EASY   # 当前难度档位（主菜单选择�
 var floating_islands: int = 0       # 人工浮岛数量（视觉表现，0=无）
 var pending_crisis: Dictionary = {} # 待爆发的危机（本回合预警，下回合生效）
 var last_crisis_name: String = ""   # 上回合爆发的危机名（用于结算展示）
+var crisis_history: Array = []      # 已爆发的危机 [{id, turn}]，防连出与冷却的依据
 var triggered_synergies: Array = [] # 本回合触发的协同
 var _fired_synergies: Array = []    # 本局已触发过的协同（防重复）
 var is_failure: bool = false        # 是否因生态崩溃提前结束
@@ -728,6 +731,7 @@ func serialize() -> Dictionary:
 		"difficulty": difficulty, "floating_islands": floating_islands,
 		"pending_crisis": pending_crisis.duplicate(true),
 		"last_crisis_name": last_crisis_name,
+		"crisis_history": crisis_history.duplicate(true),
 		"triggered_synergies": triggered_synergies.duplicate(),
 		"fired_synergies": _fired_synergies.duplicate(),
 		"is_failure": is_failure, "failure_reason": failure_reason,
@@ -757,6 +761,7 @@ func load_state(d: Dictionary) -> void:
 	floating_islands = int(d.get("floating_islands", 0))
 	pending_crisis = d.get("pending_crisis", {})
 	last_crisis_name = str(d.get("last_crisis_name", ""))
+	crisis_history = d.get("crisis_history", [])
 	triggered_synergies = d.get("triggered_synergies", [])
 	_fired_synergies = d.get("fired_synergies", [])
 	is_failure = bool(d.get("is_failure", false))
@@ -789,6 +794,7 @@ func reset_game() -> void:
 	game_over = false
 	pending_crisis = {}
 	last_crisis_name = ""
+	crisis_history = []
 	triggered_synergies = []
 	_fired_synergies = []
 	is_failure = false
@@ -910,6 +916,7 @@ func _resolve_pending_crisis() -> void:
 	var c: Dictionary = pending_crisis
 	pending_crisis = {}
 	last_crisis_name = c["name"]
+	crisis_history.append({"id": c["id"], "turn": turn})   # 防连出 / 冷却的依据
 	_add_log("⚠ %s" % c["hit"])
 	for e in c["effects"]:
 		_apply_delta(e["metric"], e["delta"])
@@ -943,15 +950,23 @@ func _maybe_warn_crisis() -> void:
 	# 加权抽选：只抽「当前状态真的吻合」的危机
 	# 预警文案会引用当前值与警戒线（如「水质 90，警戒线 55」），若状态不吻合
 	# 就会在安全区报警、自相矛盾 —— 所以这里必须硬性过滤，而不只是加权。
+	# 再叠一层「防连出 + 冷却」：
+	#   防连出 = 本回合刚爆发过的绝不连着再出（与冷却常量无关，永远生效）
+	#   冷却   = 爆发过的在 CRISIS_COOLDOWN_TURNS 回合内不再进候选
+	# 两条都过滤完之后候选为空 → 本回合不预警，把喘息空间真的留给玩家。
 	var pool: Array = []
 	var total_w := 0.0
 	for c in CRISES:
 		if not _eval_condition_simple(c["cond"]):
 			continue
+		if _crisis_hit_this_turn(c["id"]):
+			continue
+		if _crisis_cooldown_left(c["id"]) > 0:
+			continue
 		pool.append(c)
 		total_w += c["weight"]
 	if pool.is_empty():
-		return  # 六项指标都在安全区 → 本回合不预警
+		return  # 候选不是刚出过就是还在冷却 → 本回合不预警，让玩家喘一口气
 	var roll := randf() * total_w
 	for c in pool:
 		roll -= c["weight"]
@@ -959,6 +974,23 @@ func _maybe_warn_crisis() -> void:
 			pending_crisis = c
 			crisis_warned.emit(pending_crisis)
 			return
+
+
+## 该危机还剩几回合冷却（>0 = 冷却中，不许再抽中）
+func _crisis_cooldown_left(id: String) -> int:
+	var left := 0
+	for h in crisis_history:
+		if str(h["id"]) == id:
+			left = maxi(left, CRISIS_COOLDOWN_TURNS - (turn - int(h["turn"])))
+	return left
+
+
+## 该危机是不是「本回合刚刚爆发过」（防连出的硬底线）
+func _crisis_hit_this_turn(id: String) -> bool:
+	for h in crisis_history:
+		if str(h["id"]) == id and int(h["turn"]) == turn:
+			return true
+	return false
 
 
 ## 简易条件求值（复用知识卡的表达式风格）
