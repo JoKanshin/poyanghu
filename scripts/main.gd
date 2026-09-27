@@ -16,6 +16,13 @@ const CATEGORY_COLORS := {
 	"manage": Color(0.56, 0.66, 0.90),
 }
 const SEASONS := ["春", "夏", "秋", "冬"]
+const CATEGORY_ORDER := ["ecology", "social", "manage"]
+# 苦力怕彩蛋（左上角草地，lake_view 局部坐标）
+const CREEPER_X := -45.0
+const CREEPER_Z := 4.0
+const CREEPER_SIZE := 12.0   # 贴图宽度（高度按图片宽高比自动算）
+const CREEPER_CHANCE := 0.1  # 进入主菜单时出现的概率
+var creeper_mesh: MeshInstance3D = null
 
 # UI 节点
 var left_panel: PanelContainer
@@ -50,6 +57,7 @@ var _current_event: String = ""
 var menu_root: Control
 var menu_col: VBoxContainer            # 左下角选项列
 var menu_start_btn: Button
+var menu_easy_btn: Button
 var menu_normal_btn: Button
 var menu_hard_btn: Button
 var menu_back_btn: Button
@@ -63,10 +71,71 @@ var menu_mode_label: Label
 var seed_input: LineEdit
 var menu_hint: Label
 var menu_talent_panel: PanelContainer
+var menu_settings_panel: PanelContainer
+var menu_credits_panel: PanelContainer
+
+# 音频 / BGM
+var bgm_player: AudioStreamPlayer
+var bgm_index: int = 1
+var bgm_volume: float = 0.8
+var audio_volume_slider: HSlider
+var audio_volume_label: Label
+var bgm_switch_btn: Button
+var pause_settings_panel: PanelContainer
+var pause_volume_slider: HSlider
+var pause_volume_label: Label
+var pause_bgm_btn: Button
+const BGM_PATHS := ["res://assets/audio/poyanghu.mp3", "res://assets/audio/poyanghunaiyu.mp3"]
+const BGM_NAMES := ["鄱阳湖", "评委审核版"]
+const AUDIO_SETTINGS_PATH := "user://settings.json"
 var menu_camera_far: bool = false      # 开始页期间镜头拉远看全景
 var talent_points_label: Label
 var talent_list: VBoxContainer
 var talent_unlock_btn: Button
+var menu_continue_btn: Button
+
+# 暂停 / 存档
+var pause_root: Control
+var pause_panel: PanelContainer
+var pause_hint: Label
+var _paused: bool = false
+var _playing: bool = false
+var _current_phase: String = "allocate"
+const SAVE_PATH = "user://savegame.json"
+
+# 危机警示（大红叹号 + 红屏闪烁 + 雷霆大字）
+var crisis_root: Control
+var crisis_dim: ColorRect
+var crisis_icon: TextureRect
+var crisis_title: Label
+var crisis_tag: Label
+var crisis_body: RichTextLabel
+var crisis_button: Button
+var _crisis_queue: Array = []   # 危机弹窗队列 {crisis, is_warning}
+
+# 牌库 UI（牌堆）
+var deck_root: Control            # 牌堆容器（右面板下方）
+var deck_border: Control          # 黄色外框（悬停时显示，自绘贴牌形状）
+var deck_backs: Array = []        # 叠放的牌背（TextureRect）
+var _deck_hovered: bool = false
+var card_back_tex: Texture2D
+var deck_viewer: Control          # 牌库查看器（全屏弹层）
+var deck_viewer_grid: HFlowContainer
+var _deck_open: bool = false
+var card_detail: Control          # 卡牌详情弹层（点击查看：左大牌 + 右介绍）
+var card_detail_card: CenterContainer  # 左侧大牌容器
+var card_detail_title: Label
+var card_detail_body: RichTextLabel
+var _detail_big_card: Control = null   # 当前详情大牌（用于重开时清理）
+var _ui_slide_tweens: Array = []       # 牌库开合时收放主界面的 tween
+var _ui_slide_origin: Dictionary = {}  # Control -> [l, t, r, b] 初始 offset
+var deck_sort_btn: Button             # 排序切换按钮（互旋箭头）
+var _deck_sort_by_category: bool = true  # true=按类别，false=按费用；默认按类别
+var _sort_animating: bool = false
+var _sort_cooldown_ms: int = -6000   # 上次排序的时间戳，锁死两次切换最低间隔
+const SORT_COOLDOWN_MS := 5000
+var _deck_viewports: Array = []       # 牌库卡牌的 SubViewport（重建时清理）
+var _deck_gyro_view: Control = null   # 当前鼠标悬停的牌库卡牌（只对它做陀螺仪）
 
 # 3D 表现节点
 var lake_mesh: MeshInstance3D
@@ -76,15 +145,33 @@ var grass_nodes: Array = []
 var grass_mats: Array = []
 var bird_nodes: Array = []
 var fish_nodes: Array = []
+var boats: Array = []   # 长江行船 [{rig, x, speed, dir}]
 var island_nodes: Array = []      # 人工浮岛节点
-var house_slots: Array = []       # 每项 {"house": Node3D, "reeds": Node3D, "mats": Array}
+var house_slots: Array = []       # 每项 {"house": Node3D, "sprite": Sprite3D, "reeds": Node3D}
 var species_views: Dictionary = {}  # sid -> {rigs[], bases[], states[], timers[], targets[]}
 var plant_views: Dictionary = {}    # pid -> {meshes[], kind}
 var plant_positions: Dictionary = {} # pid -> Array[Vector3]  每局随机散落的位置
 var _plant_pos_seed: int = -1        # 已生成位置对应的种子，换局时重新散落
 
+# 开场像素 PPT（Undertale 风：首次游玩讲背景）
+var intro_layer: CanvasLayer = null
+var intro_root: Control = null
+var intro_col: VBoxContainer = null
+var intro_image: TextureRect = null
+var intro_title: Label = null
+var intro_body: Label = null
+var intro_hint: Label = null
+var intro_slides: Array = []
+var intro_index: int = 0
+var _intro_playing: bool = false
+var _intro_elapsed: float = 0.0
+var _intro_advancing: bool = false
+const INTRO_SLIDE_SEC := 5.0
+
 
 func _ready() -> void:
+	_load_audio_settings()
+	_setup_bgm()
 	_setup_pixel_font()
 	_setup_camera()
 	_build_3d()
@@ -94,12 +181,17 @@ func _ready() -> void:
 	GameState.metrics_changed.connect(_update_3d)
 	GameState.funds_changed.connect(_update_hud)
 	GameState.event_triggered.connect(_on_event)
+	GameState.crisis_warned.connect(_on_crisis_warn)
+	GameState.crisis_hit.connect(_on_crisis_hit)
 	GameState.game_ended.connect(_on_game_end)
 	# 窗口尺寸/全屏变化时自适应相机，避免全屏后沙盘被裁或留黑边
 	get_viewport().size_changed.connect(_fit_camera_to_window)
 	_fit_camera_to_window()
-	# 再显示开始页：镜头在此推远展示全景，玩家选完难度与种子才真正开局
-	_show_menu()
+	# 首次游玩先放开场 PPT；老玩家直接进主菜单
+	if _is_first_play():
+		_show_intro()
+	else:
+		_show_menu()
 
 
 ## 开始页期间镜头拉远的倍率（正交 size 越大 = 视野越广）
@@ -237,8 +329,14 @@ func _build_3d() -> void:
 	# 渔村（湖边一排房子）
 	_build_village(lake_view)
 
+	# 长江行船（装饰性，沿长江缓缓往返）
+	_build_boats(lake_view)
+
 	# 远景布景草地（环绕沙盘的低多边形起伏草原，不参与游戏交互）
 	_build_backdrop_grass(lake_view)
+
+	# 彩蛋：左上角草地刻一个 Minecraft 苦力怕的脸
+	_build_creeper_easter_egg(lake_view)
 
 	# 延迟挂到场景，避免父节点初始化期 add_child 冲突
 	var root := get_parent() as Node3D
@@ -287,22 +385,26 @@ func _river_outline(center: PackedVector2Array, width: float) -> PackedVector2Ar
 	return outline
 
 
+## 长江中心线的 z 坐标（随 x 蜿蜒），生成河面与压平地形的公共基准
+func _yangtze_z(x: float) -> float:
+	return -14.5 + sin(x * 0.16) * 1.0 + sin(x * 0.043 + 1.3) * 0.7
+
+
 ## 河流：长江（北，蜿蜒自西向东）+ 赣江（南，自南向北，与之垂直）+ 修水/饶河
 func _build_rivers(parent: Node3D) -> void:
-	# 长江：北侧蜿蜒大河，湖体北口（入江水道 z=-14）汇入其中
-	var yangtze_center := PackedVector2Array([
-		Vector2(-18.0, -14.0), Vector2(-13.0, -15.5), Vector2(-8.0, -13.5),
-		Vector2(-3.0, -15.0), Vector2(2.0, -13.8), Vector2(7.0, -15.2),
-		Vector2(12.0, -13.6), Vector2(18.0, -14.8),
-	])
+	# 长江：北侧蜿蜒大河，湖体北口（入江水道 z=-14）汇入其中；两端延伸出镜头
+	var yangtze_center := PackedVector2Array()
+	for i in range(-75, 61, 5):
+		var x := float(i)
+		yangtze_center.append(Vector2(x, _yangtze_z(x)))
 	var yangtze := _make_flat_polygon(_river_outline(yangtze_center, 2.6), 0.08, lake_mat)
 	yangtze.name = "Yangtze"
 	parent.add_child(yangtze)
 
-	# 赣江：南侧，自南向北注入湖体南部（第一大支流，与长江近垂直）
-	var gan_center := PackedVector2Array([
-		Vector2(0.0, 6.0), Vector2(0.0, 13.0), Vector2(0.0, 18.0), Vector2(0.0, 22.0),
-	])
+	# 赣江：南侧，自南向北注入湖体南部（第一大支流，与长江近垂直）；南端延伸出镜头
+	var gan_center := PackedVector2Array()
+	for i in range(6, 61, 4):
+		gan_center.append(Vector2(0.0, float(i)))
 	var gan := _make_flat_polygon(_river_outline(gan_center, 1.8), 0.08, lake_mat)
 	gan.name = "GanRiver"
 	parent.add_child(gan)
@@ -322,6 +424,73 @@ func _build_rivers(parent: Node3D) -> void:
 	var rao := _make_flat_polygon(_river_outline(rao_center, 1.0), 0.08, lake_mat)
 	rao.name = "RaoRiver"
 	parent.add_child(rao)
+
+
+# ==================== 长江行船 ====================
+## 生成几艘在长江上缓缓往返的船（装饰，不参与游戏交互）
+func _build_boats(parent: Node3D) -> void:
+	var configs := [
+		{"x": -60.0, "speed": 3.2, "dir": 1.0},
+		{"x": 18.0, "speed": 2.4, "dir": -1.0},
+		{"x": 44.0, "speed": 3.8, "dir": 1.0},
+	]
+	for c in configs:
+		var rig := _make_boat()
+		var x: float = c["x"]
+		var z: float = _yangtze_z(x)
+		rig.position = Vector3(x, 0.12, z)
+		parent.add_child(rig)
+		boats.append({"rig": rig, "x": x, "speed": c["speed"], "dir": c["dir"]})
+
+
+## 单艘船的模型：棕色船体 + 船舱 + 桅杆（船头朝 +Z）
+func _make_boat() -> Node3D:
+	var boat := Node3D.new()
+	var hull := MeshInstance3D.new()
+	var hm := BoxMesh.new()
+	hm.size = Vector3(0.75, 0.32, 1.9)  # 宽(x) × 高(y) × 长(z，船头朝 +z)
+	hull.mesh = hm
+	hull.material_override = _mat(Color(0.48, 0.34, 0.24))
+	hull.position = Vector3(0, 0.16, 0)
+	boat.add_child(hull)
+	var cabin := MeshInstance3D.new()
+	var cm := BoxMesh.new()
+	cm.size = Vector3(0.6, 0.5, 0.7)
+	cabin.mesh = cm
+	cabin.material_override = _mat(Color(0.62, 0.46, 0.32))
+	cabin.position = Vector3(0, 0.5, -0.35)  # 靠后（-z）
+	boat.add_child(cabin)
+	var mast := MeshInstance3D.new()
+	var mm := CylinderMesh.new()
+	mm.top_radius = 0.03
+	mm.bottom_radius = 0.05
+	mm.height = 0.9
+	mast.mesh = mm
+	mast.material_override = _mat(Color(0.35, 0.28, 0.22))
+	mast.position = Vector3(0, 0.75, 0.2)
+	boat.add_child(mast)
+	return boat
+
+
+## 长江行船漂移：沿长江中心线缓行，驶出边界后从另一端折返
+func _process_boats(delta: float) -> void:
+	for b in boats:
+		var rig: Node3D = b["rig"]
+		var x: float = b["x"] + b["speed"] * b["dir"] * delta
+		if x > 61.0:
+			x = -76.0
+		elif x < -76.0:
+			x = 61.0
+		b["x"] = x
+		# 河流切向 / 垂向：相向而行的船分走河道两侧「车道」，避免会船时穿模
+		var dz: float = _yangtze_z(x + 0.6) - _yangtze_z(x - 0.6)
+		var tangent := Vector2(1.0, dz).normalized()
+		var normal := Vector2(-tangent.y, tangent.x)
+		var lane: float = 0.5 * float(b["dir"])
+		var zc: float = _yangtze_z(x)
+		rig.position = Vector3(x + normal.x * lane, 0.12, zc + normal.y * lane)
+		# 朝向河水流向（船头 +Z 对准切线方向）
+		rig.rotation.y = atan2(b["dir"], dz * b["dir"])
 
 
 ## 用多边形构建一块平面水面（在 y 平面，unshaded 水面材质）
@@ -415,6 +584,8 @@ func _build_backdrop_grass(parent: Node3D) -> void:
 		var dist := rng.randf_range(24.0, 82.0)  # 只在沙盘(±18)之外
 		var x := cos(ang) * dist
 		var z := sin(ang) * dist
+		if _in_river_zone(x, z) or _in_creeper_zone(x, z):
+			continue
 		tree_spots.append(Vector3(x, _backdrop_height(x, z), z))
 	for p in tree_spots:
 		var t := _make_backdrop_tree(rng)
@@ -427,6 +598,8 @@ func _build_backdrop_grass(parent: Node3D) -> void:
 		var dist := rng.randf_range(22.0, 85.0)
 		var x := cos(ang) * dist
 		var z := sin(ang) * dist
+		if _in_river_zone(x, z) or _in_creeper_zone(x, z):
+			continue
 		var bush := MeshInstance3D.new()
 		var bm := SphereMesh.new()
 		bm.radius = rng.randf_range(0.7, 1.4)
@@ -438,17 +611,74 @@ func _build_backdrop_grass(parent: Node3D) -> void:
 		backdrop.add_child(bush)
 
 
+## 是否处于河流走廊内（长江/赣江水面 + 河岸），用于让远景树/灌木避开河道
+func _in_river_zone(x: float, z: float) -> bool:
+	if x > -77.0 and x < 62.0 and absf(z - _yangtze_z(x)) < 4.0:
+		return true
+	if z > 5.0 and z < 61.0 and absf(x) < 4.0:
+		return true
+	return false
+
+
+## 是否处于苦力怕彩蛋区域，用于让远景树/灌木避开
+func _in_creeper_zone(x: float, z: float) -> bool:
+	return Vector2(x - CREEPER_X, z - CREEPER_Z).length() < 7.0
+
+
 ## 远景地形高度：几层正弦叠加，形成平缓起伏（距离沙盘越远越不必精确）
 func _backdrop_height(x: float, z: float) -> float:
 	var h := sin(x * 0.11) * cos(z * 0.13) * 1.6
 	h += sin(x * 0.31 + 1.7) * cos(z * 0.27 - 0.6) * 0.55
 	h += sin(x * 0.63 - 0.4) * cos(z * 0.58 + 2.1) * 0.22
+	# 河流走廊压平到河床高度，避免延伸出的河面被起伏地形掩埋
+	var yangtze_d := absf(z - _yangtze_z(x))
+	if x > -77.0 and x < 62.0 and yangtze_d < 4.0:
+		h = lerpf(-0.28, h, clampf((yangtze_d - 2.2) / 1.8, 0.0, 1.0))
+	elif z > 5.0 and z < 61.0 and absf(x) < 4.0:
+		h = lerpf(-0.28, h, clampf((absf(x) - 1.8) / 2.2, 0.0, 1.0))
+	# 苦力怕彩蛋草地压平，保证脸平整贴地
+	var creeper_d := Vector2(x - CREEPER_X, z - CREEPER_Z).length()
+	if creeper_d < 8.0:
+		h = lerpf(-0.28, h, clampf((creeper_d - 5.0) / 3.0, 0.0, 1.0))
 	# 靠近沙盘（半径 22 内）压平并下沉，与沙盘地面平滑衔接
 	var d := Vector2(x, z).length()
 	if d < 26.0:
 		var t := clampf((d - 20.0) / 6.0, 0.0, 1.0)
 		h = lerpf(-0.28, h, t)
 	return h
+
+
+## 彩蛋：左上角草地贴一张苦力怕脸（用素材图片，已抠掉亮绿背景）
+func _build_creeper_easter_egg(parent: Node3D) -> void:
+	# 优先走导入资源（导出打包也能用），失败则直接读文件
+	var tex: Texture2D = load("res://assets/creeper.png")
+	if tex == null:
+		var img := Image.load_from_file("res://assets/creeper.png")
+		if img == null:
+			return
+		tex = ImageTexture.create_from_image(img)
+	var mat := StandardMaterial3D.new()
+	mat.albedo_texture = tex
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL  # 与草地同受光照，头部才能和草地同色
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	var mi := MeshInstance3D.new()
+	var pm := PlaneMesh.new()
+	var aspect := float(tex.get_width()) / float(tex.get_height())
+	pm.size = Vector2(CREEPER_SIZE, CREEPER_SIZE / aspect)
+	mi.mesh = pm
+	mi.material_override = mat
+	# 草地压平后高度为 -0.28（顶点）+ 节点 -0.28，脸贴在其上略微抬高避免 z-fighting
+	mi.position = Vector3(CREEPER_X, -0.28 + _backdrop_height(CREEPER_X, CREEPER_Z) + 0.02, CREEPER_Z)
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	parent.add_child(mi)
+	creeper_mesh = mi
+
+
+## 苦力怕彩蛋按概率显示（每次进入主菜单重掷）
+func _roll_creeper_visibility() -> void:
+	if creeper_mesh != null:
+		creeper_mesh.visible = randf() < CREEPER_CHANCE
 
 
 ## 远景树：低多边形锥形树（随机高矮胖瘦）
@@ -530,50 +760,53 @@ func _make_floating_island() -> Node3D:
 ## 湖边社区：房子数量随用地（settlement）增减，原地拆除处长出湿地芦苇；颜色随社区信任度明暗变化
 func _build_village(parent: Node3D) -> void:
 	var house_positions := [
-		Vector3(-11, 0, -7), Vector3(-12.5, 0, -5.2), Vector3(-13, 0, -3.4),
+		Vector3(-13, 0, -6.5), Vector3(-12.5, 0, -5.2), Vector3(-13, 0, -3.4),
 		Vector3(-12.2, 0, -1.6), Vector3(-10.6, 0, 0.2),   # 原有 5 栋（离湖较远）
-		Vector3(-9.0, 0, -4.2), Vector3(-8.0, 0, -1.0),    # 新增 2 栋（侵占，靠湖）
+		Vector3(-9.5, 0, -4.2), Vector3(-10.2, 0, -0.6),   # 新增 2 栋（侵占，靠湖，落在岸上）
 	]
-	for p in house_positions:
-		var house := _make_house()
+	# 美术素材：四款房屋循环使用，营造村庄错落感
+	var house_tex_paths := [
+		"res://assets/houses/house1.png",
+		"res://assets/houses/house2.png",
+		"res://assets/houses/house3.png",
+		"res://assets/houses/house4.png",
+	]
+	for i in house_positions.size():
+		var p: Vector3 = house_positions[i]
+		var house := _make_house(house_tex_paths[i % house_tex_paths.size()])
 		house.position = p
 		parent.add_child(house)
 		var reeds := _make_reed_clump()
 		reeds.position = p
 		reeds.visible = false
 		parent.add_child(reeds)
-		house_slots.append({
-			"house": house, "reeds": reeds, "mats": _collect_mats(house),
-		})
+		var sprite := house.get_child(0) as Sprite3D
+		house_slots.append({"house": house, "sprite": sprite, "reeds": reeds})
 
 
-func _make_house() -> Node3D:
-	var house := Node3D.new()
-	# 墙体
-	var wall := MeshInstance3D.new()
-	var wm := BoxMesh.new()
-	wm.size = Vector3(1.4, 1.0, 1.1)
-	wall.mesh = wm
-	wall.position = Vector3(0, 0.5, 0)
-	wall.material_override = _mat(Color(0.93, 0.87, 0.76))
-	house.add_child(wall)
-	# 屋顶（三棱柱）
-	var roof := MeshInstance3D.new()
-	var rm := PrismMesh.new()
-	rm.size = Vector3(1.7, 0.6, 1.4)
-	roof.mesh = rm
-	roof.position = Vector3(0, 1.3, 0)
-	roof.material_override = _mat(Color(0.82, 0.60, 0.52))
-	house.add_child(roof)
-	# 门
-	var door := MeshInstance3D.new()
-	var dm := BoxMesh.new()
-	dm.size = Vector3(0.3, 0.5, 0.05)
-	door.mesh = dm
-	door.position = Vector3(0, 0.25, 0.58)
-	door.material_override = _mat(Color(0.60, 0.48, 0.38))
-	house.add_child(door)
-	return house
+## 用美术同学画的房屋素材（2D 贴图广告牌）替代原来的 3D 盒子房。
+## 返回一个 Node3D 容器（落点 y=0 贴地），内部 Sprite3D 上移半高让贴图底部贴住地面。
+func _make_house(path: String) -> Node3D:
+	# 优先用导入的贴图（含 mipmap、导出后仍可用）；未导入时直接读 PNG 字节兜底
+	var tex: Texture2D = load(path) as Texture2D
+	if tex == null:
+		var img := Image.load_from_file(path)
+		if img != null:
+			tex = ImageTexture.create_from_image(img)
+	if tex == null:
+		# 素材缺失/读不到时兜底：纯色方块，保证不崩
+		var fallback := Image.create(4, 4, false, Image.FORMAT_RGBA8)
+		fallback.fill(Color(0.88, 0.78, 0.62))
+		tex = ImageTexture.create_from_image(fallback)
+
+	var node := Node3D.new()
+	var sprite := Sprite3D.new()
+	sprite.texture = tex
+	sprite.billboard = BaseMaterial3D.BILLBOARD_FIXED_Y
+	sprite.pixel_size = 0.02
+	sprite.position = Vector3(0, 1.0, 0)   # 贴图中心上移，底部贴地
+	node.add_child(sprite)
+	return node
 
 
 ## 退还湿地的芦苇丛（房子拆除后的替代植被）：低矮底垫 + 几根细高秆芦苇
@@ -611,17 +844,6 @@ func _make_reed_clump() -> Node3D:
 		tassel.position = Vector3(cos(ang) * 0.34, 0.06 + h, sin(ang) * 0.30)
 		clump.add_child(tassel)
 	return clump
-
-
-func _collect_mats(n: Node) -> Array:
-	var out: Array = []
-	if n is MeshInstance3D:
-		var mi: MeshInstance3D = n
-		if mi.material_override:
-			out.append(mi.material_override)
-	for c in n.get_children():
-		out.append_array(_collect_mats(c))
-	return out
 
 
 ## 水面 shader：轻微微波 + 波光
@@ -731,9 +953,19 @@ func _build_mudflats(parent: Node3D) -> void:
 
 
 func _process(delta: float) -> void:
+	if _paused:
+		return
+	# 开场 PPT 计时：不按键则 8 秒自动过一张
+	if _intro_playing:
+		_intro_elapsed += delta
+		if _intro_elapsed >= INTRO_SLIDE_SEC:
+			_advance_intro()
 	_process_birds(delta)
 	_process_plants_sway()
+	_process_boats(delta)
 	_update_card_hover(delta)
+	_process_deck_gyro(delta)
+	_update_sort_cooldown()
 	# 容器尺寸变化时重排扇形（居中）
 	if card_box != null and card_box.size.x > 10.0:
 		if _fan_layout_size.distance_to(card_box.size) > 1.0:
@@ -1255,13 +1487,8 @@ func _update_3d() -> void:
 		slot["house"].visible = is_house
 		slot["reeds"].visible = not is_house
 		if is_house:
-			var warm := 1.0 if i < lit else 0.45
-			for mat in slot["mats"]:
-				mat.albedo_color = Color(
-					0.72 + 0.21 * warm,
-					0.66 + 0.21 * warm,
-					0.56 + 0.20 * warm
-				)
+			# 社区信任：亮灯的暖色 / 熄灭的暗色（贴图用 modulate 调明暗）
+			slot["sprite"].modulate = Color(1.0, 1.0, 1.0) if i < lit else Color(0.55, 0.53, 0.48)
 
 
 # ==================== UI ====================
@@ -1458,6 +1685,10 @@ func _build_ui() -> void:
 
 	# 主菜单（独立 CanvasLayer，盖在 HUD 与沙盘之上）
 	_build_menu()
+	_build_pause_menu()
+	_build_crisis_alert()
+	_build_deck_ui(canvas)
+	_build_deck_viewer()
 
 
 # ==================== 主菜单 ====================
@@ -1509,13 +1740,23 @@ func _build_menu() -> void:
 	menu_col.add_theme_constant_override("separation", 8)
 	menu_root.add_child(menu_col)
 
-	# 一级：开始
-	menu_start_btn = _make_button("开始", _on_title_start, 26)
+	# 一级：新游戏 / 继续游戏
+	menu_start_btn = _make_button("新游戏", _on_title_start, 26)
 	menu_start_btn.custom_minimum_size = Vector2(0, 54)
 	menu_col.add_child(menu_start_btn)
 
+	menu_continue_btn = _make_button("继续游戏", _on_continue_pressed, 22)
+	menu_continue_btn.custom_minimum_size = Vector2(0, 50)
+	menu_continue_btn.visible = false
+	menu_col.add_child(menu_continue_btn)
+
 	# 二级：难度（点「开始」后出现在它正下方）
-	menu_normal_btn = _make_button("简单模式", _on_difficulty_normal, 20)
+	menu_easy_btn = _make_button("简单模式", _on_difficulty_easy, 20)
+	menu_easy_btn.custom_minimum_size = Vector2(0, 46)
+	menu_easy_btn.visible = false
+	menu_col.add_child(menu_easy_btn)
+
+	menu_normal_btn = _make_button("普通模式", _on_difficulty_normal, 20)
 	menu_normal_btn.custom_minimum_size = Vector2(0, 46)
 	menu_normal_btn.visible = false
 	menu_col.add_child(menu_normal_btn)
@@ -1537,6 +1778,8 @@ func _build_menu() -> void:
 	seed_input = LineEdit.new()
 	seed_input.add_theme_font_size_override("font_size", _snap_px(18))
 	seed_input.custom_minimum_size = Vector2(0, 42)
+	seed_input.placeholder_text = "种子"
+	seed_input.add_theme_color_override("font_placeholder_color", Color(0.85, 0.88, 0.90, 0.35))
 	seed_input.visible = false
 	menu_col.add_child(seed_input)
 
@@ -1559,11 +1802,11 @@ func _build_menu() -> void:
 	menu_talent_btn.custom_minimum_size = Vector2(0, 44)
 	menu_col.add_child(menu_talent_btn)
 
-	menu_settings_btn = _make_button("设置", _on_menu_placeholder, 18)
+	menu_settings_btn = _make_button("设置", _show_settings_panel, 18)
 	menu_settings_btn.custom_minimum_size = Vector2(0, 44)
 	menu_col.add_child(menu_settings_btn)
 
-	menu_credits_btn = _make_button("制作人员", _on_menu_placeholder, 18)
+	menu_credits_btn = _make_button("制作人员", _show_credits_panel, 18)
 	menu_credits_btn.custom_minimum_size = Vector2(0, 44)
 	menu_col.add_child(menu_credits_btn)
 
@@ -1611,14 +1854,363 @@ func _build_menu() -> void:
 	t_back.custom_minimum_size = Vector2(0, 40)
 	kvb.add_child(t_back)
 
+	# --- 设置面板 ---
+	menu_settings_panel = PanelContainer.new()
+	menu_settings_panel.custom_minimum_size = Vector2(400, 0)
+	_panel_style(menu_settings_panel, Color(0.20, 0.14, 0.09, 0.97))
+	menu_settings_panel.visible = false
+	center.add_child(menu_settings_panel)
+
+	var svb := VBoxContainer.new()
+	svb.add_theme_constant_override("separation", 12)
+	menu_settings_panel.add_child(svb)
+
+	var s_title := _make_label("设置", 24, Color(1, 0.9, 0.55))
+	s_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	svb.add_child(s_title)
+
+	var s_sep := HSeparator.new()
+	svb.add_child(s_sep)
+
+	# 音量调节
+	var vol_row := HBoxContainer.new()
+	vol_row.add_theme_constant_override("separation", 8)
+	svb.add_child(vol_row)
+	var vol_lbl := _make_label("音量", 16, Color(0.82, 0.86, 0.9))
+	vol_row.add_child(vol_lbl)
+	audio_volume_slider = HSlider.new()
+	audio_volume_slider.min_value = 0
+	audio_volume_slider.max_value = 100
+	audio_volume_slider.step = 1
+	audio_volume_slider.value = bgm_volume * 100
+	audio_volume_slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	audio_volume_slider.value_changed.connect(_on_volume_changed)
+	vol_row.add_child(audio_volume_slider)
+	audio_volume_label = _make_label("音量：%d%%" % int(bgm_volume * 100), 14, Color(1, 0.95, 0.6))
+	vol_row.add_child(audio_volume_label)
+
+	# 切换 BGM
+	bgm_switch_btn = _make_button("", _on_switch_bgm, 16)
+	bgm_switch_btn.custom_minimum_size = Vector2(0, 44)
+	svb.add_child(bgm_switch_btn)
+	_update_bgm_btn()
+
+	var replay_btn := _make_button("重新观看开场动画", _on_replay_intro, 20)
+	replay_btn.custom_minimum_size = Vector2(0, 52)
+	svb.add_child(replay_btn)
+
+	var s_back := _make_button("返回", _on_settings_back, 16)
+	s_back.custom_minimum_size = Vector2(0, 40)
+	svb.add_child(s_back)
+
+	# --- 制作人员面板 ---
+	menu_credits_panel = PanelContainer.new()
+	menu_credits_panel.custom_minimum_size = Vector2(420, 0)
+	_panel_style(menu_credits_panel, Color(0.20, 0.14, 0.09, 0.97))
+	menu_credits_panel.visible = false
+	center.add_child(menu_credits_panel)
+
+	var cvb := VBoxContainer.new()
+	cvb.add_theme_constant_override("separation", 10)
+	menu_credits_panel.add_child(cvb)
+
+	var c_title := _make_label("制作人员", 24, Color(1, 0.9, 0.55))
+	c_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	cvb.add_child(c_title)
+
+	var c_sep := HSeparator.new()
+	cvb.add_child(c_sep)
+
+	var credits := [
+		["策划", "齐蛰"],
+		["主程 / 配乐", "Kanshin"],
+		["美术", "C3L1K1N4"],
+		["林学专家", "Oliveira"],
+	]
+	for e in credits:
+		var row := HBoxContainer.new()
+		row.add_theme_constant_override("separation", 6)
+		cvb.add_child(row)
+		var role_l := _make_label(str(e[0]) + "：", 16, Color(0.72, 0.76, 0.80))
+		row.add_child(role_l)
+		var name_l := _make_label(str(e[1]), 16, Color(0.96, 0.94, 0.88))
+		name_l.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		name_l.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+		row.add_child(name_l)
+
+	var c_back := _make_button("返回", _on_credits_back, 16)
+	c_back.custom_minimum_size = Vector2(0, 40)
+	cvb.add_child(c_back)
+
+
+# ==================== 开场像素 PPT（Undertale 风） ====================
+func _is_first_play() -> bool:
+	return not FileAccess.file_exists("user://intro_seen")
+
+
+func _mark_intro_seen() -> void:
+	var f := FileAccess.open("user://intro_seen", FileAccess.WRITE)
+	if f != null:
+		f.close()
+
+
+## 多色像素画：palette 为 字符->颜色，其余视为透明
+func _pixel_art(grid: String, palette: Dictionary) -> ImageTexture:
+	var rows: Array = []
+	for r in grid.split("\n"):
+		var line: String = (r as String).strip_edges()
+		if line != "":
+			rows.append(line)
+	var h := rows.size()
+	var w := (rows[0] as String).length()   # 以首行为准，长行截断、短行补透明
+	var img := Image.create(w, h, false, Image.FORMAT_RGBA8)
+	for y in h:
+		var line: String = rows[y]
+		for x in w:
+			var ch: String = line[x] if x < line.length() else " "
+			img.set_pixel(x, y, palette.get(ch, Color(0, 0, 0, 0)))
+	return ImageTexture.create_from_image(img)
+
+
+func _build_intro() -> void:
+	intro_layer = CanvasLayer.new()
+	intro_layer.layer = 30
+	add_child(intro_layer)
+	intro_root = Control.new()
+	intro_root.set_anchors_preset(Control.PRESET_FULL_RECT)
+	intro_root.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	intro_layer.add_child(intro_root)
+	var bg := ColorRect.new()
+	bg.color = Color(0.03, 0.05, 0.07, 1.0)
+	bg.set_anchors_preset(Control.PRESET_FULL_RECT)
+	bg.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	intro_root.add_child(bg)
+	var col := VBoxContainer.new()
+	col.set_anchors_preset(Control.PRESET_FULL_RECT)
+	col.offset_left = 80
+	col.offset_right = -80
+	col.offset_top = 30
+	col.offset_bottom = -30
+	col.alignment = BoxContainer.ALIGNMENT_CENTER
+	col.add_theme_constant_override("separation", 16)
+	col.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	intro_root.add_child(col)
+	intro_col = col
+	intro_image = TextureRect.new()
+	intro_image.custom_minimum_size = Vector2(320, 192)
+	intro_image.stretch_mode = TextureRect.STRETCH_SCALE
+	intro_image.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	intro_image.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+	intro_image.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	intro_image.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	col.add_child(intro_image)
+	intro_title = _make_label("", 30, Color(1, 0.9, 0.55))
+	intro_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	col.add_child(intro_title)
+	intro_body = _make_label("", 20, Color(0.92, 0.94, 0.95))
+	intro_body.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	intro_body.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.7))
+	intro_body.add_theme_constant_override("outline_size", 3)
+	col.add_child(intro_body)
+	intro_hint = _make_label("回车 继续　·　ESC 跳过", 13, Color(0.55, 0.6, 0.65))
+	intro_hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	col.add_child(intro_hint)
+
+
+func _show_intro() -> void:
+	if intro_root == null:
+		_build_intro()
+	intro_slides = _make_intro_slides()
+	intro_index = 0
+	_intro_playing = true
+	_intro_elapsed = 0.0
+	_intro_advancing = false
+	intro_layer.visible = true
+	_render_intro_slide()
+
+
+func _render_intro_slide() -> void:
+	_intro_elapsed = 0.0
+	var slide: Dictionary = intro_slides[intro_index]
+	intro_image.texture = _pixel_art(slide["grid"], slide["palette"])
+	intro_title.text = slide["title"]
+	intro_body.text = slide["body"]
+	# 淡入
+	intro_col.modulate.a = 0.0
+	var tw := intro_col.create_tween()
+	tw.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+	tw.tween_property(intro_col, "modulate:a", 1.0, 0.45)
+
+
+func _advance_intro() -> void:
+	if _intro_advancing:
+		return
+	_intro_advancing = true
+	# 淡出，完成后再切下一张 / 结束
+	var tw := intro_col.create_tween()
+	tw.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_IN)
+	tw.tween_property(intro_col, "modulate:a", 0.0, 0.35)
+	tw.tween_callback(func() -> void:
+		_intro_advancing = false
+		if not _intro_playing:
+			return  # 淡出期间已被 ESC 跳过
+		intro_index += 1
+		if intro_index >= intro_slides.size():
+			_finish_intro()
+		else:
+			_render_intro_slide())
+
+
+func _finish_intro() -> void:
+	_intro_playing = false
+	_intro_advancing = false
+	intro_layer.visible = false
+	_mark_intro_seen()
+	_show_menu()
+
+
+func _make_intro_slides() -> Array:
+	return [
+		{
+			"title": "鄱阳湖",
+			"body": "中国第一大淡水湖，\n也是亚洲最重要的候鸟越冬地之一。",
+			"palette": {
+				"S": Color(0.55, 0.78, 0.92), "Y": Color(0.98, 0.85, 0.36),
+				"B": Color(0.96, 0.96, 0.95), "W": Color(0.30, 0.62, 0.80),
+				"w": Color(0.50, 0.76, 0.90), "D": Color(0.16, 0.42, 0.62),
+				"G": Color(0.44, 0.72, 0.44), "g": Color(0.28, 0.54, 0.32),
+				"r": Color(0.40, 0.55, 0.34),
+			},
+			"grid": """SSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSS
+SSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSYYYYYYSSS
+SSSSSSSSSSSSSSSSSSSSSSSSSSSSSSYYYYYYYYSS
+SSSSSSSSSSSSSSSSSSSSSSSSSSSSSSYYYYYYYYSS
+SSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSYYYYYYSSS
+SSSSSSSSBSSSSSSSSSSSSBSSSSSSSSSSSSSSSSSS
+WWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWW
+WWWWWWWWWWWWWWwwwwwwWWWWWWWWWWWWWWWWWWWW
+WWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWW
+WWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWW
+WWWWWWWWWWWWWWWWwwWWWWWWWWWWWWWWWWWWWWWW
+WWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWW
+WWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWW
+WWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWW
+WWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWW
+DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD
+GGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGG
+rGrGrGrGrGrGrGrGrGrGrGrGrGrGrGrGrGrGrGrG
+rGrGrGrGrGrGrGrGrGrGrGrGrGrGrGrGrGrGrGrG
+gggggggggggggggggggggggggggggggggggggggg
+gggggggggggggggggggggggggggggggggggggggg
+gggggggggggggggggggggggggggggggggggggggg""",
+		},
+		{
+			"title": "危机逼近",
+			"body": "围垦、污染、干旱……\n湖水缩减，候鸟与鱼类正失去家园。",
+			"palette": {
+				"K": Color(0.10, 0.12, 0.15), "R": Color(0.85, 0.25, 0.22),
+				"E": Color(0.52, 0.40, 0.28), "e": Color(0.38, 0.28, 0.20),
+				"W": Color(0.28, 0.48, 0.60),
+			},
+			"grid": """KKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKK
+KKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKK
+KKKKKKKKKKKKKRRRRRRRRRKKKKKKKKKKKKKKKKKK
+KKKKKKKKKKKKRRRRRRRRRRRKKKKKKKKKKKKKKKKK
+KKKKKKKKKKKKKRRRRRRRRRKKKKKKKKKKKKKKKKKK
+KKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKK
+EEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE
+EEEEEEEEeEEEEEEEEEEEEEEEEEEEEEEeEEEEEEEE
+EEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE
+EEeEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEeEEEE
+EEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE
+EEEEEEEEEEEEEEEWWWWWWEEEEEEEEEEEEEEEEEEE
+EEEEEEEEEEEEEEEWWWWWWEEEEEEEEEEEEEEEEEEE
+EEEEEEEEEEEEEEEEWWWWEEEEEEEEEEEEEEEEEEEE
+EEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE
+EEEEEEeEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE
+EEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE
+eEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE
+EEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE
+eEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE
+EEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE
+eEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE""",
+		},
+		{
+			"title": "你",
+			"body": "你被任命为鄱阳湖\n新一任湖区管理员。",
+			"palette": {
+				"S": Color(0.55, 0.78, 0.92), "P": Color(0.92, 0.76, 0.62),
+				"H": Color(0.25, 0.55, 0.30), "C": Color(0.30, 0.50, 0.70),
+				"c": Color(0.22, 0.38, 0.55), "Y": Color(0.95, 0.80, 0.30),
+				"G": Color(0.44, 0.72, 0.44),
+			},
+			"grid": """SSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSS
+SSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSS
+SSSSSSSSSSSSSSSSSHHHHHHHSSSSSSSSSSSSSSSS
+SSSSSSSSSSSSSSSSHHHHHHHHHHSSSSSSSSSSSSSS
+SSSSSSSSSSSSSSSSSSPPPPPPSSSSSSSSSSSSSSSS
+SSSSSSSSSSSSSSSSSPPPPPPPPSSSSSSSSSSSSSSS
+SSSSSSSSSSSSSSSSSPPPPPPPPSSSSSSSSSSSSSSS
+SSSSSSSSSSSSSSSSSSPPPPPPSSSSSSSSSSSSSSSS
+SSSSSSSSSSSSSSSSSSCCCCCCSSSSSSSSSSSSSSSS
+SSSSSSSSSSSSSSSSCCCCCCCCCCSSSSSSSSSSSSSS
+SSSSSSSSSSSSSSSSCCCCYYCCCCSSSSSSSSSSSSSS
+SSSSSSSSSSSSSSSSCCCCCCCCCCSSSSSSSSSSSSSS
+SSSSSSSSSSSSSSSSCCCCCCCCCCSSSSSSSSSSSSSS
+SSSSSSSSSSSSSSSSCCCCCCCCCCSSSSSSSSSSSSSS
+SSSSSSSSSSSSSSSSccccccccccSSSSSSSSSSSSSS
+SSSSSSSSSSSSSSSSccccccccccSSSSSSSSSSSSSS
+SSSSSSSSSSSSSSSSSSCCCCCCSSSSSSSSSSSSSSSS
+SSSSSSSSSSSSSSSSSSCCCCCCSSSSSSSSSSSSSSSS
+SSSSSSSSSSSSSSSSSSCCCCCCSSSSSSSSSSSSSSSS
+SSSSSSSSSSSSSSSSSSccccccSSSSSSSSSSSSSSSS
+GGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGG
+GGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGG""",
+		},
+		{
+			"title": "你的使命",
+			"body": "16 个回合内，平衡资金与生态，\n守护水位、植被、水质、鱼类、鸟类与社区。",
+			"palette": {
+				"K": Color(0.15, 0.18, 0.25), "O": Color(0.95, 0.60, 0.25),
+				"R": Color(0.90, 0.40, 0.25), "Y": Color(0.98, 0.85, 0.40),
+				"W": Color(0.30, 0.62, 0.80), "D": Color(0.16, 0.42, 0.62),
+			},
+			"grid": """KKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKK
+KKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKK
+KKKKKKKKKKKKKKKKKKKYYKKKKKKKKKKKKKKKKKKK
+KKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKK
+KKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKK
+KKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKK
+KKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKK
+KKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKK
+KKKKKKKKKKKKKKKKKOOOOOOKKKKKKKKKKKKKKKKK
+KKKKKKKKKKKKKKKKOOOOOOOOKKKKKKKKKKKKKKKK
+KKKKKKKKKKKKKKKKOOOOOOOOKKKKKKKKKKKKKKKK
+KKKKKKKKKKKKKKKKROOOOOOOKKKKKKKKKKKKKKKK
+KKKKKKKKKKKKKKKKRROOOOOKKKKKKKKKKKKKKKKK
+WWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWW
+WWWWWWWWWWWWWWOOOWWWWWWWWWWWWWWWWWWWWWWW
+WWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWW
+WWWWWWWWWWWWWWRRRRWWWWWWWWWWWWWWWWWWWWWW
+WWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWW
+WWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWW
+DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD
+DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD
+DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD""",
+		},
+	]
+
 
 func _show_menu() -> void:
 	menu_root.visible = true
 	menu_col.visible = true
 	menu_talent_panel.visible = false
+	menu_settings_panel.visible = false
+	menu_credits_panel.visible = false
 	_set_hud_visible(false)   # 开始页是干净的全景：HUD 让位给标题与选项
 	_menu_state(0)
 	_set_menu_camera(true)
+	_roll_creeper_visibility()   # 苦力怕彩蛋按概率出现
 
 
 ## 开始页期间隐藏 HUD（左上信息栏 / 右上生态指标 / 事件横幅 / 右下按钮）
@@ -1631,11 +2223,14 @@ func _set_hud_visible(v: bool) -> void:
 ## 开始页层级：0 = 主选项 / 1 = 难度 / 2 = 种子
 func _menu_state(state: int) -> void:
 	var main_level := state == 0
+	menu_start_btn.visible = main_level          # 新游戏
+	menu_continue_btn.visible = main_level and has_save()  # 继续游戏（有存档才显示）
 	menu_talent_btn.visible = main_level
 	menu_settings_btn.visible = main_level
 	menu_credits_btn.visible = main_level
 	menu_quit_btn.visible = main_level
 
+	menu_easy_btn.visible = state == 1
 	menu_normal_btn.visible = state == 1
 	menu_hard_btn.visible = state == 1
 
@@ -1646,7 +2241,6 @@ func _menu_state(state: int) -> void:
 	menu_seed_start_btn.visible = seed_level
 
 	menu_back_btn.visible = state != 0
-	menu_start_btn.disabled = state != 0
 	menu_hint.text = ""
 	if seed_level:
 		seed_input.grab_focus()
@@ -1656,15 +2250,24 @@ func _on_title_start() -> void:
 	_menu_state(1)
 
 
-func _on_difficulty_normal() -> void:
-	GameState.hard_mode = false
+func _on_difficulty_easy() -> void:
+	GameState.difficulty = GameState.Difficulty.EASY
 	menu_mode_label.text = "模式：简单"
+	_update_threshold_lines()
+	_menu_state(2)
+
+
+func _on_difficulty_normal() -> void:
+	GameState.difficulty = GameState.Difficulty.NORMAL
+	menu_mode_label.text = "模式：普通"
+	_update_threshold_lines()
 	_menu_state(2)
 
 
 func _on_difficulty_hard() -> void:
-	GameState.hard_mode = true
+	GameState.difficulty = GameState.Difficulty.HARD
 	menu_mode_label.text = "模式：困难"
+	_update_threshold_lines()
 	_menu_state(2)
 
 
@@ -1678,7 +2281,17 @@ func _on_menu_back() -> void:
 
 ## 设置 / 制作人员：入口先摆上，具体效果待做
 func _on_menu_placeholder() -> void:
-	menu_hint.text = "（暂未开放）"
+	_flash_menu_hint(menu_hint, "（暂未开放）")
+
+
+## 菜单提示：显示后 3 秒自动消失
+func _flash_menu_hint(label: Label, text: String) -> void:
+	label.text = text
+	var tw := create_tween()
+	tw.tween_interval(3.0)
+	tw.tween_callback(func() -> void:
+		if label.text == text:
+			label.text = "")
 
 
 ## 退出：直接关闭游戏窗口
@@ -1688,6 +2301,8 @@ func _on_menu_quit() -> void:
 
 func _show_talent_panel() -> void:
 	menu_col.visible = false
+	menu_settings_panel.visible = false
+	menu_credits_panel.visible = false
 	menu_talent_panel.visible = true
 	_refresh_talent_panel()
 
@@ -1696,6 +2311,121 @@ func _on_talent_back() -> void:
 	menu_talent_panel.visible = false
 	menu_col.visible = true
 	_menu_state(0)
+
+
+func _show_settings_panel() -> void:
+	menu_col.visible = false
+	menu_talent_panel.visible = false
+	menu_credits_panel.visible = false
+	menu_settings_panel.visible = true
+
+
+func _on_settings_back() -> void:
+	menu_settings_panel.visible = false
+	menu_col.visible = true
+	_menu_state(0)
+
+
+func _show_credits_panel() -> void:
+	menu_col.visible = false
+	menu_talent_panel.visible = false
+	menu_settings_panel.visible = false
+	menu_credits_panel.visible = true
+
+
+func _on_credits_back() -> void:
+	menu_credits_panel.visible = false
+	menu_col.visible = true
+	_menu_state(0)
+
+
+## 设置里重播开场动画：隐藏菜单后重新播放（播完自动回主菜单）
+func _on_replay_intro() -> void:
+	menu_settings_panel.visible = false
+	menu_root.visible = false
+	_show_intro()
+
+
+# ==================== 音频 / BGM ====================
+## 读取音量与 BGM 选择（无存档则用默认）
+func _load_audio_settings() -> void:
+	if not FileAccess.file_exists(AUDIO_SETTINGS_PATH):
+		return
+	var f := FileAccess.open(AUDIO_SETTINGS_PATH, FileAccess.READ)
+	if f == null:
+		return
+	var text := f.get_as_text()
+	f.close()
+	var data = JSON.parse_string(text)
+	if data is Dictionary:
+		bgm_index = clampi(int(data.get("bgm_index", 0)), 0, BGM_PATHS.size() - 1)
+		bgm_volume = clampf(float(data.get("bgm_volume", 0.8)), 0.0, 1.0)
+
+
+func _save_audio_settings() -> void:
+	var data := {"bgm_index": bgm_index, "bgm_volume": bgm_volume}
+	var f := FileAccess.open(AUDIO_SETTINGS_PATH, FileAccess.WRITE)
+	if f != null:
+		f.store_string(JSON.stringify(data))
+		f.close()
+
+
+## 建立 BGM 播放器并开始循环播放
+func _setup_bgm() -> void:
+	bgm_player = AudioStreamPlayer.new()
+	add_child(bgm_player)
+	_apply_bgm()
+	bgm_player.finished.connect(func() -> void: bgm_player.play())  # 循环
+
+
+## 载入当前 BGM 与音量并播放
+func _apply_bgm() -> void:
+	var stream: AudioStream = load(BGM_PATHS[bgm_index])
+	if stream is AudioStreamMP3:
+		stream.loop = true
+	bgm_player.stream = stream
+	bgm_player.volume_db = linear_to_db(maxf(bgm_volume, 0.001))
+	bgm_player.play()
+
+
+## 音量滑动条回调
+func _on_volume_changed(value: float) -> void:
+	bgm_volume = value / 100.0
+	bgm_volume = clampf(bgm_volume, 0.0, 1.0)
+	bgm_player.volume_db = linear_to_db(maxf(bgm_volume, 0.001))
+	_save_audio_settings()
+	_sync_audio_ui()
+
+
+## 切换 BGM（在两个曲目间循环）
+func _on_switch_bgm() -> void:
+	bgm_index = (bgm_index + 1) % BGM_PATHS.size()
+	_apply_bgm()
+	_save_audio_settings()
+	_sync_audio_ui()
+
+
+## 同步两处音频 UI（主菜单设置 + 暂停设置）
+func _sync_audio_ui() -> void:
+	var pct := int(bgm_volume * 100)
+	if audio_volume_slider != null:
+		audio_volume_slider.set_value_no_signal(bgm_volume * 100)
+	if audio_volume_label != null:
+		audio_volume_label.text = "音量：%d%%" % pct
+	if pause_volume_slider != null:
+		pause_volume_slider.set_value_no_signal(bgm_volume * 100)
+	if pause_volume_label != null:
+		pause_volume_label.text = "音量：%d%%" % pct
+	_update_bgm_btn()
+
+
+## 刷新切换 BGM 按钮文字（两处）
+func _update_bgm_btn() -> void:
+	var txt := "切换 BGM（当前：%s）" % BGM_NAMES[bgm_index]
+	if bgm_switch_btn != null:
+		bgm_switch_btn.text = txt
+	if pause_bgm_btn != null:
+		pause_bgm_btn.text = txt
 
 
 func _on_talent_unlock() -> void:
@@ -1732,6 +2462,1135 @@ func _hide_menu() -> void:
 	_set_menu_camera(false)
 
 
+# ==================== 暂停 / 存档 ====================
+## 游戏进行中按下 ESC：弹出暂停菜单（继续游戏 / 设置 / 退出至主菜单）
+func _unhandled_input(event: InputEvent) -> void:
+	if _intro_playing:
+		# 开场 PPT：回车/点击下一张，ESC 直接跳过
+		if event is InputEventKey and event.pressed and not event.echo:
+			if event.keycode == KEY_ESCAPE:
+				_finish_intro()
+			elif event.keycode == KEY_ENTER or event.keycode == KEY_SPACE:
+				_advance_intro()
+		elif event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
+			_advance_intro()
+		return
+	if event is InputEventKey and event.pressed and not event.echo and event.keycode == KEY_ESCAPE:
+		_toggle_pause()
+
+
+func _can_pause() -> bool:
+	return _playing and not GameState.game_over and not crisis_root.visible
+
+
+func _toggle_pause() -> void:
+	if not _can_pause():
+		return
+	if _paused:
+		_resume_game()
+	else:
+		_pause_game()
+
+
+func _pause_game() -> void:
+	_paused = true
+	pause_hint.text = ""
+	pause_settings_panel.visible = false
+	pause_panel.visible = true
+	pause_root.visible = true
+
+
+func _resume_game() -> void:
+	_paused = false
+	pause_root.visible = false
+
+
+func _on_pause_settings() -> void:
+	pause_panel.visible = false
+	pause_settings_panel.visible = true
+	_sync_audio_ui()   # 打开时同步主菜单设置
+
+
+func _on_pause_settings_back() -> void:
+	pause_settings_panel.visible = false
+	pause_panel.visible = true
+
+
+## 退出至主菜单：先存档，保留本局进度
+func _on_pause_exit() -> void:
+	save_game()
+	_paused = false
+	pause_root.visible = false
+	popup_root.visible = false
+	hand_panel.visible = false
+	bottom_right.visible = false
+	_playing = false
+	_show_menu()
+
+
+## 主菜单「继续游戏」：读档续玩
+func _on_continue_pressed() -> void:
+	if not load_game():
+		menu_hint.text = "没有可继续的进度"
+
+
+func has_save() -> bool:
+	return FileAccess.file_exists(SAVE_PATH)
+
+
+func _clear_save() -> void:
+	if has_save():
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(SAVE_PATH))
+
+
+func save_game() -> void:
+	var hand_ids: Array = []
+	var selected_ids: Array = []
+	for info in card_infos:
+		hand_ids.append(info["card_id"])
+		if info["selected"]:
+			selected_ids.append(info["card_id"])
+	var data := {
+		"state": GameState.serialize(),
+		"hand_ids": hand_ids,
+		"selected_ids": selected_ids,
+		"phase": _current_phase,
+		"event_text": _current_event,
+	}
+	if _current_phase != "allocate":
+		data["popup"] = {
+			"title": popup_title.text,
+			"body": popup_body.text,
+			"button": popup_button.text,
+		}
+	var f := FileAccess.open(SAVE_PATH, FileAccess.WRITE)
+	if f != null:
+		f.store_string(JSON.stringify(data))
+		f.close()
+
+
+func load_game() -> bool:
+	if not has_save():
+		return false
+	var f := FileAccess.open(SAVE_PATH, FileAccess.READ)
+	if f == null:
+		return false
+	var text := f.get_as_text()
+	f.close()
+	var data = JSON.parse_string(text)
+	if data == null or not (data is Dictionary):
+		return false
+	GameState.load_state(data.get("state", {}))
+	_update_threshold_lines()
+	_hide_menu()
+	_playing = true
+	_paused = false
+	_current_event = str(data.get("event_text", ""))
+	_update_hud()
+	_update_3d()
+	var phase: String = str(data.get("phase", "allocate"))
+	_current_phase = phase
+	var popup: Dictionary = data.get("popup", {})
+	match phase:
+		"popup_event":
+			_show_popup("第 %d 回合 · 事件" % GameState.turn, str(popup.get("body", "")), "开始分配资金", _enter_allocate)
+		"popup_knowledge":
+			_show_popup(str(popup.get("title", "")), str(popup.get("body", "")), "收下（继续）", _on_resolve_continue)
+		"popup_settlement":
+			_show_popup("结算反馈", str(popup.get("body", "")), "继续", _on_resolve_continue)
+		_:
+			_restore_hand(data)
+	return true
+
+
+## 恢复分配阶段：重建手牌并还原选中状态
+func _restore_hand(data: Dictionary) -> void:
+	var hand_ids: Array = data.get("hand_ids", [])
+	var selected_ids: Array = data.get("selected_ids", [])
+	current_hand = []
+	for cid in hand_ids:
+		var card: Dictionary = GameState._find_card(cid)
+		if not card.is_empty():
+			current_hand.append(card)
+	play_deal_anim = false
+	_build_hand_panel()
+	for info in card_infos:
+		if info["card_id"] in selected_ids:
+			info["selected"] = true
+			_apply_gold_frame(info["panel"])
+	hand_panel.visible = true
+	bottom_right.visible = true
+	_slide_side_panels(false)
+	_update_selected_label()
+
+
+## 暂停菜单：盖在 HUD 与沙盘之上的独立层
+func _build_pause_menu() -> void:
+	var layer := CanvasLayer.new()
+	layer.name = "PauseLayer"
+	layer.layer = 20
+	add_child(layer)
+
+	pause_root = Control.new()
+	pause_root.set_anchors_preset(Control.PRESET_FULL_RECT)
+	pause_root.mouse_filter = Control.MOUSE_FILTER_STOP
+	pause_root.visible = false
+	layer.add_child(pause_root)
+
+	var dim := ColorRect.new()
+	dim.color = Color(0, 0, 0, 0.55)
+	dim.set_anchors_preset(Control.PRESET_FULL_RECT)
+	dim.mouse_filter = Control.MOUSE_FILTER_STOP
+	pause_root.add_child(dim)
+
+	var center := CenterContainer.new()
+	center.set_anchors_preset(Control.PRESET_FULL_RECT)
+	pause_root.add_child(center)
+
+	pause_panel = PanelContainer.new()
+	pause_panel.custom_minimum_size = Vector2(360, 0)
+	_panel_style(pause_panel, Color(0.24, 0.17, 0.11, 0.96))
+	center.add_child(pause_panel)
+
+	var pv := VBoxContainer.new()
+	pv.add_theme_constant_override("separation", 12)
+	pause_panel.add_child(pv)
+
+	var t := _make_label("暂停", 30, Color(1, 0.9, 0.55))
+	t.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	pv.add_child(t)
+
+	pause_hint = _make_label("", 13, Color(1, 0.6, 0.5))
+	pause_hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	pv.add_child(pause_hint)
+
+	var b_resume := _make_button("继续游戏", _resume_game, 22)
+	b_resume.custom_minimum_size = Vector2(0, 52)
+	pv.add_child(b_resume)
+
+	var b_settings := _make_button("设置", _on_pause_settings, 18)
+	b_settings.custom_minimum_size = Vector2(0, 46)
+	pv.add_child(b_settings)
+
+	var b_exit := _make_button("退出至主菜单", _on_pause_exit, 18)
+	b_exit.custom_minimum_size = Vector2(0, 46)
+	pv.add_child(b_exit)
+
+	# --- 暂停设置面板（与主菜单设置同步） ---
+	pause_settings_panel = PanelContainer.new()
+	pause_settings_panel.custom_minimum_size = Vector2(400, 0)
+	_panel_style(pause_settings_panel, Color(0.24, 0.17, 0.11, 0.96))
+	pause_settings_panel.visible = false
+	center.add_child(pause_settings_panel)
+
+	var psv := VBoxContainer.new()
+	psv.add_theme_constant_override("separation", 12)
+	pause_settings_panel.add_child(psv)
+
+	var ps_title := _make_label("设置", 24, Color(1, 0.9, 0.55))
+	ps_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	psv.add_child(ps_title)
+
+	var ps_sep := HSeparator.new()
+	psv.add_child(ps_sep)
+
+	var pvol_row := HBoxContainer.new()
+	pvol_row.add_theme_constant_override("separation", 8)
+	psv.add_child(pvol_row)
+	var pvol_lbl := _make_label("音量", 16, Color(0.82, 0.86, 0.9))
+	pvol_row.add_child(pvol_lbl)
+	pause_volume_slider = HSlider.new()
+	pause_volume_slider.min_value = 0
+	pause_volume_slider.max_value = 100
+	pause_volume_slider.step = 1
+	pause_volume_slider.value = bgm_volume * 100
+	pause_volume_slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	pause_volume_slider.value_changed.connect(_on_volume_changed)
+	pvol_row.add_child(pause_volume_slider)
+	pause_volume_label = _make_label("音量：%d%%" % int(bgm_volume * 100), 14, Color(1, 0.95, 0.6))
+	pvol_row.add_child(pause_volume_label)
+
+	pause_bgm_btn = _make_button("", _on_switch_bgm, 16)
+	pause_bgm_btn.custom_minimum_size = Vector2(0, 44)
+	psv.add_child(pause_bgm_btn)
+
+	var ps_back := _make_button("返回", _on_pause_settings_back, 16)
+	ps_back.custom_minimum_size = Vector2(0, 40)
+	psv.add_child(ps_back)
+
+	_update_bgm_btn()   # 同步两个切换按钮文字
+
+
+# ==================== 危机警示 ====================
+## 危机预警信号：入队，逐个弹出大红警示
+func _on_crisis_warn(crisis: Dictionary) -> void:
+	_crisis_queue.append({"crisis": crisis, "is_warning": true})
+	_process_crisis_queue()
+
+
+## 危机爆发信号：入队，逐个弹出大红警示
+func _on_crisis_hit(crisis: Dictionary) -> void:
+	_crisis_queue.append({"crisis": crisis, "is_warning": false})
+	_process_crisis_queue()
+
+
+func _process_crisis_queue() -> void:
+	if _crisis_queue.is_empty() or crisis_root.visible:
+		return
+	var item: Dictionary = _crisis_queue.pop_front()
+	_show_crisis_alert(item["crisis"], item["is_warning"])
+
+
+## 玩家点掉危机弹窗：还有下一个危机就继续弹，否则（无事件弹窗时）进入分配
+func _on_crisis_dismiss() -> void:
+	crisis_root.visible = false
+	if not _crisis_queue.is_empty():
+		_process_crisis_queue()
+	elif not popup_root.visible:
+		_enter_allocate()
+
+
+## 弹出危机警示：大红叹号 + 屏幕红闪 + 雷霆大字 + 详细说明
+func _show_crisis_alert(crisis: Dictionary, is_warning: bool) -> void:
+	var name: String = crisis["name"]
+	crisis_title.text = name
+	crisis_tag.text = "⚠ 危机预警" if is_warning else "⚠ 危机爆发"
+	crisis_button.text = "知道了" if is_warning else "继续"
+	crisis_body.text = _crisis_body_text(crisis, is_warning)
+	# 危机同步到顶部横幅，关掉弹窗后仍可见
+	_current_event = "⚠ %s：%s" % [("危机预警" if is_warning else "危机爆发"), name]
+	_update_hud()
+
+	crisis_root.visible = true
+	# 淡红脉冲：起手轻轻亮一下，随后持续柔和脉冲（不再刺眼）
+	crisis_dim.color.a = 0.28
+	var pulse := crisis_dim.create_tween().set_loops()
+	pulse.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+	pulse.tween_property(crisis_dim, "color:a", 0.10, 0.6)
+	pulse.tween_property(crisis_dim, "color:a", 0.28, 0.6)
+	# 像素感叹号：大小脉冲（像在跳动），动画保持不变
+	crisis_icon.pivot_offset = crisis_icon.size * 0.5
+	var tw := crisis_icon.create_tween().set_loops()
+	tw.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+	tw.tween_property(crisis_icon, "scale", Vector2(1.22, 1.22), 0.45)
+	tw.tween_property(crisis_icon, "scale", Vector2.ONE, 0.45)
+
+
+## 危机警示正文：描述 + 「当前 xx 值较低，可能影响 xx」 + 应对建议
+func _crisis_body_text(crisis: Dictionary, is_warning: bool) -> String:
+	var c := _parse_cond(str(crisis.get("cond", "")))
+	var metric := str(c.get("metric", ""))
+	var mname := str(GameState.METRIC_NAMES.get(metric, metric))
+	var cur := int(GameState.metrics.get(metric, 0))
+	var op := str(c.get("op", "<"))
+	var low_high := "偏低" if op in ["<", "<="] else "偏高"
+	var threshold := int(c.get("threshold", 0))
+
+	var effect_lines: Array = []
+	for e in crisis.get("effects", []):
+		effect_lines.append("· %s %+d" % [GameState.METRIC_NAMES.get(e["metric"], e["metric"]), int(e["delta"])])
+
+	var body := ""
+	if is_warning:
+		body += "%s\n\n" % crisis["warn"]
+		if metric != "":
+			body += "[color=#ffb060]⚠ 当前%s %d（%s，警戒线 %d）[/color]\n\n" % [mname, cur, low_high, threshold]
+		body += "[color=#ff9090]若未及时应对，下一回合可能造成：[/color]\n"
+		body += "\n".join(effect_lines)
+		var counters: Array = GameState.CRISIS_COUNTERS.get(crisis["id"], [])
+		if not counters.is_empty():
+			var names: Array = []
+			for cid in counters:
+				names.append(_card_name(cid))
+			body += "\n\n[color=#8fd0ff]应对建议：优先打出「%s」等卡[/color]" % "」「".join(names)
+	else:
+		body += "%s\n\n" % crisis["hit"]
+		body += "[color=#ff9090]本次已造成：[/color]\n"
+		body += "\n".join(effect_lines)
+	return body
+
+
+## 解析危机 cond（如 "water_level < 45"）→ {metric, op, threshold}
+func _parse_cond(cond: String) -> Dictionary:
+	var parts := cond.strip_edges().split(" ")
+	if parts.size() >= 3:
+		return {"metric": parts[0], "op": parts[1], "threshold": int(parts[2])}
+	return {}
+
+
+## 危机警示弹层（盖在普通弹窗之上）
+func _build_crisis_alert() -> void:
+	var layer := CanvasLayer.new()
+	layer.name = "CrisisLayer"
+	layer.layer = 5
+	add_child(layer)
+
+	crisis_root = Control.new()
+	crisis_root.set_anchors_preset(Control.PRESET_FULL_RECT)
+	crisis_root.mouse_filter = Control.MOUSE_FILTER_STOP
+	crisis_root.visible = false
+	layer.add_child(crisis_root)
+
+	crisis_dim = ColorRect.new()
+	crisis_dim.color = Color(1.0, 0.55, 0.55, 0.22)   # 淡红，不再刺眼
+	crisis_dim.set_anchors_preset(Control.PRESET_FULL_RECT)
+	crisis_dim.mouse_filter = Control.MOUSE_FILTER_STOP
+	crisis_root.add_child(crisis_dim)
+
+	var center := CenterContainer.new()
+	center.set_anchors_preset(Control.PRESET_FULL_RECT)
+	crisis_root.add_child(center)
+
+	var panel := PanelContainer.new()
+	panel.custom_minimum_size = Vector2(560, 0)
+	_panel_style(panel, Color(0.30, 0.12, 0.10, 0.97))
+	center.add_child(panel)
+
+	var pv := VBoxContainer.new()
+	pv.add_theme_constant_override("separation", 10)
+	panel.add_child(pv)
+
+	# 像素感叹号（贴图，最近邻放大保持锐利）
+	var exclaim_grid := "..##..\n.#XX#.\n.#XX#.\n.#XX#.\n.#XX#.\n.#XX#.\n.#XX#.\n..##..\n......\n.#XX#.\n..##.."
+	var exclaim_c := Color(1.0, 0.32, 0.28)
+	crisis_icon = TextureRect.new()
+	crisis_icon.texture = _pixel_icon(exclaim_grid, exclaim_c, exclaim_c.darkened(0.42), exclaim_c.lightened(0.25))
+	crisis_icon.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+	crisis_icon.stretch_mode = TextureRect.STRETCH_SCALE
+	crisis_icon.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	crisis_icon.custom_minimum_size = Vector2(52, 96)
+	crisis_icon.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	pv.add_child(crisis_icon)
+
+	crisis_title = _make_label("", 44, Color(1.0, 0.30, 0.25))
+	crisis_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	crisis_title.add_theme_color_override("font_outline_color", Color(0.55, 0.0, 0.0, 0.85))
+	crisis_title.add_theme_constant_override("outline_size", 8)
+	pv.add_child(crisis_title)
+
+	crisis_tag = _make_label("", 18, Color(1.0, 0.55, 0.45))
+	crisis_tag.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	pv.add_child(crisis_tag)
+
+	crisis_body = RichTextLabel.new()
+	crisis_body.bbcode_enabled = true
+	crisis_body.fit_content = true
+	crisis_body.custom_minimum_size = Vector2(500, 0)
+	crisis_body.add_theme_font_size_override("normal_font_size", _snap_px(16))
+	crisis_body.add_theme_color_override("default_color", Color(0.98, 0.95, 0.92))
+	pv.add_child(crisis_body)
+
+	crisis_button = _make_button("知道了", _on_crisis_dismiss, 20)
+	crisis_button.custom_minimum_size = Vector2(0, 50)
+	pv.add_child(crisis_button)
+
+
+# ==================== 牌库（牌堆）UI ====================
+## 生成主题像素牌背（湖水蓝 + 波浪横纹）
+func _make_card_back_texture() -> Texture2D:
+	var grid := """################
+#XXXXXXXXXXXXXX#
+#XXooooooooooXX#
+#XXXXXXXXXXXXXX#
+#XXooooooooooXX#
+#XXXXXXXXXXXXXX#
+#XXooooooooooXX#
+#XXXXXXXXXXXXXX#
+#XXooooooooooXX#
+#XXXXXXXXXXXXXX#
+#XXooooooooooXX#
+#XXXXXXXXXXXXXX#
+#XXooooooooooXX#
+#XXXXXXXXXXXXXX#
+#XXooooooooooXX#
+#XXXXXXXXXXXXXX#
+#XXooooooooooXX#
+#XXXXXXXXXXXXXX#
+################"""
+	var main_c := Color(0.30, 0.52, 0.72)
+	return _pixel_icon(grid, main_c, main_c.darkened(0.45), main_c.lightened(0.35))
+
+
+## 牌堆：生态指标框下方，叠放三张牌背；悬停黄框+孔雀开屏，点击查看牌库
+func _build_deck_ui(canvas: CanvasLayer) -> void:
+	card_back_tex = _make_card_back_texture()
+
+	deck_root = Control.new()
+	deck_root.anchor_left = 1.0
+	deck_root.anchor_top = 0.0
+	deck_root.anchor_right = 1.0
+	deck_root.anchor_bottom = 0.0
+	deck_root.offset_left = -190
+	deck_root.offset_right = -6
+	deck_root.offset_top = 276
+	deck_root.offset_bottom = 392
+	deck_root.mouse_filter = Control.MOUSE_FILTER_STOP
+	canvas.add_child(deck_root)
+
+	# 黄色外框（悬停时显示，自绘贴牌形状）
+	deck_border = Control.new()
+	deck_border.set_anchors_preset(Control.PRESET_FULL_RECT)
+	deck_border.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	deck_border.visible = false
+	deck_border.draw.connect(_on_deck_border_draw)
+	deck_root.add_child(deck_border)
+
+	# 叠放的三张牌背
+	var stack_positions := [Vector2(58, 18), Vector2(60, 15), Vector2(62, 12)]
+	for i in 3:
+		var back := TextureRect.new()
+		back.texture = card_back_tex
+		back.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+		back.stretch_mode = TextureRect.STRETCH_SCALE
+		back.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		back.custom_minimum_size = Vector2(64, 86)
+		back.size = Vector2(64, 86)
+		back.position = stack_positions[i]
+		back.pivot_offset = Vector2(32, 43)
+		back.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		deck_root.add_child(back)
+		deck_backs.append(back)
+
+	# 悬停 / 点击
+	deck_root.mouse_entered.connect(_on_deck_mouse_entered)
+	deck_root.mouse_exited.connect(_on_deck_mouse_exited)
+	deck_root.gui_input.connect(_on_deck_gui_input)
+
+
+func _on_deck_mouse_entered() -> void:
+	_deck_hovered = true
+	_fan_deck(true)
+	# 展开动画结束后才显示黄框（途中不显示）
+	var tw := create_tween()
+	tw.tween_interval(0.22)
+	tw.tween_callback(func() -> void:
+		if _deck_hovered:
+			deck_border.visible = true
+			deck_border.queue_redraw())
+
+
+func _on_deck_mouse_exited() -> void:
+	_deck_hovered = false
+	deck_border.visible = false
+	_fan_deck(false)
+
+
+## 孔雀开屏：悬停时三张牌背扇形展开，移开后收回
+func _fan_deck(out: bool) -> void:
+	var fan_positions := [Vector2(34, 26), Vector2(60, 8), Vector2(86, 26)]
+	var fan_rotations := [-0.26, 0.0, 0.26]
+	var stack_positions := [Vector2(58, 18), Vector2(60, 15), Vector2(62, 12)]
+	for i in deck_backs.size():
+		var back: TextureRect = deck_backs[i]
+		var pos: Vector2 = fan_positions[i] if out else stack_positions[i]
+		var rot: float = fan_rotations[i] if out else 0.0
+		var tw := back.create_tween()
+		tw.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+		tw.tween_property(back, "position", pos, 0.22)
+		tw.parallel().tween_property(back, "rotation", rot, 0.22)
+
+
+## 自绘黄框：给每张牌背各画一条贴牌黄边（严格贴着每张牌的形状）
+func _on_deck_border_draw() -> void:
+	for back in deck_backs:
+		var corners := _card_corners(back)
+		var pts := corners.duplicate()
+		pts.append(corners[0])
+		deck_border.draw_polyline(pts, Color(1.0, 0.85, 0.3), 3.0, true)
+
+
+## 计算一张牌背（带旋转）的四个角点（deck_root 局部坐标）
+func _card_corners(back: TextureRect) -> PackedVector2Array:
+	var c := cos(back.rotation)
+	var s := sin(back.rotation)
+	var corners := PackedVector2Array()
+	var locals: Array[Vector2] = [Vector2.ZERO, Vector2(back.size.x, 0), Vector2(back.size.x, back.size.y), Vector2(0, back.size.y)]
+	for local in locals:
+		var rel: Vector2 = local - back.pivot_offset
+		var rotated := Vector2(rel.x * c - rel.y * s, rel.x * s + rel.y * c)
+		corners.append(back.position + back.pivot_offset + rotated)
+	return corners
+
+
+func _on_deck_gui_input(event: InputEvent) -> void:
+	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
+		_open_deck_viewer()
+
+
+## 牌库查看器：全屏弹层，逐张发牌展示所有卡牌
+func _build_deck_viewer() -> void:
+	var layer := CanvasLayer.new()
+	layer.name = "DeckViewerLayer"
+	layer.layer = 8
+	add_child(layer)
+
+	deck_viewer = Control.new()
+	deck_viewer.set_anchors_preset(Control.PRESET_FULL_RECT)
+	deck_viewer.mouse_filter = Control.MOUSE_FILTER_STOP
+	deck_viewer.visible = false
+	layer.add_child(deck_viewer)
+
+	var dim := ColorRect.new()
+	dim.color = Color(0, 0, 0, 0.62)
+	dim.set_anchors_preset(Control.PRESET_FULL_RECT)
+	deck_viewer.add_child(dim)
+
+	var box := VBoxContainer.new()
+	box.set_anchors_preset(Control.PRESET_FULL_RECT)
+	box.offset_left = 70
+	box.offset_right = -70
+	box.offset_top = 40
+	box.offset_bottom = -40
+	box.add_theme_constant_override("separation", 12)
+	deck_viewer.add_child(box)
+
+	var title_bar := HBoxContainer.new()
+	title_bar.add_theme_constant_override("separation", 10)
+	box.add_child(title_bar)
+
+	var title := _make_label("全部卡牌", 28, Color(1, 0.9, 0.55))
+	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	title_bar.add_child(title)
+
+	deck_sort_btn = _make_sort_button()
+	title_bar.add_child(deck_sort_btn)
+	_update_sort_btn()
+
+	var scroll := ScrollContainer.new()
+	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	box.add_child(scroll)
+
+	# 四周留内边距：顶部留足放大+漂浮的余量，避免顶行/左列卡被裁剪
+	var margin := MarginContainer.new()
+	margin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	margin.add_theme_constant_override("margin_top", 30)
+	margin.add_theme_constant_override("margin_bottom", 16)
+	margin.add_theme_constant_override("margin_left", 16)
+	margin.add_theme_constant_override("margin_right", 16)
+	scroll.add_child(margin)
+
+	deck_viewer_grid = HFlowContainer.new()
+	deck_viewer_grid.add_theme_constant_override("h_separation", 14)
+	deck_viewer_grid.add_theme_constant_override("v_separation", 14)
+	deck_viewer_grid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	margin.add_child(deck_viewer_grid)
+
+	var close := _make_button("关闭", _close_deck_viewer, 20)
+	close.custom_minimum_size = Vector2(0, 48)
+	box.add_child(close)
+
+	_build_card_detail()
+
+
+## 牌库打开时把 HUD 其余面板收出屏幕，关闭时弹回原位（保持尺寸，仅平移 offset）
+func _slide_main_ui(out: bool) -> void:
+	for tw in _ui_slide_tweens:
+		if tw != null and tw.is_valid():
+			tw.kill()
+	_ui_slide_tweens.clear()
+	var vp := get_viewport().get_visible_rect().size
+	var ctrls: Array = [left_panel, right_panel, event_label, hand_panel, bottom_right, deck_root]
+	for c in ctrls:
+		if c == null:
+			continue
+		if not _ui_slide_origin.has(c):
+			_ui_slide_origin[c] = [c.offset_left, c.offset_top, c.offset_right, c.offset_bottom]
+		var origin: Array = _ui_slide_origin[c]
+		var dir := _slide_out_dir(c)
+		var dx := dir.x * (vp.x + 200.0)
+		var dy := dir.y * (vp.y + 200.0)
+		var tw := create_tween()
+		tw.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_IN_OUT)
+		if out:
+			tw.tween_property(c, "offset_left", c.offset_left + dx, 0.34)
+			tw.parallel().tween_property(c, "offset_right", c.offset_right + dx, 0.34)
+			tw.parallel().tween_property(c, "offset_top", c.offset_top + dy, 0.34)
+			tw.parallel().tween_property(c, "offset_bottom", c.offset_bottom + dy, 0.34)
+		else:
+			tw.tween_property(c, "offset_left", origin[0], 0.34)
+			tw.parallel().tween_property(c, "offset_right", origin[2], 0.34)
+			tw.parallel().tween_property(c, "offset_top", origin[1], 0.34)
+			tw.parallel().tween_property(c, "offset_bottom", origin[3], 0.34)
+		_ui_slide_tweens.append(tw)
+
+
+## 每个面板收起的方向（向最近的屏幕外平移）
+func _slide_out_dir(c: Control) -> Vector2:
+	if c == left_panel:
+		return Vector2(-1, 0)   # 左面板向左出
+	if c == right_panel or c == deck_root:
+		return Vector2(1, 0)    # 右面板 / 牌堆向右出
+	if c == event_label:
+		return Vector2(0, -1)   # 顶部横幅向上出
+	if c == bottom_right:
+		return Vector2(1, 0)    # 结束回合按钮向右出
+	return Vector2(0, 1)       # 手牌向下出
+
+
+func _open_deck_viewer() -> void:
+	if _deck_open:
+		return
+	_deck_open = true
+	deck_viewer.visible = true
+	# 收起牌堆的悬停状态（避免残留黄框/孔雀开屏），并把其余 HUD 收出屏幕
+	_deck_hovered = false
+	deck_border.visible = false
+	_fan_deck(false)
+	_slide_main_ui(true)
+	_update_sort_btn()   # 重开时同步按钮文字与当前排序方式，严格绑定
+	# 重建全部卡牌
+	for c in deck_viewer_grid.get_children():
+		deck_viewer_grid.remove_child(c)
+		c.queue_free()
+	for vp in _deck_viewports:
+		if is_instance_valid(vp):
+			vp.queue_free()
+	_deck_viewports.clear()
+	_deck_gyro_view = null
+	var cards: Array = []
+	for card in _sorted_action_cards(_deck_sort_by_category):
+		# 卡牌内容放进 SubViewport 渲染成纹理，再挂到 TextureRect 上，
+		# 这样整张牌（面板 + 文字）是一个可被透视着色器整体倾斜的图元。
+		var panel := _make_card(card)
+		var vp := SubViewport.new()
+		vp.size = Vector2(122, 165)
+		vp.transparent_bg = true
+		vp.render_target_update_mode = SubViewport.UPDATE_WHEN_VISIBLE
+		vp.add_child(panel)
+		deck_viewer.add_child(vp)
+		_deck_viewports.append(vp)
+
+		var view := TextureRect.new()
+		view.texture = vp.get_texture()
+		view.custom_minimum_size = Vector2(122, 165)
+		view.stretch_mode = TextureRect.STRETCH_SCALE
+		view.mouse_filter = Control.MOUSE_FILTER_STOP
+		view.set_meta("card", card)
+		view.set_meta("panel", panel)
+		view.material = _make_gyro_material()
+		view.tooltip_text = "%s\n\n%s" % [card["desc"], _effect_text(card)]
+		view.scale = Vector2(0.3, 0.3)
+		view.modulate.a = 0.0
+		view.mouse_entered.connect(_on_viewer_card_hover.bind(view, card))
+		view.mouse_exited.connect(_on_viewer_card_unhover.bind(view))
+		view.gui_input.connect(_on_viewer_card_click.bind(view, card))
+		deck_viewer_grid.add_child(view)
+		cards.append(view)
+	# 等一帧布局完成后逐张发牌
+	await get_tree().process_frame
+	for i in cards.size():
+		var p: Control = cards[i]
+		var tw := p.create_tween()
+		tw.set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+		tw.tween_property(p, "scale", Vector2.ONE, 0.28).set_delay(i * 0.03)
+		tw.parallel().tween_property(p, "modulate:a", 1.0, 0.18).set_delay(i * 0.03)
+
+
+## 牌库卡牌的透视倾斜材质（绕 X/Y 轴 3D 旋转 + 透视投影）
+func _make_gyro_material() -> ShaderMaterial:
+	var shader := Shader.new()
+	shader.code = """shader_type canvas_item;
+uniform float tilt_x = 0.0;
+uniform float tilt_y = 0.0;
+uniform vec2 card_size = vec2(122.0, 165.0);
+
+void vertex() {
+	vec2 c = VERTEX - card_size * 0.5;
+	float cy = cos(tilt_y);
+	float sy = sin(tilt_y);
+	float cx = cos(tilt_x);
+	float sx = sin(tilt_x);
+	// 绕 Y 轴（偏航）
+	vec3 q = vec3(c.x * cy, c.y, -c.x * sy);
+	// 绕 X 轴（俯仰）
+	vec3 r = vec3(q.x, q.y * cx - q.z * sx, q.y * sx + q.z * cx);
+	// 透视投影：越深越小
+	float f = 520.0;
+	float persp = f / (f + r.z);
+	VERTEX = vec2(r.x, r.y) * persp + card_size * 0.5;
+}"""
+	var mat := ShaderMaterial.new()
+	mat.shader = shader
+	mat.set_shader_parameter("card_size", Vector2(122, 165))
+	return mat
+
+
+func _close_deck_viewer() -> void:
+	_deck_open = false
+	_deck_gyro_view = null
+	deck_viewer.visible = false
+	_slide_main_ui(false)
+
+
+# ==================== 牌库排序（按类别 / 按费用 切换） ====================
+## 互旋箭头图标（两个方向相反的箭头，表示切换）
+func _make_swap_icon_texture(px: int) -> ImageTexture:
+	var grid := """............X...
+............XX..
+XXXXXXXXXXXXXXX.
+XXXXXXXXXXXXXXXX
+XXXXXXXXXXXXXXX.
+............XX..
+............X...
+................
+................
+...X............
+..XX............
+.XXXXXXXXXXXXXXX
+XXXXXXXXXXXXXXXX
+.XXXXXXXXXXXXXXX
+..XX............
+...X............"""
+	var img := _grid_image(grid, Color(1.0, 0.92, 0.66), Color(0.85, 0.72, 0.42), Color(1.0, 1.0, 1.0))
+	img.resize(px, px, Image.INTERPOLATE_NEAREST)
+	return ImageTexture.create_from_image(img)
+
+
+## 排序切换按钮：互旋箭头 + 文字，点击切换排序方式
+func _make_sort_button() -> Button:
+	var b := _make_button("", _toggle_deck_sort, 16)
+	b.icon = _make_swap_icon_texture(32)
+	b.custom_minimum_size = Vector2(150, 42)
+	return b
+
+
+## 刷新排序按钮文字与提示
+func _update_sort_btn() -> void:
+	if deck_sort_btn == null:
+		return
+	var mode := "按类别排序" if _deck_sort_by_category else "按费用排序"
+	deck_sort_btn.text = mode
+	deck_sort_btn.tooltip_text = "切换排序方式（当前：%s）" % mode
+
+
+## 排序冷却：锁死期间按钮禁用并显示倒计时，禁止交互/无按下反馈
+func _update_sort_cooldown() -> void:
+	if deck_sort_btn == null:
+		return
+	var remaining := SORT_COOLDOWN_MS - (Time.get_ticks_msec() - _sort_cooldown_ms)
+	if remaining > 0:
+		if not deck_sort_btn.disabled:
+			deck_sort_btn.disabled = true
+		deck_sort_btn.text = "冷却中 %d 秒" % int(ceil(remaining / 1000.0))
+	elif deck_sort_btn.disabled:
+		deck_sort_btn.disabled = false
+		_update_sort_btn()
+
+
+func _toggle_deck_sort() -> void:
+	# 锁死两次切换之间的最低时间间隔（5 秒），杜绝连点造成排列错乱
+	var now := Time.get_ticks_msec()
+	if now - _sort_cooldown_ms < SORT_COOLDOWN_MS:
+		return
+	if _sort_animating:
+		return
+	_sort_cooldown_ms = now
+	_sort_animating = true
+	_deck_sort_by_category = not _deck_sort_by_category
+	_update_sort_btn()
+	await _sort_deck_cards(_deck_sort_by_category)
+	_sort_animating = false
+
+
+## 按当前排序规则返回 ACTION_CARDS 的有序副本
+func _sorted_action_cards(by_category: bool) -> Array:
+	var cards: Array = GameState.ACTION_CARDS.duplicate()
+	cards.sort_custom(func(a, b): return _card_dict_less(a, b, by_category))
+	return cards
+
+
+## 两张卡牌的比较器：类别排序按类别序（生态→社会→管理），费用排序按费用升序
+func _card_dict_less(a: Dictionary, b: Dictionary, by_category: bool) -> bool:
+	if by_category:
+		var oa := CATEGORY_ORDER.find(a["category"])
+		var ob := CATEGORY_ORDER.find(b["category"])
+		if oa != ob:
+			return oa < ob
+	else:
+		if a["cost"] != b["cost"]:
+			return a["cost"] < b["cost"]
+		var oa := CATEGORY_ORDER.find(a["category"])
+		var ob := CATEGORY_ORDER.find(b["category"])
+		if oa != ob:
+			return oa < ob
+	# 同级再按费用、id 稳定排序
+	if a["cost"] != b["cost"]:
+		return a["cost"] < b["cost"]
+	return a["id"] < b["id"]
+
+
+## 重排牌库卡牌并让它们直接飞到新位置
+func _sort_deck_cards(by_category: bool) -> void:
+	var panels: Array = deck_viewer_grid.get_children()
+	if panels.size() < 2:
+		return
+	# 先停掉所有悬停动画并复位，避免和飞行动画打架
+	for p in panels:
+		_kill_card_tweens(p)
+		p.z_index = 0
+		p.rotation = 0.0
+		p.scale = Vector2.ONE
+		p.modulate.a = 1.0
+		_remove_yellow_frame(p)
+	# 记录旧位置
+	var old_pos := {}
+	for p in panels:
+		old_pos[p] = p.position
+	# 按新规则排序并重排子节点
+	panels.sort_custom(func(a, b): return _card_dict_less(a.get_meta("card"), b.get_meta("card"), by_category))
+	for i in panels.size():
+		deck_viewer_grid.move_child(panels[i], i)
+	# 等两帧确保 HFlowContainer 完成重新布局（一帧可能不够，读到旧位置会导致排序没变）
+	deck_viewer_grid.queue_sort()
+	await get_tree().process_frame
+	await get_tree().process_frame
+	# 把每张牌拉回旧位置，再 tween 直接飞到新位置
+	for p in panels:
+		var new_pos: Vector2 = p.position
+		p.position = old_pos[p]
+		p.set_meta("base_pos", new_pos)   # 更新悬停基准位，避免下次悬停飞到旧位
+		var tw: Tween = p.create_tween()
+		tw.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_IN_OUT)
+		tw.tween_property(p, "position", new_pos, 0.3)
+	# 等飞行动画完成，期间 _sort_animating 保持 true，避免连点造成位置 tween 重叠
+	await get_tree().create_timer(0.32).timeout
+
+
+# ==================== 牌库卡牌悬停 / 点击查看 ====================
+## 悬停：浮起放大 + 轻微漂浮 + 黄框；并记录为陀螺仪目标
+func _on_viewer_card_hover(view: Control, _card: Dictionary) -> void:
+	_deck_gyro_view = view
+	_kill_card_tweens(view)
+	if not view.has_meta("base_pos"):
+		view.set_meta("base_pos", view.position)  # 首次悬停才记录原位（此时布局已完成）
+	var base: Vector2 = view.get_meta("base_pos")
+	view.z_index = 10
+	view.pivot_offset = view.size * 0.5
+	var tweens: Array = []
+	# 浮起放大
+	var tw := view.create_tween()
+	tweens.append(tw)
+	tw.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+	tw.tween_property(view, "position:y", base.y - 16, 0.16)
+	tw.parallel().tween_property(view, "scale", Vector2(1.12, 1.12), 0.16)
+	# 四周轻微漂浮（幅度/速度都调小，避免和陀螺仪叠加显得像果冻）
+	var fx := view.create_tween().set_loops()
+	tweens.append(fx)
+	fx.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+	fx.tween_property(view, "position:x", base.x + 2.5, 2.2).set_delay(0.16)
+	fx.tween_property(view, "position:x", base.x - 2.5, 2.2)
+	var fy := view.create_tween().set_loops()
+	tweens.append(fy)
+	fy.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+	fy.tween_property(view, "position:y", base.y - 16 + 2, 2.0).set_delay(0.16)
+	fy.tween_property(view, "position:y", base.y - 16 - 2, 2.0)
+	view.set_meta("hover_tweens", tweens)
+	_apply_yellow_frame(view)
+
+
+func _on_viewer_card_unhover(view: Control) -> void:
+	if _deck_gyro_view == view:
+		_deck_gyro_view = null
+	_kill_card_tweens(view)
+	view.z_index = 0
+	var base: Vector2 = view.get_meta("base_pos", view.position)
+	var tw := view.create_tween()
+	tw.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+	tw.tween_property(view, "position", base, 0.16)
+	tw.parallel().tween_property(view, "scale", Vector2.ONE, 0.16)
+	tw.parallel().tween_property(view, "rotation", 0.0, 0.16)
+	view.set_meta("return_tween", tw)
+	_remove_yellow_frame(view)
+
+
+## 取消该卡牌所有悬停/归位动画，避免快速反复划过时 tween 打架
+func _kill_card_tweens(view: Control) -> void:
+	var tweens: Array = view.get_meta("hover_tweens", [])
+	for t in tweens:
+		if t != null:
+			t.kill()
+	view.set_meta("hover_tweens", null)
+	if view.has_meta("return_tween"):
+		var ret: Tween = view.get_meta("return_tween")
+		if ret != null:
+			ret.kill()
+	view.set_meta("return_tween", null)
+
+
+## 牌库陀螺仪：只对鼠标悬停的那张牌做 3D 透视倾斜（绕 X/Y 轴），其余回正
+func _process_deck_gyro(delta: float) -> void:
+	if not _deck_open or deck_viewer_grid == null:
+		return
+	var mouse := get_viewport().get_mouse_position()
+	var k := 1.0 - exp(-12.0 * delta)
+	for view in deck_viewer_grid.get_children():
+		if not is_instance_valid(view):
+			continue
+		var mat: ShaderMaterial = view.material
+		if mat == null:
+			continue
+		var target_x := 0.0
+		var target_y := 0.0
+		if view == _deck_gyro_view:
+			var center: Vector2 = view.get_global_rect().get_center()
+			var d: Vector2 = mouse - center
+			# 鼠标在卡牌内的相对位置 → 俯仰/偏航角（±约 18°）
+			target_x = clampf(d.y * 0.0032, -0.32, 0.32)
+			target_y = clampf(d.x * 0.0042, -0.32, 0.32)
+		var cur_x: float = view.get_meta("gyro_x", 0.0)
+		var cur_y: float = view.get_meta("gyro_y", 0.0)
+		var nx := lerpf(cur_x, target_x, k)
+		var ny := lerpf(cur_y, target_y, k)
+		view.set_meta("gyro_x", nx)
+		view.set_meta("gyro_y", ny)
+		mat.set_shader_parameter("tilt_x", nx)
+		mat.set_shader_parameter("tilt_y", ny)
+
+
+func _on_viewer_card_click(event: InputEvent, view: Control, card: Dictionary) -> void:
+	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
+		_show_card_detail(view, card)
+
+
+func _apply_yellow_frame(view: Control) -> void:
+	var panel: PanelContainer = view.get_meta("panel")
+	var sb := StyleBoxFlat.new()
+	sb.bg_color = Color(0.30, 0.22, 0.14, 0.98)
+	sb.border_color = Color(1.0, 0.85, 0.3)
+	sb.set_border_width_all(3)
+	sb.corner_radius_top_left = 4
+	sb.corner_radius_top_right = 4
+	sb.corner_radius_bottom_left = 4
+	sb.corner_radius_bottom_right = 4
+	sb.content_margin_left = 12
+	sb.content_margin_right = 12
+	sb.content_margin_top = 10
+	sb.content_margin_bottom = 10
+	panel.add_theme_stylebox_override("panel", sb)
+
+
+func _remove_yellow_frame(view: Control) -> void:
+	var panel: PanelContainer = view.get_meta("panel")
+	_panel_style(panel, Color(0.30, 0.22, 0.14, 0.98))
+
+
+## 卡牌详情：左大牌 + 右介绍框（打字机）；大牌从被点击处平移放大投射到左侧展示位
+func _show_card_detail(view: Control, card: Dictionary) -> void:
+	card_detail.visible = true
+	if _detail_big_card != null and is_instance_valid(_detail_big_card):
+		_detail_big_card.queue_free()
+		_detail_big_card = null
+	var big := _make_card(card)
+	big.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	big.pivot_offset = Vector2(61, 82.5)
+	_detail_big_card = big
+	# 起始：被点击卡牌的屏幕中心；终点：左侧展示区中心
+	var src_center := view.get_global_rect().get_center()
+	var dst_center := card_detail_card.get_global_rect().get_center()
+	var inv := card_detail.get_global_transform().affine_inverse()
+	var src_local: Vector2 = inv * src_center - big.pivot_offset
+	var dst_local: Vector2 = inv * dst_center - big.pivot_offset
+	big.position = src_local
+	big.scale = Vector2.ONE
+	card_detail.add_child(big)
+	# 投射动画：平移 + 放大
+	var fly := big.create_tween()
+	fly.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+	fly.tween_property(big, "position", dst_local, 0.4)
+	fly.parallel().tween_property(big, "scale", Vector2(1.8, 1.8), 0.4)
+	card_detail_title.text = card["name"]
+	card_detail_body.text = _card_detail_text(card)
+	card_detail_body.visible_characters = 0
+	var total := card_detail_body.get_total_character_count()
+	var tw := card_detail_body.create_tween()
+	tw.set_trans(Tween.TRANS_LINEAR)
+	tw.tween_property(card_detail_body, "visible_characters", total, clampf(total * 0.03, 0.4, 2.5))
+
+
+func _card_detail_text(card: Dictionary) -> String:
+	var body := "[color=#8a8a8a]类别：%s　成本：%d 万[/color]\n\n" % [CATEGORY_NAMES[card["category"]], card["cost"]]
+	body += "%s\n\n" % card["desc"]
+	body += "[b]档位效果[/b]\n"
+	for tier in ["basic", "effective", "deep"]:
+		var t: Dictionary = card["tiers"][tier]
+		var parts: Array = []
+		for e in t["effects"]:
+			var d: int = e["delay"]
+			var suffix := "（%d 回合后）" % d if d > 0 else ""
+			parts.append("%s %+d%s" % [GameState.METRIC_NAMES[e["metric"]], int(e["delta"]), suffix])
+		body += "· %s：%s\n" % [GameState.TIER_NAMES[tier], "、".join(parts)]
+	if card.has("side_note") and not card["side_note"].is_empty():
+		for k in card["side_note"]:
+			body += "\n[color=#ffb060]※ %s[/color]" % card["side_note"][k]
+	return body
+
+
+func _close_card_detail() -> void:
+	card_detail.visible = false
+
+
+func _on_card_detail_dim_input(event: InputEvent) -> void:
+	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
+		_close_card_detail()
+
+
+## 卡牌详情弹层（覆盖在牌库查看器之上）
+func _build_card_detail() -> void:
+	card_detail = Control.new()
+	card_detail.set_anchors_preset(Control.PRESET_FULL_RECT)
+	card_detail.mouse_filter = Control.MOUSE_FILTER_STOP
+	card_detail.visible = false
+	deck_viewer.add_child(card_detail)
+
+	var dim := ColorRect.new()
+	dim.color = Color(0, 0, 0, 0.55)
+	dim.set_anchors_preset(Control.PRESET_FULL_RECT)
+	dim.mouse_filter = Control.MOUSE_FILTER_STOP
+	dim.gui_input.connect(_on_card_detail_dim_input)
+	card_detail.add_child(dim)
+
+	card_detail_card = CenterContainer.new()
+	card_detail_card.anchor_left = 0.0
+	card_detail_card.anchor_right = 0.5
+	card_detail_card.anchor_top = 0.0
+	card_detail_card.anchor_bottom = 1.0
+	card_detail_card.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	card_detail.add_child(card_detail_card)
+
+	var info := PanelContainer.new()
+	info.anchor_left = 0.52
+	info.anchor_right = 0.98
+	info.anchor_top = 0.08
+	info.anchor_bottom = 0.92
+	_panel_style(info, Color(0.24, 0.17, 0.11, 0.96))
+	card_detail.add_child(info)
+
+	var iv := VBoxContainer.new()
+	iv.add_theme_constant_override("separation", 10)
+	info.add_child(iv)
+
+	card_detail_title = _make_label("", 30, Color(1, 0.9, 0.55))
+	card_detail_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	iv.add_child(card_detail_title)
+
+	var sep := HSeparator.new()
+	iv.add_child(sep)
+
+	card_detail_body = RichTextLabel.new()
+	card_detail_body.bbcode_enabled = true
+	card_detail_body.fit_content = true
+	card_detail_body.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	card_detail_body.add_theme_font_size_override("normal_font_size", _snap_px(16))
+	card_detail_body.add_theme_color_override("default_color", Color(0.96, 0.94, 0.9))
+	iv.add_child(card_detail_body)
+
+	var close := _make_button("返回", _close_card_detail, 18)
+	close.custom_minimum_size = Vector2(0, 44)
+	iv.add_child(close)
+
+
 func _on_start_pressed() -> void:
 	var s := seed_input.text.strip_edges()
 	if s == "" or s == "0":
@@ -1741,6 +3600,8 @@ func _on_start_pressed() -> void:
 	else:
 		menu_hint.text = "种子需为非负整数（留空则随机）"
 		return
+	_clear_save()           # 放弃（判负）上一局暂停的进度
+	_playing = true
 	_hide_menu()
 	GameState.reset_game()
 	_update_hud()
@@ -1795,17 +3656,47 @@ func _make_metric_row(metric: String) -> VBoxContainer:
 	val.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	head.add_child(val)
 
+	# 进度条 + 阈值红线：红线作为进度条的兄弟节点，避免被指标颜色 modulate 染色
+	var wrap := Control.new()
+	wrap.custom_minimum_size = Vector2(0, 11)
+	wrap.mouse_filter = Control.MOUSE_FILTER_IGNORE
+
 	var bar := ProgressBar.new()
 	bar.min_value = 0
 	bar.max_value = 100
 	bar.value = 0
 	bar.show_percentage = false
-	bar.custom_minimum_size = Vector2(0, 11)
 	bar.modulate = METRIC_COLORS[metric]
-	vb.add_child(bar)
+	bar.set_anchors_preset(Control.PRESET_FULL_RECT)
+	bar.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	wrap.add_child(bar)
 
-	metric_bars[metric] = {"bar": bar, "val": val}
+	# 阈值红线（像素竖线）：指标低于此线即判负；锚定在阈值比例处，随难度更新
+	var line := ColorRect.new()
+	line.color = Color(1.0, 0.2, 0.2, 0.95)
+	line.anchor_left = 0.2
+	line.anchor_right = 0.2
+	line.offset_left = -1
+	line.offset_right = 1
+	line.anchor_top = 0.0
+	line.anchor_bottom = 1.0
+	line.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	wrap.add_child(line)
+
+	vb.add_child(wrap)
+
+	metric_bars[metric] = {"bar": bar, "val": val, "line": line}
 	return vb
+
+
+## 按难度更新指标条上的阈值红线位置（简单 20 / 困难 30）
+func _update_threshold_lines() -> void:
+	var ratio: float = GameState.failure_threshold() / 100.0
+	for metric in metric_bars:
+		var line: ColorRect = metric_bars[metric].get("line")
+		if line != null:
+			line.anchor_left = ratio
+			line.anchor_right = ratio
 
 
 func _update_hud() -> void:
@@ -1834,6 +3725,7 @@ func _update_hud() -> void:
 # ==================== 事件 / 结算 / 知识卡 / 报告 ====================
 func _on_event(text: String) -> void:
 	_current_event = text
+	_current_phase = "popup_event"
 	_update_hud()
 	hand_panel.visible = false
 	bottom_right.visible = false
@@ -1841,6 +3733,7 @@ func _on_event(text: String) -> void:
 
 
 func _enter_allocate() -> void:
+	_current_phase = "allocate"
 	_slide_side_panels(false)  # 新回合开始，侧边栏弹回
 	current_hand = GameState.draw_cards(7 + int(Talents.get_bonus("cards")))
 	play_deal_anim = true
@@ -2269,6 +4162,7 @@ func _finish_turn() -> void:
 	hand_panel.visible = false
 	bottom_right.visible = false
 	_slide_side_panels(true)  # 结算后侧边栏收回屏幕外，让出沙盘
+	_current_phase = "popup_settlement"
 	_show_popup("结算反馈", "\n".join(lines), "继续", _on_resolve_continue)
 
 
@@ -2281,6 +4175,7 @@ func _on_resolve_continue() -> void:
 
 
 func _show_knowledge(card_id: String) -> void:
+	_current_phase = "popup_knowledge"
 	var k: Dictionary = GameState.KNOWLEDGE_CARDS[card_id]
 	var body := "[color=#7fd0ff]【%s】[/color]\n\n" % k["category"]
 	body += "%s\n\n" % k["short"]
@@ -2297,7 +4192,8 @@ func _advance_to_next() -> void:
 		GameState.start_new_turn()
 		# start_new_turn 会触发事件信号（有事件回合）。无事件回合不弹窗，
 		# 但知识卡弹窗此时已经关闭，所以直接进入分配阶段即可。
-		if not popup_root.visible:
+		# 危机警示是独立弹层，也计入「有弹窗」判断，避免危机弹窗未关就发牌。
+		if not popup_root.visible and not crisis_root.visible:
 			_enter_allocate()
 
 
@@ -2306,6 +4202,8 @@ func _on_game_end(report: Dictionary) -> void:
 
 
 func _show_report(r: Dictionary) -> void:
+	_current_phase = "popup_report"
+	_clear_save()  # 一局已结束，清掉存档（不能再继续）
 	var earned: int = r.get("talent_points", 0)
 	if earned > 0:
 		Talents.award(earned)
@@ -2334,6 +4232,7 @@ func _show_report(r: Dictionary) -> void:
 
 
 func _restart() -> void:
+	_playing = false
 	_current_event = ""
 	# 回到主菜单，让玩家可重新输入种子（留空则随机）
 	_show_menu()
@@ -2461,6 +4360,11 @@ func _slide_side_panels(out: bool) -> void:
 # ==================== 像素图标 ====================
 ## 从字符网格生成像素图标纹理（'#'=描边, 'X'=主色, 'o'=高光, '.'=透明）
 func _pixel_icon(grid: String, main: Color, dark: Color, light: Color) -> ImageTexture:
+	return ImageTexture.create_from_image(_grid_image(grid, main, dark, light))
+
+
+## 把网格字符串解析成 Image（# 深色 / X 主色 / o 高亮）
+func _grid_image(grid: String, main: Color, dark: Color, light: Color) -> Image:
 	var rows: Array = []
 	for r in grid.split("\n"):
 		var line: String = (r as String).strip_edges()
@@ -2477,7 +4381,7 @@ func _pixel_icon(grid: String, main: Color, dark: Color, light: Color) -> ImageT
 				"X": img.set_pixel(x, y, main)
 				"o": img.set_pixel(x, y, light)
 				_: img.set_pixel(x, y, Color(0, 0, 0, 0))
-	return ImageTexture.create_from_image(img)
+	return img
 
 
 ## 生成指定显示尺寸的像素图标控件（最近邻放大保持锐利）

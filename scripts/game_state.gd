@@ -10,10 +10,18 @@ const MAX_CARRY := 60            # 结转上限（万）
 const INTEREST_RATE := 0.05      # 结转利息（每回合，利滚利，利率从低）
 const MAX_ACTIONS := 3           # 每回合最多执行行动数（行动位）
 
-# 困难模式参数
-const HARD_FAILURE_THRESHOLD := 30   # 困难模式：任一指标低于此值即判负
-const HARD_FUNDING_PENALTY := 25     # 困难模式：每回合基础拨款削减（万）
-const HARD_PENALTY_MULT := 1.5       # 困难模式：扣分（负向变动）惩罚倍率
+# 难度档位：简单 / 普通 / 困难
+enum Difficulty { EASY, NORMAL, HARD }
+
+# 各难度参数（简单 / 普通 / 困难）
+const FAILURE_THRESHOLD := { Difficulty.EASY: 20, Difficulty.NORMAL: 30, Difficulty.HARD: 40 }   # 判负阈值
+const PENALTY_MULT := { Difficulty.EASY: 1.0, Difficulty.NORMAL: 1.5, Difficulty.HARD: 2.0 }     # 扣分惩罚倍率
+const FUNDING_PENALTY := { Difficulty.EASY: 0, Difficulty.NORMAL: 20, Difficulty.HARD: 35 }       # 每回合拨款削减（万）
+const CRISIS_CHANCE := { Difficulty.EASY: 0.38, Difficulty.NORMAL: 0.55, Difficulty.HARD: 0.68 }  # 危机概率基数
+const CRISIS_SLOPE := { Difficulty.EASY: 0.22, Difficulty.NORMAL: 0.25, Difficulty.HARD: 0.28 }   # 危机概率随回合增幅
+const START_FLOOR := { Difficulty.EASY: 48, Difficulty.NORMAL: 48, Difficulty.HARD: 48 }          # 开局指标下限（各难度统一，难度只体现在阈值）
+const START_BOOST := { Difficulty.EASY: 6, Difficulty.NORMAL: 6, Difficulty.HARD: 6 }             # 开局指标加成（各难度统一）
+const REPORT_SCORE := { Difficulty.EASY: 80.0, Difficulty.NORMAL: 70.0, Difficulty.HARD: 65.0 }   # 天赋点达标平均分
 
 # 六项指标的中文名与量纲说明
 const METRIC_NAMES := {
@@ -66,6 +74,8 @@ const ACTION_SPECIES_BONUS := {
 	"bird_canteen": {"baihe": 6, "baizhenhe": 6},
 	"patrol": {"dongfangbaihuan": 6},
 	"water_replenish": {"xiaotiane": 8},
+	"water_storage": {"xiaotiane": 7},
+	"water_schedule": {"xiaotiane": 6},
 	"habitat_protect": {"baihe": 8, "xiaotiane": 6},
 }
 
@@ -111,6 +121,8 @@ const ACTION_PLANT_BONUS := {
 	"water_control": {"luwei": 10, "lian": 10},
 	"water_monitor": {"kucao": 8},
 	"water_replenish": {"luwei": 8, "lian": 8},
+	"water_storage": {"luwei": 8, "lian": 8},
+	"water_schedule": {"luwei": 7, "lian": 7},
 	"wetland_restore": {"kucao": 12, "taicao": 12, "lihao": 10},
 	"floating_island": {"lian": 6},
 	"grazing_ban": {"taicao": 10},
@@ -268,6 +280,28 @@ const ACTION_CARDS := [
 			"deep":     {"effects": [{"metric": "water_level", "delta": 19, "delay": 0}, {"metric": "vegetation", "delta": 6, "delay": 1}, {"metric": "community", "delta": -3, "delay": 0}]},
 		},
 		"side_note": {"deep": "引水挤占下游农业用水，社区信任 -3"},
+	},
+	{
+		"id": "water_storage", "name": "蓄水保水工程", "category": "ecology",
+		"desc": "在碟形湖与入江水道修建蓄水闸，汛期拦蓄、旱季保水，稳定湖区水位。",
+		"cost": 25,
+		"tiers": {
+			"basic":    {"effects": [{"metric": "water_level", "delta": 4, "delay": 0}]},
+			"effective": {"effects": [{"metric": "water_level", "delta": 9, "delay": 0}]},
+			"deep":     {"effects": [{"metric": "water_level", "delta": 16, "delay": 0}, {"metric": "community", "delta": -3, "delay": 0}]},
+		},
+		"side_note": {"deep": "拦蓄过多影响下游用水，社区信任 -3"},
+	},
+	{
+		"id": "water_schedule", "name": "闸坝联合调度", "category": "manage",
+		"desc": "协调上游水库联合调度，保障湖区生态流量，缓解枯水并改善水体流动性。",
+		"cost": 25,
+		"tiers": {
+			"basic":    {"effects": [{"metric": "water_level", "delta": 3, "delay": 0}]},
+			"effective": {"effects": [{"metric": "water_level", "delta": 7, "delay": 0}, {"metric": "water_quality", "delta": 2, "delay": 0}]},
+			"deep":     {"effects": [{"metric": "water_level", "delta": 13, "delay": 0}, {"metric": "water_quality", "delta": 4, "delay": 0}, {"metric": "community", "delta": -2, "delay": 0}]},
+		},
+		"side_note": {"deep": "调水涉及上下游利益，社区信任 -2"},
 	},
 	{
 		"id": "wetland_restore", "name": "退田还湿（湿地生态修复）", "category": "ecology",
@@ -529,7 +563,7 @@ const CRISES := [
 # 危机预警出现时，对应处置手段的卡牌更容易进入本回合手牌
 # —— 现实中预警一出，应急专项就会上会；但只是「更容易」，不是必然。
 const CRISIS_COUNTERS := {
-	"drought": ["water_replenish", "water_control"],                 # 干旱 → 补水 / 控水
+	"drought": ["water_replenish", "water_control", "water_storage", "water_schedule"],  # 干旱 → 补水 / 控水 / 蓄水 / 调度
 	"disease": ["water_monitor", "veg_restore"],                     # 病害 → 监测防治 / 补种
 	"illegal_fishing": ["patrol", "smart_patrol"],                   # 非法捕捞 → 执法 / 智慧巡护
 	"bird_conflict": ["bird_canteen", "damage_insurance"],           # 人鸟冲突 → 候鸟食堂 / 致害保险
@@ -640,7 +674,7 @@ var total_spent: int = 0            # 累计卡牌支出（用于资金效率评
 # ===== 肉鸽机制状态 =====
 var run_seed: int = 0               # 本局种子（同种子可复现，用于反事实对照）
 var settlement: int = 70            # 环湖人类围垦强度 0-100，仅用于 3D 房子表现
-var hard_mode: bool = false         # 困难模式（主菜单选择）
+var difficulty: int = Difficulty.EASY   # 当前难度档位（主菜单选择）
 var floating_islands: int = 0       # 人工浮岛数量（视觉表现，0=无）
 var pending_crisis: Dictionary = {} # 待爆发的危机（本回合预警，下回合生效）
 var last_crisis_name: String = ""   # 上回合爆发的危机名（用于结算展示）
@@ -653,6 +687,8 @@ var failure_metric: String = ""     # 崩溃的指标
 signal metrics_changed
 signal funds_changed
 signal event_triggered(text: String)
+signal crisis_warned(crisis: Dictionary)
+signal crisis_hit(crisis: Dictionary)
 signal knowledge_triggered(card_id: String)
 signal turn_changed
 signal game_ended(report: Dictionary)
@@ -660,6 +696,68 @@ signal game_ended(report: Dictionary)
 
 func _ready() -> void:
 	pass  # 由主场景在连接信号后调用 reset_game()，避免首个事件信号丢失
+
+
+# ==================== 存档 ====================
+## 序列化全部运行时状态，供暂停退出后读档续玩
+func serialize() -> Dictionary:
+	return {
+		"turn": turn, "funds": funds, "carry": carry,
+		"research_points": research_points,
+		"metrics": metrics.duplicate(),
+		"species_pop": species_pop.duplicate(),
+		"plant_pop": plant_pop.duplicate(),
+		"effects_queue": effects_queue.duplicate(true),
+		"used_action_ids": used_action_ids.duplicate(),
+		"knowledge_unlocked": knowledge_unlocked.duplicate(),
+		"pending_knowledge": pending_knowledge.duplicate(),
+		"log_messages": log_messages.duplicate(),
+		"game_over": game_over, "total_spent": total_spent,
+		"run_seed": run_seed, "settlement": settlement,
+		"difficulty": difficulty, "floating_islands": floating_islands,
+		"pending_crisis": pending_crisis.duplicate(true),
+		"last_crisis_name": last_crisis_name,
+		"triggered_synergies": triggered_synergies.duplicate(),
+		"fired_synergies": _fired_synergies.duplicate(),
+		"is_failure": is_failure, "failure_reason": failure_reason, "failure_metric": failure_metric,
+	}
+
+
+## 从存档恢复全部运行时状态（不触发信号，由主场景随后刷新 HUD 与 3D）
+func load_state(d: Dictionary) -> void:
+	turn = int(d.get("turn", 0))
+	funds = int(d.get("funds", 0))
+	carry = int(d.get("carry", 0))
+	research_points = int(d.get("research_points", 0))
+	metrics = _int_dict(d.get("metrics", {}))
+	species_pop = _int_dict(d.get("species_pop", {}))
+	plant_pop = _int_dict(d.get("plant_pop", {}))
+	effects_queue = d.get("effects_queue", [])
+	used_action_ids = d.get("used_action_ids", [])
+	knowledge_unlocked = d.get("knowledge_unlocked", [])
+	pending_knowledge = d.get("pending_knowledge", [])
+	log_messages = d.get("log_messages", [])
+	game_over = bool(d.get("game_over", false))
+	total_spent = int(d.get("total_spent", 0))
+	run_seed = int(d.get("run_seed", 0))
+	settlement = int(d.get("settlement", 70))
+	difficulty = int(d.get("difficulty", 1 if d.get("hard_mode", false) else 0))
+	floating_islands = int(d.get("floating_islands", 0))
+	pending_crisis = d.get("pending_crisis", {})
+	last_crisis_name = str(d.get("last_crisis_name", ""))
+	triggered_synergies = d.get("triggered_synergies", [])
+	_fired_synergies = d.get("fired_synergies", [])
+	is_failure = bool(d.get("is_failure", false))
+	failure_reason = str(d.get("failure_reason", ""))
+	failure_metric = str(d.get("failure_metric", ""))
+
+
+## 把字典的值统一转成 int（JSON 兜底）
+func _int_dict(d: Dictionary) -> Dictionary:
+	var out := {}
+	for k in d:
+		out[k] = int(d[k])
+	return out
 
 
 func reset_game() -> void:
@@ -714,14 +812,17 @@ func _roll_starting_metrics() -> Dictionary:
 	var all_bonus := int(Talents.get_bonus("start_all"))
 	for k in base:
 		base[k] += all_bonus
+	# 开局数值各难度统一（难度差异体现在判负阈值上），统一抬高下限避免开局过低
+	var floor: int = START_FLOOR[difficulty]
+	var boost: int = START_BOOST[difficulty]
 	var out := {}
 	for k in base:
-		# 每项在 ±9 内偏移，并保证不低于失败线（25）
-		out[k] = clampi(base[k] + _randi_range(-9, 9), 25, 88)
+		# 每项在 ±9 内偏移，并保证不低于统一下限
+		out[k] = clampi(base[k] + boost + _randi_range(-9, 9), floor, 88)
 	# 至少保证有一项明显偏弱，制造"这局的软肋"
 	var weak_keys: Array = out.keys()
 	var weak: String = weak_keys[_randi_range(0, weak_keys.size() - 1)]
-	out[weak] = clampi(out[weak] - 12, 25, 88)
+	out[weak] = clampi(out[weak] - 12, floor, 88)
 	return out
 
 
@@ -767,9 +868,8 @@ func start_new_turn() -> void:
 		funding += 15
 	elif metrics["community"] <= 30:
 		funding -= 15
-	# 困难模式：初始/每回合资金削减
-	if hard_mode:
-		funding -= HARD_FUNDING_PENALTY
+	# 按难度削减每回合拨款（普通/困难）
+	funding -= FUNDING_PENALTY[difficulty]
 	# 天赋加成：基础拨款 + 运营成本减免
 	funding += int(Talents.get_bonus("funding"))
 
@@ -805,7 +905,7 @@ func _resolve_pending_crisis() -> void:
 	_sync_species()
 	_sync_plants()
 	metrics_changed.emit()
-	event_triggered.emit(c["hit"])
+	crisis_hit.emit(c)
 
 
 ## 抽取本回合的危机预警（提前 1 回合告知，给玩家应对机会）
@@ -817,12 +917,8 @@ func _maybe_warn_crisis() -> void:
 	# 从第 3 回合起才开始抽危机，给玩家缓冲
 	if turn < 3:
 		return
-	# 基础概率 38%（困难模式 55%），随回合推进略升（后期压力更大）
-	var chance: float
-	if hard_mode:
-		chance = 0.55 + float(turn) / float(TOTAL_TURNS) * 0.25
-	else:
-		chance = 0.38 + float(turn) / float(TOTAL_TURNS) * 0.22
+	# 基础概率随难度递增，随回合推进略升（后期压力更大）
+	var chance: float = CRISIS_CHANCE[difficulty] + float(turn) / float(TOTAL_TURNS) * CRISIS_SLOPE[difficulty]
 	# 天赋加成：降低危机触发概率
 	chance += Talents.get_bonus("crisis_chance")
 	if randf() > chance:
@@ -841,7 +937,7 @@ func _maybe_warn_crisis() -> void:
 		roll -= weights[i]
 		if roll <= 0.0:
 			pending_crisis = CRISES[i]
-			event_triggered.emit(pending_crisis["warn"])
+			crisis_warned.emit(pending_crisis)
 			return
 
 
@@ -1078,9 +1174,14 @@ func end_turn() -> void:
 	# 下一回合由主场景在展示完结算反馈后调用 start_new_turn()
 
 
-## 检查是否有指标跌破失败线（简单 20 / 困难 30：上级对政绩不满，将你撤换）
+## 当前难度的判负阈值：指标低于此值即判负
+func failure_threshold() -> int:
+	return FAILURE_THRESHOLD[difficulty]
+
+
+## 检查是否有指标跌破失败线（上级对政绩不满，将你撤换）
 func _check_failure() -> bool:
-	var threshold: int = HARD_FAILURE_THRESHOLD if hard_mode else 20
+	var threshold: int = failure_threshold()
 	for metric in metrics:
 		if metrics[metric] < threshold:
 			is_failure = true
@@ -1137,9 +1238,9 @@ func _eval_condition(cond: String) -> bool:
 func _apply_delta(metric: String, delta: int) -> void:
 	if not metrics.has(metric):
 		return
-	# 困难模式：扣分（负向变动）惩罚加成
-	if hard_mode and delta < 0:
-		delta = roundi(delta * HARD_PENALTY_MULT)
+	# 扣分（负向变动）惩罚加成，倍率随难度递增
+	if delta < 0:
+		delta = roundi(delta * PENALTY_MULT[difficulty])
 	metrics[metric] = clampi(metrics[metric] + delta, 0, 100)
 
 
@@ -1174,7 +1275,7 @@ func generate_report() -> Dictionary:
 	var reflection := _build_reflection()
 	# 本局天赋点：需玩到 12 轮以上且平均评分达标（普通 >80 / 困难 >70），达标得 2 点
 	var avg_score: float = (eco["score"] + social["score"] + manage["score"]) / 3.0
-	var threshold: float = 70.0 if hard_mode else 80.0
+	var threshold: float = REPORT_SCORE[difficulty]
 	var earned: int = 2 if (turn >= 12 and avg_score > threshold) else 0
 	return {
 		"eco": eco, "social": social, "manage": manage,
