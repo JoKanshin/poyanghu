@@ -551,13 +551,17 @@ const KNOWLEDGE_CARDS := {
 # ==================== 危机事件池（肉鸽随机性核心）====================
 # 每回合有概率抽中危机；危机提前 1 回合预警，下回合生效。
 # weight：同一轮候选之间的相对权重；cond：只有当前状态吻合的危机才会进入候选。
-# 防连出与冷却：刚爆发的那个不会紧接着再来；爆发过的在 CRISIS_COOLDOWN_TURNS 回合内不再抽中。
+# 防连出与冷却：刚爆发的那个不会紧接着再来；爆发过的在各自的冷却回合内不再抽中。
 # 全局喘息：任意两场危机之间至少空出 CRISIS_BREATH_TURNS 个回合（与是不是同一个危机无关）。
+# 冷却时长默认走全局 CRISIS_COOLDOWN_TURNS；某个危机若在自己的条目里写了 "cooldown"，
+# 就用它自己的 —— 便于给「汛期洪水」「非法捕捞」这类刷得凶的单独拉长间隔。
+# 条目里不写 "cooldown" = 用全局值 = 与加这个机制之前完全一样（零行为变化）。
 const CRISIS_COOLDOWN_TURNS := 3
 const CRISIS_BREATH_TURNS := 1
 const CRISES := [
 	{
 		"id": "drought", "name": "极端干旱", "weight": 1.0, "cond": "water_level < 45",
+		"cooldown": 5,   # 重事件：掉 14 水位，两次之间至少隔 5 回合
 		"needs": ["补水调度"],
 		"warn": "【自然预警】气象部门预报：未来一季降水显著偏少，湖区面临枯水风险。",
 		"hit": "【危机爆发】极端干旱来袭——湖区水位骤降，沉水植物块茎大面积发育受阻，湖床裸露。",
@@ -565,6 +569,7 @@ const CRISES := [
 	},
 	{
 		"id": "disease", "name": "苦草病害暴发", "weight": 0.9, "cond": "water_quality < 50",
+		"cooldown": 4,   # 慢性病害：会反复，但别连着来
 		"needs": ["病害防控", "生态修复"],
 		"warn": "【监测提示】巡护员发现局部水草出现腐烂迹象，疑与水体富营养化有关，建议加强监测。",
 		"hit": "【危机爆发】苦草病害大面积暴发——沉水植被成片腐烂死亡，候鸟食物锐减。",
@@ -572,6 +577,7 @@ const CRISES := [
 	},
 	{
 		"id": "illegal_fishing", "name": "非法捕捞猖獗", "weight": 1.0, "cond": "fish < 50",
+		"cooldown": 5,   # 实测最易刷屏的之一（简单档随机打牌 0.54/局），拉长间隔
 		"needs": ["执法巡护"],
 		"warn": "【巡护通报】近期湖区外围发现可疑船只活动轨迹，疑似非法捕捞，建议加强执法。",
 		"hit": "【危机爆发】非法捕捞猖獗——电捕鱼与密眼网具造成鱼类资源骤减。",
@@ -579,6 +585,7 @@ const CRISES := [
 	},
 	{
 		"id": "bird_conflict", "name": "候鸟大规模进田", "weight": 1.0, "cond": "community < 55",
+		"cooldown": 3,   # 社会摩擦：本来就不密（0.04/局），维持全局值
 		"needs": ["社区补偿", "栖息地营造"],
 		"warn": "【社区报告】农户反映白鹤开始向稻田聚集，若持续可能造成较大损失，请提前协商。",
 		"hit": "【危机爆发】数千只候鸟涌入农田取食莲藕、踩踏稻苗，农户损失严重，矛盾激化。",
@@ -586,6 +593,7 @@ const CRISES := [
 	},
 	{
 		"id": "flood", "name": "汛期洪水", "weight": 0.8, "cond": "water_level > 60",
+		"cooldown": 6,   # 大戏一场就够：季节性洪水，一局最多两三次
 		"needs": ["生态修复", "栖息地营造"],
 		"warn": "【自然预警】上游持续降雨，水文站预计湖区水位将快速上涨。",
 		"hit": "【危机爆发】汛期洪水漫过草洲——新生沉水植被被冲毁，底质遭到破坏。",
@@ -593,6 +601,7 @@ const CRISES := [
 	},
 	{
 		"id": "pollution", "name": "上游污染输入", "weight": 0.9, "cond": "water_quality < 55",
+		"cooldown": 5,   # 实测密度最高（简单档随机打牌 0.91/局），必须压
 		"needs": ["水体治理"],
 		"warn": "【水质预警】上游监测断面总磷浓度上升，污染团可能随水流进入湖区。",
 		"hit": "【危机爆发】上游污染团入境——总磷总氮严重超标，鱼类与沉水植物同时受损。",
@@ -600,6 +609,7 @@ const CRISES := [
 	},
 	{
 		"id": "invasive", "name": "外来物种暴发", "weight": 0.9, "cond": "vegetation < 55",
+		"cooldown": 5,   # 入侵要时间累积（0.62/局 → 拉开）
 		"needs": ["物种防控", "生态修复"],
 		"warn": "【巡查发现】湖区外围发现福寿螺与凤眼莲扩散迹象，繁殖速度较快。",
 		"hit": "【危机爆发】外来物种暴发——福寿螺啃食水生植物，凤眼莲覆盖水面挤占生存空间。",
@@ -607,6 +617,7 @@ const CRISES := [
 	},
 	{
 		"id": "algal_bloom", "name": "蓝藻水华", "weight": 0.85, "cond": "water_quality < 45",
+		"cooldown": 4,   # 与「上游污染」同属水体治理线，错开但不至于消失
 		"needs": ["水体治理"],
 		"warn": "【监测提示】气温升高、水体流动性变差，蓝藻水华风险上升。",
 		"hit": "【危机爆发】蓝藻水华暴发——水面被绿色藻膜覆盖，水体缺氧，候鸟中毒与食物短缺同时发生。",
@@ -614,6 +625,7 @@ const CRISES := [
 	},
 	{
 		"id": "wetland_encroach", "name": "围湖造田", "weight": 1.0, "cond": "community < 55",
+		"cooldown": 6,   # 重事件（还扣 30 安置额度）：一局出现一次就很有分量
 		"needs": ["执法巡护", "生态修复"],
 		"warn": "【社区动向】部分村民在湿地边缘围垦造田、搭建临时房，有向湖区推进的迹象。",
 		"hit": "【危机爆发】围湖造田蔓延——环湖湿地被侵占，临时房屋与圩田向湖推进。",
@@ -734,6 +746,8 @@ var floating_islands: int = 0       # 人工浮岛数量（视觉表现，0=无�
 var pending_crisis: Dictionary = {} # 待爆发的危机（本回合预警，下回合生效）
 var last_crisis_name: String = ""   # 上回合爆发的危机名（用于结算展示）
 var crisis_history: Array = []      # 已爆发的危机 [{id, turn}]，防连出与冷却的依据
+var warn_history: Array = []        # 本局预警历史 [{turn, id, value, hit_turn}]，顶部「预警回顾」用
+                                    # hit_turn = -1 表示这条预警还没等到爆发（本局就结束了）
 var triggered_synergies: Array = [] # 本回合触发的协同
 var _fired_synergies: Array = []    # 本局已触发过的协同（防重复）
 var is_failure: bool = false        # 是否因生态崩溃提前结束
@@ -775,6 +789,7 @@ func serialize() -> Dictionary:
 		"pending_crisis": pending_crisis.duplicate(true),
 		"last_crisis_name": last_crisis_name,
 		"crisis_history": crisis_history.duplicate(true),
+		"warn_history": warn_history.duplicate(true),
 		"triggered_synergies": triggered_synergies.duplicate(),
 		"fired_synergies": _fired_synergies.duplicate(),
 		"is_failure": is_failure, "failure_reason": failure_reason,
@@ -805,6 +820,7 @@ func load_state(d: Dictionary) -> void:
 	pending_crisis = d.get("pending_crisis", {})
 	last_crisis_name = str(d.get("last_crisis_name", ""))
 	crisis_history = d.get("crisis_history", [])
+	warn_history = d.get("warn_history", [])
 	triggered_synergies = d.get("triggered_synergies", [])
 	_fired_synergies = d.get("fired_synergies", [])
 	is_failure = bool(d.get("is_failure", false))
@@ -838,6 +854,7 @@ func reset_game() -> void:
 	pending_crisis = {}
 	last_crisis_name = ""
 	crisis_history = []
+	warn_history = []
 	triggered_synergies = []
 	_fired_synergies = []
 	is_failure = false
@@ -960,6 +977,7 @@ func _resolve_pending_crisis() -> void:
 	pending_crisis = {}
 	last_crisis_name = c["name"]
 	crisis_history.append({"id": c["id"], "turn": turn})   # 防连出 / 冷却的依据
+	_mark_warning_hit(str(c["id"]), turn)
 	_add_log("⚠ %s" % c["hit"])
 	for e in c["effects"]:
 		_apply_delta(e["metric"], e["delta"])
@@ -1020,16 +1038,30 @@ func _maybe_warn_crisis() -> void:
 		roll -= c["weight"]
 		if roll <= 0.0:
 			pending_crisis = c
+			var pc := _parse_cond_simple(str(c["cond"]))
+			warn_history.append({
+				"turn": turn, "id": c["id"], "hit_turn": -1,
+				"value": int(metrics.get(str(pc.get("metric", "")), 0)),
+			})
 			crisis_warned.emit(pending_crisis)
 			return
 
 
+## 该危机自己的冷却回合数：条目里写了 "cooldown" 就用它，没写就回落全局 CRISIS_COOLDOWN_TURNS
+func crisis_cooldown_of(id: String) -> int:
+	for c in CRISES:
+		if c["id"] == id:
+			return maxi(0, int(c.get("cooldown", CRISIS_COOLDOWN_TURNS)))
+	return CRISIS_COOLDOWN_TURNS
+
+
 ## 该危机还剩几回合冷却（>0 = 冷却中，不许再抽中）
 func _crisis_cooldown_left(id: String) -> int:
+	var cooldown := crisis_cooldown_of(id)
 	var left := 0
 	for h in crisis_history:
 		if str(h["id"]) == id:
-			left = maxi(left, CRISIS_COOLDOWN_TURNS - (turn - int(h["turn"])))
+			left = maxi(left, cooldown - (turn - int(h["turn"])))
 	return left
 
 
@@ -1047,6 +1079,33 @@ func _last_crisis_hit_turn() -> int:
 	for h in crisis_history:
 		t = maxi(t, int(h["turn"]))
 	return t
+
+
+## 按 id 取危机条目（预警回顾面板要用名字、原文、影响、对策标签）
+func crisis_by_id(id: String) -> Dictionary:
+	for c in CRISES:
+		if c["id"] == id:
+			return c
+	return {}
+
+
+## 把预警历史里最近一条同名、还没爆发的记录标成「已爆发」
+func _mark_warning_hit(id: String, hit_turn: int) -> void:
+	for i in range(warn_history.size() - 1, -1, -1):
+		var e: Dictionary = warn_history[i]
+		if str(e["id"]) == id and int(e.get("hit_turn", -1)) < 0:
+			e["hit_turn"] = hit_turn
+			return
+
+
+## 从 cond 字符串里取出 {metric, op, threshold}（预警历史要记下当时的数值）
+func _parse_cond_simple(cond: String) -> Dictionary:
+	var m := RegEx.new()
+	m.compile("(\\w+)\\s*(<=|>=|<|>|==)\\s*(-?\\d+)")
+	var res := m.search(cond)
+	if res == null:
+		return {}
+	return {"metric": res.get_string(1), "op": res.get_string(2), "threshold": int(res.get_string(3))}
 
 
 ## 简易条件求值（复用知识卡的表达式风格）

@@ -114,6 +114,12 @@ var crisis_body: RichTextLabel
 var crisis_button: Button
 var _crisis_queue: Array = []   # 危机弹窗队列 {crisis, is_warning}
 
+# 危机预警回顾（顶部条 + 全屏列表）
+var warn_bar: Button = null
+var warn_panel_root: Control = null
+var warn_list_box: VBoxContainer = null
+var warn_count_label: Label = null
+
 # 牌库 UI（牌堆）
 var deck_root: Control            # 牌堆容器（右面板下方）
 var deck_border: Control          # 黄色外框（悬停时显示，自绘贴牌形状）
@@ -1688,6 +1694,7 @@ func _build_ui() -> void:
 	_build_menu()
 	_build_pause_menu()
 	_build_crisis_alert()
+	_build_warn_history(canvas)
 	_build_deck_ui(canvas)
 	_build_deck_viewer()
 
@@ -2219,6 +2226,8 @@ func _set_hud_visible(v: bool) -> void:
 	var canvas := get_node_or_null("UICanvas")
 	if canvas:
 		canvas.visible = v
+	if not v:
+		_close_warn_history()   # 回主菜单/开始页时，别把回顾面板留在屏幕上
 
 
 ## 开始页层级：0 = 主选项 / 1 = 难度 / 2 = 种子
@@ -2903,6 +2912,168 @@ func _build_crisis_alert() -> void:
 	crisis_button = _make_button("知道了", _on_crisis_dismiss, 20)
 	crisis_button.custom_minimum_size = Vector2(0, 50)
 	pv.add_child(crisis_button)
+
+
+# ==================== 危机预警回顾（P1）====================
+## 顶部「预警回顾」条：预警弹窗关掉后信息收在这里，点一下能重看本局全部预警
+func _build_warn_history(canvas: CanvasLayer) -> void:
+	warn_bar = _make_button("", _open_warn_history, 13)
+	warn_bar.anchor_left = 0.5
+	warn_bar.anchor_right = 0.5
+	warn_bar.offset_left = -240
+	warn_bar.offset_right = 240
+	warn_bar.offset_top = 34
+	warn_bar.offset_bottom = 64
+	warn_bar.clip_text = true
+	warn_bar.tooltip_text = "点击重看本局全部危机预警"
+	warn_bar.visible = false
+	canvas.add_child(warn_bar)
+
+	var layer := CanvasLayer.new()
+	layer.name = "WarnLayer"
+	layer.layer = 6   # 危机弹窗(5) 之上、主菜单(10) 之下
+	add_child(layer)
+
+	warn_panel_root = Control.new()
+	warn_panel_root.set_anchors_preset(Control.PRESET_FULL_RECT)
+	warn_panel_root.mouse_filter = Control.MOUSE_FILTER_STOP
+	warn_panel_root.visible = false
+	layer.add_child(warn_panel_root)
+
+	var dim := ColorRect.new()
+	dim.color = Color(0.04, 0.06, 0.08, 0.74)
+	dim.set_anchors_preset(Control.PRESET_FULL_RECT)
+	dim.mouse_filter = Control.MOUSE_FILTER_STOP
+	warn_panel_root.add_child(dim)
+
+	var center := CenterContainer.new()
+	center.set_anchors_preset(Control.PRESET_FULL_RECT)
+	warn_panel_root.add_child(center)
+
+	var panel := PanelContainer.new()
+	panel.custom_minimum_size = Vector2(600, 0)
+	_panel_style(panel, Color(0.16, 0.13, 0.10, 0.97))
+	center.add_child(panel)
+
+	var pv := VBoxContainer.new()
+	pv.add_theme_constant_override("separation", 10)
+	panel.add_child(pv)
+
+	var title := _make_label("本局危机预警回顾", 24, Color(1, 0.88, 0.55))
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	pv.add_child(title)
+
+	warn_count_label = _make_label("", 14, Color(0.85, 0.88, 0.92))
+	warn_count_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	pv.add_child(warn_count_label)
+
+	# 列表必须能滚：本局最多可能攒下 8~10 条，弹窗本体不滚动会顶穿窗口
+	var scroll := ScrollContainer.new()
+	scroll.custom_minimum_size = Vector2(560, 400)
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	pv.add_child(scroll)
+
+	warn_list_box = VBoxContainer.new()
+	warn_list_box.add_theme_constant_override("separation", 8)
+	warn_list_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	scroll.add_child(warn_list_box)
+
+	var close_btn := _make_button("关闭", _close_warn_history, 18)
+	close_btn.custom_minimum_size = Vector2(0, 46)
+	pv.add_child(close_btn)
+
+
+func _open_warn_history() -> void:
+	if warn_panel_root == null:
+		return
+	_build_warn_rows()
+	warn_panel_root.visible = true
+
+
+func _close_warn_history() -> void:
+	if warn_panel_root:
+		warn_panel_root.visible = false
+
+
+## 顶部那一条：显示最近一条预警，点开看全部
+func _refresh_warn_bar() -> void:
+	if warn_bar == null:
+		return
+	var rows: Array = GameState.warn_history
+	if rows.is_empty():
+		warn_bar.visible = false
+		return
+	var last: Dictionary = rows[rows.size() - 1]
+	warn_bar.text = "⚠ 曾预警：%s（第 %d 回合）· 共 %d 条" % [
+		_crisis_short_label(str(last["id"])), int(last["turn"]), rows.size()]
+	warn_bar.visible = true
+
+
+## 顶部预警条用的短名（比 METRIC_NAMES 更短，避免「沉水植被告急」这种读起来绕的串）
+const WARN_SHORT_METRIC := {"vegetation": "植被", "fish": "鱼类", "birds": "候鸟", "community": "社区信任"}
+
+
+## 危机的短标签，如「水位告急」「水质偏高」（由 cond 里的指标 + 方向推出来）
+func _crisis_short_label(id: String) -> String:
+	var c: Dictionary = GameState.crisis_by_id(id)
+	if c.is_empty():
+		return "危机"
+	var pc := _parse_cond(str(c.get("cond", "")))
+	var metric := str(pc.get("metric", ""))
+	var nm := str(WARN_SHORT_METRIC.get(metric, GameState.METRIC_NAMES.get(metric, metric)))
+	return nm + ("告急" if str(pc.get("op", "<")) in ["<", "<="] else "偏高")
+
+
+func _build_warn_rows() -> void:
+	for ch in warn_list_box.get_children():
+		ch.queue_free()
+	var rows: Array = GameState.warn_history
+	warn_count_label.text = "共 %d 条（最新的在最上面）" % rows.size()
+	if rows.is_empty():
+		warn_list_box.add_child(_make_label("本局还没有出现过预警。", 16, Color(0.85, 0.88, 0.92)))
+		return
+	for i in range(rows.size() - 1, -1, -1):
+		warn_list_box.add_child(_make_warn_row(rows[i]))
+
+
+## 一条预警：第几回合 / 预警原文 / 当时的数值 / 后来有没有爆发 / 当时该打什么标签
+func _make_warn_row(e: Dictionary) -> Control:
+	var id := str(e["id"])
+	var turn := int(e["turn"])
+	var hit := int(e.get("hit_turn", -1))
+	var c: Dictionary = GameState.crisis_by_id(id)
+	var cname: String = str(c.get("name", id))
+	var pc := _parse_cond(str(c.get("cond", "")))
+	var metric := str(pc.get("metric", ""))
+	var mname := str(GameState.METRIC_NAMES.get(metric, metric))
+	var line := int(pc.get("threshold", 0))
+
+	var panel := PanelContainer.new()
+	_panel_style(panel, Color(0.13, 0.11, 0.09, 0.94))
+	var body := RichTextLabel.new()
+	body.bbcode_enabled = true
+	body.fit_content = true
+	body.scroll_active = false
+	body.custom_minimum_size = Vector2(520, 0)
+	body.add_theme_font_size_override("normal_font_size", _snap_px(14))
+	body.add_theme_color_override("default_color", Color(0.94, 0.92, 0.88))
+
+	var t := "[color=#ffb060]第 %d 回合 · ⚠ 危机预警：%s[/color]\n" % [turn, cname]
+	t += "%s\n" % str(c.get("warn", ""))
+	t += "当时：%s %d（警戒线 %d）\n" % [mname, int(e.get("value", 0)), line]
+	if hit > 0:
+		var eff: Array = []
+		for ef in c.get("effects", []):
+			eff.append("%s %+d" % [GameState.METRIC_NAMES.get(ef["metric"], ef["metric"]), int(ef["delta"])])
+		t += "[color=#ff9090]→ 第 %d 回合已爆发：%s[/color]\n" % [hit, "、".join(eff)]
+	else:
+		t += "[color=#9aa0a6]→ 未爆发（本局在那之前就结束了）[/color]\n"
+	var needs: Array = c.get("needs", [])
+	if not needs.is_empty():
+		t += "[color=#8fd0ff]当时该打的标签：%s[/color]" % "、".join(needs)
+	body.text = t
+	panel.add_child(body)
+	return panel
 
 
 # ==================== 牌库（牌堆）UI ====================
@@ -3741,6 +3912,7 @@ func _update_hud() -> void:
 	research_label.text = "科研点：%d" % GameState.research_points
 	event_label.text = _current_event if _current_event != "" else "暂无"
 	_update_selected_label()
+	_refresh_warn_bar()
 
 
 # ==================== 事件 / 结算 / 知识卡 / 报告 ====================
