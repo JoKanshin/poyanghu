@@ -65,6 +65,7 @@ var menu_seed_start_btn: Button
 var menu_talent_btn: Button
 var menu_settings_btn: Button
 var menu_credits_btn: Button
+var menu_changelog_btn: Button
 var menu_quit_btn: Button
 var menu_seed_label: Label
 var menu_mode_label: Label
@@ -73,6 +74,7 @@ var menu_hint: Label
 var menu_talent_panel: PanelContainer
 var menu_settings_panel: PanelContainer
 var menu_credits_panel: PanelContainer
+var menu_changelog_panel: PanelContainer
 
 # 音频 / BGM
 var bgm_player: AudioStreamPlayer
@@ -1814,6 +1816,10 @@ func _build_menu() -> void:
 	menu_settings_btn.custom_minimum_size = Vector2(0, 44)
 	menu_col.add_child(menu_settings_btn)
 
+	menu_changelog_btn = _make_button("更新日志", _show_changelog_panel, 18)
+	menu_changelog_btn.custom_minimum_size = Vector2(0, 44)
+	menu_col.add_child(menu_changelog_btn)
+
 	menu_credits_btn = _make_button("制作人员", _show_credits_panel, 18)
 	menu_credits_btn.custom_minimum_size = Vector2(0, 44)
 	menu_col.add_child(menu_credits_btn)
@@ -1930,7 +1936,7 @@ func _build_menu() -> void:
 	cvb.add_child(c_sep)
 
 	var credits := [
-		["策划", "齐蛰"],
+		["策划", "QQQi_ZZZhe"],
 		["主程 / 配乐", "Kanshin"],
 		["美术", "C3L1K1N4"],
 		["林学专家", "Oliveira"],
@@ -1949,6 +1955,67 @@ func _build_menu() -> void:
 	var c_back := _make_button("返回", _on_credits_back, 16)
 	c_back.custom_minimum_size = Vector2(0, 40)
 	cvb.add_child(c_back)
+
+	# --- 更新日志面板 ---
+	menu_changelog_panel = PanelContainer.new()
+	menu_changelog_panel.custom_minimum_size = Vector2(580, 0)
+	_panel_style(menu_changelog_panel, Color(0.20, 0.14, 0.09, 0.97))
+	menu_changelog_panel.visible = false
+	center.add_child(menu_changelog_panel)
+
+	var gvb := VBoxContainer.new()
+	gvb.add_theme_constant_override("separation", 10)
+	menu_changelog_panel.add_child(gvb)
+
+	var g_title := _make_label("更新日志", 24, Color(1, 0.9, 0.55))
+	g_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	gvb.add_child(g_title)
+
+	var g_sub := _make_label("当前版本 %s" % Changelog.CURRENT, 14, Color(0.72, 0.76, 0.80))
+	g_sub.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	gvb.add_child(g_sub)
+
+	var g_sep := HSeparator.new()
+	gvb.add_child(g_sep)
+
+	# 必须用 ScrollContainer：日志只会越写越长，老弹窗系统不滚动会顶穿窗口
+	var g_scroll := ScrollContainer.new()
+	g_scroll.custom_minimum_size = Vector2(540, 360)
+	g_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	gvb.add_child(g_scroll)
+
+	var g_col := VBoxContainer.new()
+	g_col.add_theme_constant_override("separation", 12)
+	g_col.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	g_scroll.add_child(g_col)
+
+	_build_changelog_rows(g_col)
+
+	var g_back := _make_button("返回", _on_changelog_back, 16)
+	g_back.custom_minimum_size = Vector2(0, 40)
+	gvb.add_child(g_back)
+
+
+## 把 Changelog.RELEASES 渲染进面板 —— 以后加版本只改 scripts/changelog.gd，这里不用动
+func _build_changelog_rows(col: VBoxContainer) -> void:
+	for rel in Changelog.RELEASES:
+		var v_head := _make_label("v%s · %s" % [str(rel["version"]), str(rel["title"])], 19, Color(1, 0.88, 0.55))
+		v_head.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART   # 标题写长了要能折行，不然会被裁
+		v_head.custom_minimum_size = Vector2(520, 0)
+		col.add_child(v_head)
+		col.add_child(_make_label(str(rel["date"]), 13, Color(0.72, 0.76, 0.80)))
+		for sec in rel["sections"]:
+			col.add_child(_make_label("◆ " + str(sec["head"]), 16, Color(0.62, 0.82, 1.0)))
+			for item in sec["items"]:
+				var body := RichTextLabel.new()
+				body.bbcode_enabled = false
+				body.fit_content = true
+				body.scroll_active = false
+				body.custom_minimum_size = Vector2(520, 0)
+				body.add_theme_font_size_override("normal_font_size", _snap_px(14))
+				body.add_theme_color_override("default_color", Color(0.92, 0.90, 0.86))
+				body.text = "· " + str(item)
+				col.add_child(body)
 
 
 # ==================== 开场像素 PPT（Undertale 风） ====================
@@ -2215,6 +2282,7 @@ func _show_menu() -> void:
 	menu_talent_panel.visible = false
 	menu_settings_panel.visible = false
 	menu_credits_panel.visible = false
+	menu_changelog_panel.visible = false
 	_set_hud_visible(false)   # 开始页是干净的全景：HUD 让位给标题与选项
 	_menu_state(0)
 	_set_menu_camera(true)
@@ -2238,6 +2306,7 @@ func _menu_state(state: int) -> void:
 	menu_talent_btn.visible = main_level
 	menu_settings_btn.visible = main_level
 	menu_credits_btn.visible = main_level
+	menu_changelog_btn.visible = main_level
 	menu_quit_btn.visible = main_level
 
 	menu_easy_btn.visible = state == 1
@@ -2313,6 +2382,7 @@ func _show_talent_panel() -> void:
 	menu_col.visible = false
 	menu_settings_panel.visible = false
 	menu_credits_panel.visible = false
+	menu_changelog_panel.visible = false
 	menu_talent_panel.visible = true
 	_refresh_talent_panel()
 
@@ -2340,11 +2410,26 @@ func _show_credits_panel() -> void:
 	menu_col.visible = false
 	menu_talent_panel.visible = false
 	menu_settings_panel.visible = false
+	menu_changelog_panel.visible = false
 	menu_credits_panel.visible = true
 
 
 func _on_credits_back() -> void:
 	menu_credits_panel.visible = false
+	menu_col.visible = true
+	_menu_state(0)
+
+
+func _show_changelog_panel() -> void:
+	menu_col.visible = false
+	menu_talent_panel.visible = false
+	menu_settings_panel.visible = false
+	menu_credits_panel.visible = false
+	menu_changelog_panel.visible = true
+
+
+func _on_changelog_back() -> void:
+	menu_changelog_panel.visible = false
 	menu_col.visible = true
 	_menu_state(0)
 
