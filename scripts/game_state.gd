@@ -638,12 +638,17 @@ const CRISES := [
 	},
 ]
 
-# ==================== 危机对策卡（标签匹配 + 保底）====================
+# ==================== 危机对策卡（标签匹配 + 概率加权）====================
 # 卡牌上的 tags 与危机上的 needs 做标签匹配：命中任一 needs 的卡就是该危机的对策卡。
 # 映射不再写死成卡 id 列表 —— 以后加新卡，只要挂上对的标签就自动进对策池。
-# 预警期保证 CRISIS_COUNTER_QUOTA 张对策卡进入下批手牌：光靠权重软加权实测仍有
-# 约 1/3 的预警回合手里一张对策都没有（玩家只能看着危机爆发），所以改成硬保底。
-const CRISIS_COUNTER_QUOTA := 2
+#
+# 供给策略：预警期抽牌时，对策卡的权重 ×CRISIS_COUNTER_WEIGHT（普通卡 1.0）。
+# **大概率但不是必出** —— 肉鸽要有"这波没抽到、只能硬扛"的局面，所以不做硬保底。
+# 精确算出的「手上至少 1 张对策卡」概率（26 张里抽 7 张，对策池 3~6 张）：
+#   权重 2.5 → 89%~98%　权重 3.0 → 93%~99%　权重 4.0 → 96%~99.8%
+# 2026-09-28 之前是"硬保底 2 张"（100% 必出，池 6 张的危机手上平均 2.8 张对策卡）；
+# 玩测反馈"不该必出"，故改为概率加权。想调轻重只改这一个数字。
+const CRISIS_COUNTER_WEIGHT := 3.0
 
 # ==================== 卡牌协同（组合出招）====================
 # 同回合内同时执行 requires 中全部卡牌，触发额外效果
@@ -1138,43 +1143,34 @@ func tier_cost(card_id: String, tier: String) -> int:
 
 
 ## 从卡池抽 n 张（不重复）。
-## 危机预警期先「保底」：把 CRISIS_COUNTER_QUOTA 张对策卡直接塞进手牌；
-## 剩下的名额走普通均匀随机，最后整体洗牌（对手牌顺序没有偏好）。
+## 抽 n 张行动卡：预警期对策卡权重 ×CRISIS_COUNTER_WEIGHT（**概率提高，但不是必出**）；
+## 没有预警时全体等权，与旧行为完全一致。整手最后打乱，免得对策卡永远躺在最左边。
 func draw_cards(n: int) -> Array:
 	var total: int = mini(n, ACTION_CARDS.size())
 	var pool := ACTION_CARDS.duplicate()
 	var wanted := _crisis_counter_set()
 	var picked: Array = []
 
-	# 1) 保底：对策卡优先入牌，保证玩家手里一定有牌可打
-	if not wanted.is_empty():
-		var quota: int = mini(CRISIS_COUNTER_QUOTA, total)
-		while picked.size() < quota:
-			var gi := _pick_matching_index(pool, wanted)
-			if gi < 0:
-				break   # 卡池里的对策卡已经抽完
-			picked.append(pool[gi])
-			pool.remove_at(gi)
-
-	# 2) 其余名额：均匀随机
 	while picked.size() < total and not pool.is_empty():
-		var idx := randi() % pool.size()
+		var idx := _pick_weighted_index(pool, wanted)
 		picked.append(pool[idx])
 		pool.remove_at(idx)
 
-	picked.shuffle()   # 保底卡不该永远躺在手牌最左边
+	picked.shuffle()
 	return picked
 
 
-## 在 pool 里随机挑一张「对策卡」的下标；没有则返回 -1
-func _pick_matching_index(pool: Array, wanted: Dictionary) -> int:
-	var idxs: Array = []
-	for j in pool.size():
-		if wanted.has(pool[j]["id"]):
-			idxs.append(j)
-	if idxs.is_empty():
-		return -1
-	return int(idxs[randi() % idxs.size()])
+## 加权随机抽一张的下标：对策卡权重 ×CRISIS_COUNTER_WEIGHT，其余卡 1.0
+func _pick_weighted_index(pool: Array, wanted: Dictionary) -> int:
+	var total_w := 0.0
+	for c in pool:
+		total_w += CRISIS_COUNTER_WEIGHT if wanted.has(c["id"]) else 1.0
+	var roll := randf() * total_w
+	for i in pool.size():
+		roll -= CRISIS_COUNTER_WEIGHT if wanted.has(pool[i]["id"]) else 1.0
+		if roll <= 0.0:
+			return i
+	return pool.size() - 1
 
 
 ## 某个危机的对策卡 id 列表（卡牌 tags 命中危机 needs 任一项即算对策卡）

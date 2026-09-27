@@ -2819,8 +2819,9 @@ func _crisis_body_text(crisis: Dictionary, is_warning: bool) -> String:
 			# 标签匹配后对策卡可能有 4~6 张，只列前 4 张，免得这段撑爆弹窗
 			var shown: Array = names.slice(0, 4)
 			var tail: String = "" if names.size() <= 4 else " 等 %d 张" % names.size()
-			body += "\n\n[color=#8fd0ff]应对建议（本回合保底 %d 张入手）：优先打出「%s」%s[/color]" % [
-				int(GameState.CRISIS_COUNTER_QUOTA), "」「".join(shown), tail]
+			# 对策卡是「大概率入手」而不是必出（肉鸽要有没抽到的局面），文案不承诺保底
+			body += "\n\n[color=#8fd0ff]应对建议（下批手牌里对策卡概率已提高，不保证到手）：优先打出「%s」%s[/color]" % [
+				"」「".join(shown), tail]
 	else:
 		body += "%s\n\n" % crisis["hit"]
 		body += "[color=#ff9090]本次已造成：[/color]\n"
@@ -2940,11 +2941,11 @@ func _build_warn_history(canvas: CanvasLayer) -> void:
 	warn_panel_root.visible = false
 	layer.add_child(warn_panel_root)
 
-	var dim := ColorRect.new()
-	dim.color = Color(0.04, 0.06, 0.08, 0.74)
-	dim.set_anchors_preset(Control.PRESET_FULL_RECT)
-	dim.mouse_filter = Control.MOUSE_FILTER_STOP
-	warn_panel_root.add_child(dim)
+	var warn_dim := ColorRect.new()   # 不叫 dim：类里已有一个 dim，重名会多一条 SHADOWED_VARIABLE 警告
+	warn_dim.color = Color(0.04, 0.06, 0.08, 0.74)
+	warn_dim.set_anchors_preset(Control.PRESET_FULL_RECT)
+	warn_dim.mouse_filter = Control.MOUSE_FILTER_STOP
+	warn_panel_root.add_child(warn_dim)
 
 	var center := CenterContainer.new()
 	center.set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -4369,8 +4370,8 @@ func _finish_turn() -> void:
 			counter_names.append(_card_name(cid))
 		var shown_c: Array = counter_names.slice(0, 3)
 		var tail_c: String = "" if counter_names.size() <= 3 else " 等 %d 张" % counter_names.size()
-		lines.append("[color=#8a8a8a]   （专项响应已列入下批：%s%s，保底 %d 张入手）[/color]" % [
-			"、".join(shown_c), tail_c, int(GameState.CRISIS_COUNTER_QUOTA)])
+		lines.append("[color=#8a8a8a]   （专项响应已列入下批：%s%s，出现概率已提高，不保证到手）[/color]" % [
+			"、".join(shown_c), tail_c])
 
 	hand_panel.visible = false
 	bottom_right.visible = false
