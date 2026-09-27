@@ -23,6 +23,20 @@ const START_FLOOR := { Difficulty.EASY: 48, Difficulty.NORMAL: 48, Difficulty.HA
 const START_BOOST := { Difficulty.EASY: 6, Difficulty.NORMAL: 6, Difficulty.HARD: 6 }             # 开局指标加成（各难度统一）
 const REPORT_SCORE := { Difficulty.EASY: 80.0, Difficulty.NORMAL: 70.0, Difficulty.HARD: 65.0 }   # 天赋点达标平均分
 
+# 每项指标相对「难度致死线」的偏移（正数 = 线更高更严格，负数 = 更宽容）
+# 留空 = 六项都用难度线（与旧版行为完全一致）。想调平衡只改这张表，不用动卡牌数值。
+# 实测依据（见 版本更新0.0.3.md 第六节）：六项指标的「体质」差 2~3 倍 ——
+#   水质 无监测每回合 -2~-4、开局离致死线只有 9.3；社区信任 平时不衰减、缓冲 19.4。
+# 共用一条线时死因会高度集中（简单档 89% 死在水质+植被，社区信任只占 1%）。
+# 建议起点（不是定论，按玩测调）：
+#   "water_level":     -3,   # 单回合波动最大（困难档 -10..+3），线略往下挪
+#   "water_quality":   -5,   # 无条件衰减 + 缓冲最小，最宽容，避免「忘监测就必死」
+#   "vegetation":      +3,   # 候鸟与鱼类的上游，略严
+#   "fish":            -5,   # 同样无条件衰减（无巡护 -1~-2/回合）
+#   "birds":            0,   # 恢复最慢、条件触发，维持原线
+#   "community":      +10,   # 平时不衰减（缓冲 19.4），抬线让「牺牲社区」真的会输
+const FAILURE_THRESHOLD_OFFSET := {}
+
 # 六项指标的中文名与量纲说明
 const METRIC_NAMES := {
 	"water_level": "水位",
@@ -1302,12 +1316,18 @@ func failure_threshold() -> int:
 	return FAILURE_THRESHOLD[difficulty]
 
 
+## 某一项指标的判负阈值 = 难度线 + 该项偏移（FAILURE_THRESHOLD_OFFSET 里没写就是难度线）
+func failure_threshold_for(metric: String) -> int:
+	var offset: int = int(FAILURE_THRESHOLD_OFFSET.get(metric, 0))
+	return clampi(failure_threshold() + offset, 5, 95)
+
+
 ## 检查是否有指标跌破失败线（上级对政绩不满，将你撤换）
 func _check_failure() -> bool:
 	if game_over:
 		return is_failure   # 已经判负，不重复判、不重复发信号
-	var threshold: int = failure_threshold()
 	for metric in metrics:
+		var threshold: int = failure_threshold_for(metric)
 		if metrics[metric] < threshold:
 			is_failure = true
 			game_over = true
@@ -1327,9 +1347,9 @@ func check_failure_now() -> bool:
 
 ## 当前所有跌破致死线的指标（失败报告用来把死因说全）
 func metrics_below_threshold() -> Array:
-	var threshold: int = failure_threshold()
 	var out: Array = []
 	for metric in metrics:
+		var threshold: int = failure_threshold_for(metric)
 		if metrics[metric] < threshold:
 			out.append({"metric": metric, "value": metrics[metric]})
 	out.sort_custom(func(a, b): return int(a["value"]) < int(b["value"]))
@@ -1427,7 +1447,7 @@ func generate_report() -> Dictionary:
 		"failure_metric": failure_metric,
 		"failure_metric_name": METRIC_NAMES.get(failure_metric, failure_metric),
 		"failure_value": failure_value,
-		"failure_threshold": failure_threshold(),
+		"failure_threshold": failure_threshold_for(failure_metric) if failure_metric != "" else failure_threshold(),
 		"metrics_below": metrics_below_threshold(),
 		"seed": run_seed,
 		"turns_survived": turn,

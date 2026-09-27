@@ -3709,12 +3709,13 @@ func _make_metric_row(metric: String) -> VBoxContainer:
 	return vb
 
 
-## 按难度更新指标条上的阈值红线位置（简单 20 / 普通 30 / 困难 40）
+## 按「难度线 + 每指标偏移」更新指标条上的阈值红线位置
+## 六项的红线不再一样长：哪项更脆，线就更靠右，玩家一眼看得出来。
 func _update_threshold_lines() -> void:
-	var ratio: float = GameState.failure_threshold() / 100.0
 	for metric in metric_bars:
 		var line: ColorRect = metric_bars[metric].get("line")
 		if line != null:
+			var ratio: float = GameState.failure_threshold_for(metric) / 100.0
 			line.anchor_left = ratio
 			line.anchor_right = ratio
 
@@ -4260,7 +4261,7 @@ func _show_report(r: Dictionary) -> void:
 		if fm != "":
 			var fname: String = str(r.get("failure_metric_name", fm))
 			var fval: int = int(r.get("failure_value", GameState.metrics.get(fm, 0)))
-			var fthr: int = int(r.get("failure_threshold", GameState.failure_threshold()))
+			var fthr: int = int(r.get("failure_threshold", GameState.failure_threshold_for(fm)))
 			body += "[b]直接死因：[/b]%s 跌至 [color=#ff9090]%d[/color]（致死线 %d）\n" % [fname, fval, fthr]
 			var remedy: String = str(GameState.METRIC_REMEDY.get(fm, ""))
 			if remedy != "":
