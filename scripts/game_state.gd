@@ -33,6 +33,16 @@ const METRIC_NAMES := {
 	"community": "社区信任",
 }
 
+# 死因 → 下一局优先补强的方向（失败报告用来交代「输在哪、下次怎么打」）
+const METRIC_REMEDY := {
+	"water_level": "优先补水 / 蓄水保水 / 闸坝联合调度，水位长期贴地必然崩",
+	"water_quality": "先上水质监测与清淤，水质是植被与鱼类的上游",
+	"vegetation": "及时补种沉水植物——它是候鸟的食物基础",
+	"fish": "维持巡护执法，禁渔成效靠每回合持续投入",
+	"birds": "保住栖息地与食物供给，候鸟种群恢复最慢",
+	"community": "补偿与转产不能断，社区信任是长期拨款的地基",
+}
+
 # 卡牌档位 → 成本倍率
 const TIER_COST_MULT := {"basic": 0.5, "effective": 1.0, "deep": 2.0}
 const TIER_NAMES := {"basic": "基础投入", "effective": "有效投入", "deep": "深度投入"}
@@ -541,7 +551,7 @@ const CRISES := [
 		"effects": [{"metric": "vegetation", "delta": -10}, {"metric": "fish", "delta": -5}],
 	},
 	{
-		"id": "algal_bloom", "name": "蓝藻水华", "weight": 0.85, "cond": "water_quality > 60",
+		"id": "algal_bloom", "name": "蓝藻水华", "weight": 0.85, "cond": "water_quality < 45",
 		"warn": "【监测提示】气温升高、水体流动性变差，蓝藻水华风险上升。",
 		"hit": "【危机爆发】蓝藻水华暴发——水面被绿色藻膜覆盖，水体缺氧，候鸟中毒与食物短缺同时发生。",
 		"effects": [{"metric": "water_quality", "delta": -12}, {"metric": "birds", "delta": -8}],
@@ -683,6 +693,7 @@ var _fired_synergies: Array = []    # 本局已触发过的协同（防重复）
 var is_failure: bool = false        # 是否因生态崩溃提前结束
 var failure_reason: String = ""     # 失败原因文案
 var failure_metric: String = ""     # 崩溃的指标
+var failure_value: int = 0          # 判负时该指标的数值（失败报告用）
 
 signal metrics_changed
 signal funds_changed
@@ -719,7 +730,8 @@ func serialize() -> Dictionary:
 		"last_crisis_name": last_crisis_name,
 		"triggered_synergies": triggered_synergies.duplicate(),
 		"fired_synergies": _fired_synergies.duplicate(),
-		"is_failure": is_failure, "failure_reason": failure_reason, "failure_metric": failure_metric,
+		"is_failure": is_failure, "failure_reason": failure_reason,
+		"failure_metric": failure_metric, "failure_value": failure_value,
 	}
 
 
@@ -750,6 +762,7 @@ func load_state(d: Dictionary) -> void:
 	is_failure = bool(d.get("is_failure", false))
 	failure_reason = str(d.get("failure_reason", ""))
 	failure_metric = str(d.get("failure_metric", ""))
+	failure_value = int(d.get("failure_value", 0))
 
 
 ## 把字典的值统一转成 int（JSON 兜底）
@@ -781,6 +794,7 @@ func reset_game() -> void:
 	is_failure = false
 	failure_reason = ""
 	failure_metric = ""
+	failure_value = 0
 	# 每局随机种子：同种子可复现（企划书 8.3 反事实对照）
 	if run_seed == 0:
 		randomize()
@@ -906,10 +920,13 @@ func _resolve_pending_crisis() -> void:
 	_sync_plants()
 	metrics_changed.emit()
 	crisis_hit.emit(c)
+	check_failure_now()   # 危机爆发把指标打到致死线以下 → 当场判负，不再放你一回合
 
 
 ## 抽取本回合的危机预警（提前 1 回合告知，给玩家应对机会）
 func _maybe_warn_crisis() -> void:
+	if game_over:
+		return  # 已经判负，不再抽新危机（否则预警会盖在失败报告上）
 	if turn >= TOTAL_TURNS - 1:
 		return  # 最后两回合不再新增危机，避免无法应对
 	if not pending_crisis.is_empty():
@@ -923,20 +940,23 @@ func _maybe_warn_crisis() -> void:
 	chance += Talents.get_bonus("crisis_chance")
 	if randf() > chance:
 		return
-	# 加权抽选：与当前生态状态呼应的危机会更容易出现
+	# 加权抽选：只抽「当前状态真的吻合」的危机
+	# 预警文案会引用当前值与警戒线（如「水质 90，警戒线 55」），若状态不吻合
+	# 就会在安全区报警、自相矛盾 —— 所以这里必须硬性过滤，而不只是加权。
+	var pool: Array = []
 	var total_w := 0.0
-	var weights: Array = []
 	for c in CRISES:
-		var w: float = c["weight"]
-		if _eval_condition_simple(c["cond"]):
-			w *= 1.8  # 状态吻合 → 权重翻倍
-		weights.append(w)
-		total_w += w
+		if not _eval_condition_simple(c["cond"]):
+			continue
+		pool.append(c)
+		total_w += c["weight"]
+	if pool.is_empty():
+		return  # 六项指标都在安全区 → 本回合不预警
 	var roll := randf() * total_w
-	for i in CRISES.size():
-		roll -= weights[i]
+	for c in pool:
+		roll -= c["weight"]
 		if roll <= 0.0:
-			pending_crisis = CRISES[i]
+			pending_crisis = c
 			crisis_warned.emit(pending_crisis)
 			return
 
@@ -1066,6 +1086,7 @@ func execute_action(card_id: String, tier: String) -> bool:
 
 	funds_changed.emit()
 	metrics_changed.emit()
+	check_failure_now()   # 出牌把指标打到致死线以下 → 当场判负
 	return true
 
 
@@ -1181,17 +1202,36 @@ func failure_threshold() -> int:
 
 ## 检查是否有指标跌破失败线（上级对政绩不满，将你撤换）
 func _check_failure() -> bool:
+	if game_over:
+		return is_failure   # 已经判负，不重复判、不重复发信号
 	var threshold: int = failure_threshold()
 	for metric in metrics:
 		if metrics[metric] < threshold:
 			is_failure = true
 			game_over = true
 			failure_metric = metric
+			failure_value = metrics[metric]
 			failure_reason = "上级对你的政绩不满意，将你撤换。"
-			_add_log("✖ %s（%s 跌破 %d）" % [failure_reason, METRIC_NAMES.get(metric, metric), threshold])
+			_add_log("✖ %s（%s 只剩 %d，已跌破致死线 %d）" % [failure_reason, METRIC_NAMES.get(metric, metric), failure_value, threshold])
 			game_ended.emit(generate_report())
 			return true
 	return false
+
+
+## 指标一变就查：出牌、危机爆发、自然演化都可以直接调用 → 判负即时生效
+func check_failure_now() -> bool:
+	return _check_failure()
+
+
+## 当前所有跌破致死线的指标（失败报告用来把死因说全）
+func metrics_below_threshold() -> Array:
+	var threshold: int = failure_threshold()
+	var out: Array = []
+	for metric in metrics:
+		if metrics[metric] < threshold:
+			out.append({"metric": metric, "value": metrics[metric]})
+	out.sort_custom(func(a, b): return int(a["value"]) < int(b["value"]))
+	return out
 
 
 ## 检查知识卡触发条件，压入待弹出队列
@@ -1283,6 +1323,10 @@ func generate_report() -> Dictionary:
 		"is_failure": is_failure,
 		"failure_reason": failure_reason,
 		"failure_metric": failure_metric,
+		"failure_metric_name": METRIC_NAMES.get(failure_metric, failure_metric),
+		"failure_value": failure_value,
+		"failure_threshold": failure_threshold(),
+		"metrics_below": metrics_below_threshold(),
 		"seed": run_seed,
 		"turns_survived": turn,
 		"research_points": research_points,

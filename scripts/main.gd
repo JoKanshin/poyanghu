@@ -101,6 +101,7 @@ var pause_hint: Label
 var _paused: bool = false
 var _playing: bool = false
 var _current_phase: String = "allocate"
+var _defer_game_over: bool = false   # 回合结算流程中：报告由结算反馈之后再弹，别抢
 const SAVE_PATH = "user://savegame.json"
 
 # 危机警示（大红叹号 + 红屏闪烁 + 雷霆大字）
@@ -2735,6 +2736,8 @@ func _on_crisis_hit(crisis: Dictionary) -> void:
 
 
 func _process_crisis_queue() -> void:
+	if GameState.game_over:
+		return  # 已判负：失败报告优先，危机弹层不再抢屏
 	if _crisis_queue.is_empty() or crisis_root.visible:
 		return
 	var item: Dictionary = _crisis_queue.pop_front()
@@ -2793,7 +2796,9 @@ func _crisis_body_text(crisis: Dictionary, is_warning: bool) -> String:
 	var body := ""
 	if is_warning:
 		body += "%s\n\n" % crisis["warn"]
-		if metric != "":
+		# 只在当前值真的落在危险侧时才引用警戒线，避免出现
+		# 「当前水质 90（偏低，警戒线 55）」这种自相矛盾的提示
+		if metric != "" and _cond_holds(cur, op, threshold):
 			body += "[color=#ffb060]⚠ 当前%s %d（%s，警戒线 %d）[/color]\n\n" % [mname, cur, low_high, threshold]
 		body += "[color=#ff9090]若未及时应对，下一回合可能造成：[/color]\n"
 		body += "\n".join(effect_lines)
@@ -2816,6 +2821,17 @@ func _parse_cond(cond: String) -> Dictionary:
 	if parts.size() >= 3:
 		return {"metric": parts[0], "op": parts[1], "threshold": int(parts[2])}
 	return {}
+
+
+## 当前值是否真的落在危机条件那一侧（安全区不报警）
+func _cond_holds(cur: int, op: String, threshold: int) -> bool:
+	match op:
+		"<": return cur < threshold
+		"<=": return cur <= threshold
+		">": return cur > threshold
+		">=": return cur >= threshold
+		"==": return cur == threshold
+	return false
 
 
 ## 危机警示弹层（盖在普通弹窗之上）
@@ -3689,7 +3705,7 @@ func _make_metric_row(metric: String) -> VBoxContainer:
 	return vb
 
 
-## 按难度更新指标条上的阈值红线位置（简单 20 / 困难 30）
+## 按难度更新指标条上的阈值红线位置（简单 20 / 普通 30 / 困难 40）
 func _update_threshold_lines() -> void:
 	var ratio: float = GameState.failure_threshold() / 100.0
 	for metric in metric_bars:
@@ -4127,9 +4143,19 @@ func _finish_turn() -> void:
 		if info["selected"]:
 			if not GameState.execute_action(info["card_id"], "effective"):
 				failed.append(info["card_id"])
+			if GameState.game_over:
+				break   # 已经判负，剩下的牌不再执行
+
+	# 判负即时化：出牌当场把指标打到致死线以下 → 不再结算、不再进分配，直接给失败报告
+	if GameState.game_over:
+		if _current_phase != "popup_report":
+			_show_report(GameState.generate_report())
+		return
 
 	var before: Dictionary = GameState.metrics.duplicate()
+	_defer_game_over = true   # 结算流程自己按「结算反馈 → 报告」的顺序收尾
 	GameState.end_turn()
+	_defer_game_over = false
 	var after: Dictionary = GameState.metrics
 
 	var lines: Array = []
@@ -4198,7 +4224,16 @@ func _advance_to_next() -> void:
 
 
 func _on_game_end(report: Dictionary) -> void:
-	pass  # 报告在结算展示后再呈现
+	# 中途判负（出牌 / 危机爆发）→ 立刻把失败报告推到玩家面前，
+	# 不让他继续出牌、产生「还能救」的错觉。
+	if _defer_game_over:
+		return      # 回合结算流程：结算反馈展示完，由 _advance_to_next 再出报告
+	if _current_phase == "popup_report":
+		return      # 报告已经开着，别叠层
+	if report.get("is_failure", false):
+		_crisis_queue.clear()
+		crisis_root.visible = false   # 危机警示让位给失败报告，不留残影
+		_show_report(report)
 
 
 func _show_report(r: Dictionary) -> void:
@@ -4213,6 +4248,24 @@ func _show_report(r: Dictionary) -> void:
 		title = "被撤换 · 修复失败"
 		body += "[color=#ff7060][b]第 %d 回合，%s[/b][/color]\n\n" % [
 			r.get("turns_survived", 0), r.get("failure_reason", "生态崩溃")]
+		# 死因：点名是哪个指标先崩的、崩到多少、线在哪 —— 玩家才知道自己输在哪
+		var fm: String = str(r.get("failure_metric", ""))
+		if fm != "":
+			var fname: String = str(r.get("failure_metric_name", fm))
+			var fval: int = int(r.get("failure_value", GameState.metrics.get(fm, 0)))
+			var fthr: int = int(r.get("failure_threshold", GameState.failure_threshold()))
+			body += "[b]直接死因：[/b]%s 跌至 [color=#ff9090]%d[/color]（致死线 %d）\n" % [fname, fval, fthr]
+			var remedy: String = str(GameState.METRIC_REMEDY.get(fm, ""))
+			if remedy != "":
+				body += "[color=#8fd0ff]补强建议：%s[/color]\n" % remedy
+		var below: Array = r.get("metrics_below", [])
+		if below.size() > 1:
+			var parts: Array = []
+			for e in below:
+				parts.append("%s %d" % [GameState.METRIC_NAMES.get(e["metric"], e["metric"]), int(e["value"])])
+			body += "[color=#c08080]同一回合跌破致死线的还有：%s[/color]\n" % "、".join(parts)
+		if GameState.last_crisis_name != "":
+			body += "[color=#c08080]本回合危机：%s[/color]\n" % GameState.last_crisis_name
 		body += "你的修复工作被迫中止。这不是终点——换一个策略，再试一次。\n\n"
 	body += "[b]生态维度[/b]（%s）\n" % r["eco"]["grade"]
 	for n in r["eco"]["notes"]:
