@@ -52,13 +52,15 @@ const METRIC_NAMES := {
 }
 
 # 死因 → 下一局优先补强的方向（失败报告用来交代「输在哪、下次怎么打」）
+# ⚠ 只给「打什么」，不给「为什么」：指标之间的因果链（水质→植被→候鸟…）是隐性参数，
+#   要玩家自己从数字里总结。这里写解释就等于把机制白送。
 const METRIC_REMEDY := {
-	"water_level": "优先补水 / 蓄水保水 / 闸坝联合调度，水位长期贴地必然崩",
-	"water_quality": "先上水质监测与清淤，水质是植被与鱼类的上游",
-	"vegetation": "及时补种沉水植物——它是候鸟的食物基础",
-	"fish": "维持巡护执法，禁渔成效靠每回合持续投入",
-	"birds": "保住栖息地与食物供给，候鸟种群恢复最慢",
-	"community": "补偿与转产不能断，社区信任是长期拨款的地基",
+	"water_level": "优先补水、蓄水保水，把闸坝联合调度打出来",
+	"water_quality": "尽早安排水质监测与清淤",
+	"vegetation": "及时补种沉水植物、修复湿地",
+	"fish": "持续维持巡护执法，别断",
+	"birds": "保住栖息地，给候鸟留出恢复的时间",
+	"community": "补偿与转产别断",
 }
 
 # 卡牌档位 → 成本倍率
@@ -1373,6 +1375,8 @@ func _scaled_delta(delta: int) -> int:
 
 ## ── HUD 悬停提示用：某一项指标「本回合会掉多少 / 红线在哪」──
 ## 只读，不改状态。数据来源：natural_evolution_plan()（回合末自然演化）+ pending_crisis（下回合开局爆发的危机）
+## ⚠ why 字段只留给代码与文档：指标之间的因果链是**隐性参数**，不上屏，
+##   玩家应该自己从数字里总结。界面层只取数字，别把它渲染出来。
 func metric_hover_preview(metric: String) -> Dictionary:
 	var cur: int = int(metrics.get(metric, 0))
 	var line: int = failure_threshold_for(metric)
@@ -1405,7 +1409,7 @@ func metric_hover_preview(metric: String) -> Dictionary:
 		"end_min": end_min, "end_max": end_max,
 		"crisis_name": crisis_name, "crisis_delta": crisis_delta, "worst": worst,
 		"margin_nat": end_min - line,      # 只算自然演化时的余量（取最坏的一头）
-		"break_nat": end_min < line,       # 光自然演化就会跌破致死线
+		"break_nat": end_min < line,       # 光自然演化就会跌破生态红线
 		"break_total": worst < line,       # 把下回合那场危机一起算上
 		"penalty_mult": PENALTY_MULT[difficulty],
 	}
@@ -1500,7 +1504,7 @@ func _check_failure() -> bool:
 			failure_metric = metric
 			failure_value = metrics[metric]
 			failure_reason = "上级对你的政绩不满意，将你撤换。"
-			_add_log("✖ %s（%s 只剩 %d，已跌破致死线 %d）" % [failure_reason, METRIC_NAMES.get(metric, metric), failure_value, threshold])
+			_add_log("✖ %s（%s 只剩 %d，已跌破生态红线 %d）" % [failure_reason, METRIC_NAMES.get(metric, metric), failure_value, threshold])
 			game_ended.emit(generate_report())
 			return true
 	return false

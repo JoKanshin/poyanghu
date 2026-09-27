@@ -3995,9 +3995,11 @@ func _update_threshold_lines() -> void:
 
 # ==================== 指标悬停小窗 ====================
 ## 鼠标移到某一项指标上时，跟随指针弹出的小窗：
-## 本回合自然演化会掉多少 / 回合末大概落到哪 / 致死线（红线）在哪 / 余量还剩多少；
+## 本回合自然演化会掉多少 / 回合末大概落到哪 / 生态红线在哪 / 余量还剩多少；
 ## 若已有「已预警、下回合开局才爆发」的危机且正好打到这一项，也提前告诉你。
 ## 数字全部来自 GameState.metric_hover_preview()（只读推演），这里只负责显示，不参与任何判定。
+## ⚠ 只给结果，不给解释：指标之间的因果链、难度对衰减的放大，都是**隐性参数**，
+##   玩家应该自己从数字里总结，不能写在这块板上。
 const METRIC_TIP_W := 294.0
 
 
@@ -4118,7 +4120,7 @@ func _fill_metric_tip(metric: String) -> void:
 		dcol = "#ff8f7a"
 	var rows: Array = []
 	rows.append("[color=#cfd6dc]本回合自然演化[/color]   [color=%s][b]%s[/b][/color]" % [dcol, dtxt])
-	rows.append("[color=#8e9aa4]· %s[/color]" % str(p["why"]))
+	# 刻意不写「为什么」：水质怎么拖累植被、植被怎么影响候鸟这一类因果，是留给玩家自己悟的隐性参数。
 
 	# ② 回合末大概落到哪
 	if kind == "random":
@@ -4126,7 +4128,7 @@ func _fill_metric_tip(metric: String) -> void:
 	else:
 		rows.append("[color=#cfd6dc]回合末约[/color]   [b]%d[/b] %s" % [end_min, _tip_delta_suffix(cur, end_min)])
 
-	# ③ 红线（致死线）与余量
+	# ③ 生态红线与余量
 	var line: int = int(p["line"])
 	var margin: int = int(p["margin_nat"])
 	var mcol := "#7ee08a"
@@ -4134,19 +4136,17 @@ func _fill_metric_tip(metric: String) -> void:
 		mcol = "#ff5a5a"
 	elif margin <= 3:
 		mcol = "#ffcc66"
-	rows.append("[color=#cfd6dc]致死线[/color]   [color=#ff8080][b]%d[/b][/color]    [color=#cfd6dc]余量[/color] [color=%s][b]%d[/b][/color]" % [line, mcol, margin])
-	var mult: float = float(p["penalty_mult"])
-	if mult > 1.0 and nat_min < 0:
-		rows.append("[color=#8e9aa4]（当前难度：负向变动 ×%.1f 已计入）[/color]" % mult)
+	rows.append("[color=#cfd6dc]生态红线[/color]   [color=#ff8080][b]%d[/b][/color]    [color=#cfd6dc]余量[/color] [color=%s][b]%d[/b][/color]" % [line, mcol, margin])
+	# 难度怎么放大衰减也是隐性参数，不写出来（两档都玩两把自然就有数）
 	if bool(p["break_nat"]):
-		rows.append("[color=#ff5a5a][b]⚠ 照这样到回合末就会跌破致死线[/b][/color]")
+		rows.append("[color=#ff5a5a][b]⚠ 回合末就会跌破生态红线[/b][/color]")
 	elif margin <= 3:
-		rows.append("[color=#ffcc66]⚠ 已经很贴红线了[/color]")
+		rows.append("[color=#ffcc66]⚠ 已经很贴生态红线了[/color]")
 
 	# ④ 预警中、下回合开局才爆发的危机正好打到这一项
 	if int(p["crisis_delta"]) != 0:
 		rows.append("[color=#ffb060]⚠ 预警中：%s[/color]" % str(p["crisis_name"]))
-		var tail := "会跌破致死线" if bool(p["break_total"]) else "仍在红线之上"
+		var tail := "会跌破生态红线" if bool(p["break_total"]) else "仍在生态红线上"
 		rows.append("[color=#8e9aa4]· 下回合开局 %+d → 约 %d，%s[/color]" % [int(p["crisis_delta"]), int(p["worst"]), tail])
 
 	var txt := ""
@@ -4726,7 +4726,7 @@ func _show_report(r: Dictionary) -> void:
 			var fname: String = str(r.get("failure_metric_name", fm))
 			var fval: int = int(r.get("failure_value", GameState.metrics.get(fm, 0)))
 			var fthr: int = int(r.get("failure_threshold", GameState.failure_threshold_for(fm)))
-			body += "[b]直接死因：[/b]%s 跌至 [color=#ff9090]%d[/color]（致死线 %d）\n" % [fname, fval, fthr]
+			body += "[b]直接死因：[/b]%s 跌至 [color=#ff9090]%d[/color]（生态红线 %d）\n" % [fname, fval, fthr]
 			var remedy: String = str(GameState.METRIC_REMEDY.get(fm, ""))
 			if remedy != "":
 				body += "[color=#8fd0ff]补强建议：%s[/color]\n" % remedy
@@ -4735,7 +4735,7 @@ func _show_report(r: Dictionary) -> void:
 			var parts: Array = []
 			for e in below:
 				parts.append("%s %d" % [GameState.METRIC_NAMES.get(e["metric"], e["metric"]), int(e["value"])])
-			body += "[color=#c08080]同一回合跌破致死线的还有：%s[/color]\n" % "、".join(parts)
+			body += "[color=#c08080]同一回合跌破生态红线的还有：%s[/color]\n" % "、".join(parts)
 		if GameState.last_crisis_name != "":
 			body += "[color=#c08080]本回合危机：%s[/color]\n" % GameState.last_crisis_name
 		body += "你的修复工作被迫中止。这不是终点——换一个策略，再试一次。\n\n"
