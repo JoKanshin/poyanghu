@@ -3004,7 +3004,7 @@ func _refresh_warn_bar() -> void:
 		warn_bar.visible = false
 		return
 	var last: Dictionary = rows[rows.size() - 1]
-	warn_bar.text = "⚠ 曾预警：%s（第 %d 回合）· 共 %d 条" % [
+	warn_bar.text = "⚠ 危机预警日志：%s（第 %d 回合）· 共 %d 条" % [
 		_crisis_short_label(str(last["id"])), int(last["turn"]), rows.size()]
 	warn_bar.visible = true
 
@@ -3068,9 +3068,16 @@ func _make_warn_row(e: Dictionary) -> Control:
 		t += "[color=#ff9090]→ 第 %d 回合已爆发：%s[/color]\n" % [hit, "、".join(eff)]
 	else:
 		t += "[color=#9aa0a6]→ 未爆发（本局在那之前就结束了）[/color]\n"
-	var needs: Array = c.get("needs", [])
-	if not needs.is_empty():
-		t += "[color=#8fd0ff]当时该打的标签：%s[/color]" % "、".join(needs)
+	# 沿用预警弹窗里的说法（「应对建议：优先打出「卡名」」），不暴露内部的标签名 ——
+	# 「补水调度」「病害防控」这类标签玩家在别处根本看不到，写在日志里会显得割裂。
+	var counters: Array = GameState.counter_ids_for(c)
+	if not counters.is_empty():
+		var names: Array = []
+		for cid in counters:
+			names.append(_card_name(cid))
+		var shown: Array = names.slice(0, 3)
+		var tail: String = "" if names.size() <= 3 else " 等 %d 张" % names.size()
+		t += "[color=#8fd0ff]应对建议：优先打出「%s」%s[/color]" % ["」「".join(shown), tail]
 	body.text = t
 	panel.add_child(body)
 	return panel
