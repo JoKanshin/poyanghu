@@ -508,7 +508,9 @@ const KNOWLEDGE_CARDS := {
 # 每回合有概率抽中危机；危机提前 1 回合预警，下回合生效。
 # weight：同一轮候选之间的相对权重；cond：只有当前状态吻合的危机才会进入候选。
 # 防连出与冷却：刚爆发的那个不会紧接着再来；爆发过的在 CRISIS_COOLDOWN_TURNS 回合内不再抽中。
+# 全局喘息：任意两场危机之间至少空出 CRISIS_BREATH_TURNS 个回合（与是不是同一个危机无关）。
 const CRISIS_COOLDOWN_TURNS := 3
+const CRISIS_BREATH_TURNS := 1
 const CRISES := [
 	{
 		"id": "drought", "name": "极端干旱", "weight": 1.0, "cond": "water_level < 45",
@@ -941,6 +943,11 @@ func _maybe_warn_crisis() -> void:
 	# 从第 3 回合起才开始抽危机，给玩家缓冲
 	if turn < 3:
 		return
+	# 全局喘息：任意两场危机爆发之间至少空出 CRISIS_BREATH_TURNS 个回合。
+	# 预警会在「下回合」爆发，所以这里比的是「下一回合」与上一场爆发回合的距离。
+	var last_hit := _last_crisis_hit_turn()
+	if last_hit >= 0 and turn - last_hit < CRISIS_BREATH_TURNS:
+		return  # 上一场危机刚落地，先把这一段喘息时间给玩家
 	# 基础概率随难度递增，随回合推进略升（后期压力更大）
 	var chance: float = CRISIS_CHANCE[difficulty] + float(turn) / float(TOTAL_TURNS) * CRISIS_SLOPE[difficulty]
 	# 天赋加成：降低危机触发概率
@@ -991,6 +998,14 @@ func _crisis_hit_this_turn(id: String) -> bool:
 		if str(h["id"]) == id and int(h["turn"]) == turn:
 			return true
 	return false
+
+
+## 最近一场危机爆发的回合（没有则 -1）
+func _last_crisis_hit_turn() -> int:
+	var t := -1
+	for h in crisis_history:
+		t = maxi(t, int(h["turn"]))
+	return t
 
 
 ## 简易条件求值（复用知识卡的表达式风格）
