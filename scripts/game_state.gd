@@ -150,6 +150,7 @@ const ACTION_SETTLEMENT_DELTA := {
 const ACTION_CARDS := [
 	{
 		"id": "water_control", "name": "碟形湖控水", "category": "ecology",
+		"tags": ["补水调度"],
 		"desc": "调节湖区水位，改善沉水植物块茎发育。",
 		"cost": 30,
 		"tiers": {
@@ -161,6 +162,7 @@ const ACTION_CARDS := [
 	},
 	{
 		"id": "veg_restore", "name": "植被补种", "category": "ecology",
+		"tags": ["生态修复", "物种防控"],
 		"desc": "补种苦草等沉水植物，扩大草洲覆盖。",
 		"cost": 20,
 		"tiers": {
@@ -172,6 +174,7 @@ const ACTION_CARDS := [
 	},
 	{
 		"id": "water_monitor", "name": "水质监测与病害防治", "category": "ecology",
+		"tags": ["水体治理", "病害防控"],
 		"desc": "监测总磷总氮，提前发现并防治病害风险。",
 		"cost": 30,
 		"tiers": {
@@ -183,6 +186,7 @@ const ACTION_CARDS := [
 	},
 	{
 		"id": "invasive_clear", "name": "外来物种清除", "category": "ecology",
+		"tags": ["物种防控"],
 		"desc": "清除福寿螺、凤眼莲等外来入侵物种。",
 		"cost": 30,
 		"tiers": {
@@ -194,6 +198,7 @@ const ACTION_CARDS := [
 	},
 	{
 		"id": "bird_canteen", "name": "候鸟食堂营建", "category": "ecology",
+		"tags": ["栖息地营造"],
 		"desc": "在堤外农田预留食物地块，减少人鸟冲突。",
 		"cost": 30,
 		"tiers": {
@@ -205,6 +210,7 @@ const ACTION_CARDS := [
 	},
 	{
 		"id": "rescue", "name": "应急救护", "category": "ecology",
+		"tags": ["应急救护"],
 		"desc": "救护搁浅或受伤个体，建立响应机制。",
 		"cost": 20,
 		"tiers": {
@@ -216,6 +222,7 @@ const ACTION_CARDS := [
 	},
 	{
 		"id": "community_comp", "name": "社区补偿", "category": "social",
+		"tags": ["社区补偿"],
 		"desc": "补偿农户候鸟致害损失，缓解人鸟冲突。",
 		"cost": 30,
 		"tiers": {
@@ -227,6 +234,7 @@ const ACTION_CARDS := [
 	},
 	{
 		"id": "industry_switch", "name": "转产投资", "category": "social",
+		"tags": ["产业转产"],
 		"desc": "扶持退捕渔民转产，形成替代生计。",
 		"cost": 60,
 		"tiers": {
@@ -238,6 +246,7 @@ const ACTION_CARDS := [
 	},
 	{
 		"id": "guard_team", "name": "社区共管与护鸟队", "category": "social",
+		"tags": ["公众参与"],
 		"desc": "建立护鸟员队伍，形成社区巡护网络。",
 		"cost": 30,
 		"tiers": {
@@ -249,6 +258,7 @@ const ACTION_CARDS := [
 	},
 	{
 		"id": "education", "name": "科普宣传与公众参与", "category": "social",
+		"tags": ["公众参与"],
 		"desc": "提升村民与学生认知，形成公众监测网络。",
 		"cost": 20,
 		"tiers": {
@@ -260,6 +270,7 @@ const ACTION_CARDS := [
 	},
 	{
 		"id": "patrol", "name": "执法巡逻", "category": "manage",
+		"tags": ["执法巡护"],
 		"desc": "严查非法捕捞，直接决定鱼类恢复速度。",
 		"cost": 30,
 		"tiers": {
@@ -271,6 +282,7 @@ const ACTION_CARDS := [
 	},
 	{
 		"id": "research", "name": "生态监测与科研", "category": "manage",
+		"tags": ["科研监测"],
 		"desc": "提高预报准确率，建立长期数据库。",
 		"cost": 30,
 		"tiers": {
@@ -282,6 +294,7 @@ const ACTION_CARDS := [
 	},
 	{
 		"id": "water_replenish", "name": "生态补水（引江济湖）", "category": "ecology",
+		"tags": ["补水调度"],
 		"desc": "跨流域引水补充湖区水量，缓解枯水、恢复浅滩生境。",
 		"cost": 40,
 		"tiers": {
@@ -293,6 +306,7 @@ const ACTION_CARDS := [
 	},
 	{
 		"id": "water_storage", "name": "蓄水保水工程", "category": "ecology",
+		"tags": ["补水调度"],
 		"desc": "在碟形湖与入江水道修建蓄水闸，汛期拦蓄、旱季保水，稳定湖区水位。",
 		"cost": 25,
 		"tiers": {
@@ -304,6 +318,7 @@ const ACTION_CARDS := [
 	},
 	{
 		"id": "water_schedule", "name": "闸坝联合调度", "category": "manage",
+		"tags": ["补水调度"],
 		"desc": "协调上游水库联合调度，保障湖区生态流量，缓解枯水并改善水体流动性。",
 		"cost": 25,
 		"tiers": {
@@ -315,6 +330,7 @@ const ACTION_CARDS := [
 	},
 	{
 		"id": "wetland_restore", "name": "退田还湿（湿地生态修复）", "category": "ecology",
+		"tags": ["生态修复"],
 		"desc": "将环湖低产农田退还为湿地，重建自然水文节律。",
 		"cost": 50,
 		"tiers": {
@@ -326,6 +342,7 @@ const ACTION_CARDS := [
 	},
 	{
 		"id": "floating_island", "name": "人工浮岛（生态浮床）", "category": "ecology",
+		"tags": ["水体治理"],
 		"desc": "布置人工浮岛与生态浮床，吸附氮磷、净化水体。",
 		"cost": 30,
 		"tiers": {
@@ -337,6 +354,7 @@ const ACTION_CARDS := [
 	},
 	{
 		"id": "dredge", "name": "底泥清淤疏浚", "category": "ecology",
+		"tags": ["水体治理"],
 		"desc": "疏浚淤积底泥，削减内源污染、恢复湖床通透性。",
 		"cost": 40,
 		"tiers": {
@@ -348,6 +366,7 @@ const ACTION_CARDS := [
 	},
 	{
 		"id": "habitat_protect", "name": "越冬栖息地保护", "category": "ecology",
+		"tags": ["栖息地营造"],
 		"desc": "划定并管护候鸟越冬栖息地，控制人为干扰与栖息地破碎化。",
 		"cost": 30,
 		"tiers": {
@@ -359,6 +378,7 @@ const ACTION_CARDS := [
 	},
 	{
 		"id": "ecotourism", "name": "生态旅游与观鸟经济", "category": "social",
+		"tags": ["产业转产"],
 		"desc": "发展观鸟旅游与生态体验，让保护产生社区收益。",
 		"cost": 30,
 		"tiers": {
@@ -370,6 +390,7 @@ const ACTION_CARDS := [
 	},
 	{
 		"id": "damage_insurance", "name": "野生动物致害保险", "category": "social",
+		"tags": ["社区补偿"],
 		"desc": "建立候鸟致害补偿保险，农户损失及时赔付。",
 		"cost": 20,
 		"tiers": {
@@ -381,6 +402,7 @@ const ACTION_CARDS := [
 	},
 	{
 		"id": "eco_brand", "name": "生态产品认证与助销", "category": "social",
+		"tags": ["产业转产"],
 		"desc": "认证湖区生态农产品并拓展销路，让绿色生产有利可图。",
 		"cost": 30,
 		"tiers": {
@@ -392,6 +414,7 @@ const ACTION_CARDS := [
 	},
 	{
 		"id": "fish_restock", "name": "增殖放流", "category": "manage",
+		"tags": ["增殖放流"],
 		"desc": "投放鱼苗，恢复鱼类资源量与江湖洄游通道。",
 		"cost": 30,
 		"tiers": {
@@ -403,6 +426,7 @@ const ACTION_CARDS := [
 	},
 	{
 		"id": "smart_patrol", "name": "智慧巡护（无人机遥感）", "category": "manage",
+		"tags": ["执法巡护"],
 		"desc": "无人机与遥感全天候巡护，监测非法捕捞、火情与水质。",
 		"cost": 40,
 		"tiers": {
@@ -414,6 +438,7 @@ const ACTION_CARDS := [
 	},
 	{
 		"id": "wetland_law", "name": "湿地保护立法", "category": "manage",
+		"tags": ["执法巡护"],
 		"desc": "推动地方湿地保护条例，划定禁渔区与生态红线。",
 		"cost": 50,
 		"tiers": {
@@ -425,6 +450,7 @@ const ACTION_CARDS := [
 	},
 	{
 		"id": "grazing_ban", "name": "封洲禁牧", "category": "manage",
+		"tags": ["生态修复"],
 		"desc": "禁止湖洲过度放牧，保护洲滩草甸植被。",
 		"cost": 20,
 		"tiers": {
@@ -514,54 +540,63 @@ const CRISIS_BREATH_TURNS := 1
 const CRISES := [
 	{
 		"id": "drought", "name": "极端干旱", "weight": 1.0, "cond": "water_level < 45",
+		"needs": ["补水调度"],
 		"warn": "【自然预警】气象部门预报：未来一季降水显著偏少，湖区面临枯水风险。",
 		"hit": "【危机爆发】极端干旱来袭——湖区水位骤降，沉水植物块茎大面积发育受阻，湖床裸露。",
 		"effects": [{"metric": "water_level", "delta": -14}, {"metric": "vegetation", "delta": -7}],
 	},
 	{
 		"id": "disease", "name": "苦草病害暴发", "weight": 0.9, "cond": "water_quality < 50",
+		"needs": ["病害防控", "生态修复"],
 		"warn": "【监测提示】巡护员发现局部水草出现腐烂迹象，疑与水体富营养化有关，建议加强监测。",
 		"hit": "【危机爆发】苦草病害大面积暴发——沉水植被成片腐烂死亡，候鸟食物锐减。",
 		"effects": [{"metric": "vegetation", "delta": -12}, {"metric": "water_quality", "delta": -6}],
 	},
 	{
 		"id": "illegal_fishing", "name": "非法捕捞猖獗", "weight": 1.0, "cond": "fish < 50",
+		"needs": ["执法巡护"],
 		"warn": "【巡护通报】近期湖区外围发现可疑船只活动轨迹，疑似非法捕捞，建议加强执法。",
 		"hit": "【危机爆发】非法捕捞猖獗——电捕鱼与密眼网具造成鱼类资源骤减。",
 		"effects": [{"metric": "fish", "delta": -13}],
 	},
 	{
 		"id": "bird_conflict", "name": "候鸟大规模进田", "weight": 1.0, "cond": "community < 55",
+		"needs": ["社区补偿", "栖息地营造"],
 		"warn": "【社区报告】农户反映白鹤开始向稻田聚集，若持续可能造成较大损失，请提前协商。",
 		"hit": "【危机爆发】数千只候鸟涌入农田取食莲藕、踩踏稻苗，农户损失严重，矛盾激化。",
 		"effects": [{"metric": "community", "delta": -14}, {"metric": "birds", "delta": 6}],
 	},
 	{
 		"id": "flood", "name": "汛期洪水", "weight": 0.8, "cond": "water_level > 60",
+		"needs": ["生态修复", "栖息地营造"],
 		"warn": "【自然预警】上游持续降雨，水文站预计湖区水位将快速上涨。",
 		"hit": "【危机爆发】汛期洪水漫过草洲——新生沉水植被被冲毁，底质遭到破坏。",
 		"effects": [{"metric": "water_level", "delta": 18}, {"metric": "vegetation", "delta": -10}],
 	},
 	{
 		"id": "pollution", "name": "上游污染输入", "weight": 0.9, "cond": "water_quality < 55",
+		"needs": ["水体治理"],
 		"warn": "【水质预警】上游监测断面总磷浓度上升，污染团可能随水流进入湖区。",
 		"hit": "【危机爆发】上游污染团入境——总磷总氮严重超标，鱼类与沉水植物同时受损。",
 		"effects": [{"metric": "water_quality", "delta": -14}, {"metric": "fish", "delta": -6}],
 	},
 	{
 		"id": "invasive", "name": "外来物种暴发", "weight": 0.9, "cond": "vegetation < 55",
+		"needs": ["物种防控", "生态修复"],
 		"warn": "【巡查发现】湖区外围发现福寿螺与凤眼莲扩散迹象，繁殖速度较快。",
 		"hit": "【危机爆发】外来物种暴发——福寿螺啃食水生植物，凤眼莲覆盖水面挤占生存空间。",
 		"effects": [{"metric": "vegetation", "delta": -10}, {"metric": "fish", "delta": -5}],
 	},
 	{
 		"id": "algal_bloom", "name": "蓝藻水华", "weight": 0.85, "cond": "water_quality < 45",
+		"needs": ["水体治理"],
 		"warn": "【监测提示】气温升高、水体流动性变差，蓝藻水华风险上升。",
 		"hit": "【危机爆发】蓝藻水华暴发——水面被绿色藻膜覆盖，水体缺氧，候鸟中毒与食物短缺同时发生。",
 		"effects": [{"metric": "water_quality", "delta": -12}, {"metric": "birds", "delta": -8}],
 	},
 	{
 		"id": "wetland_encroach", "name": "围湖造田", "weight": 1.0, "cond": "community < 55",
+		"needs": ["执法巡护", "生态修复"],
 		"warn": "【社区动向】部分村民在湿地边缘围垦造田、搭建临时房，有向湖区推进的迹象。",
 		"hit": "【危机爆发】围湖造田蔓延——环湖湿地被侵占，临时房屋与圩田向湖推进。",
 		"effects": [
@@ -573,24 +608,12 @@ const CRISES := [
 	},
 ]
 
-# ==================== 危机应对卡（预警触发的专项）====================
-# 危机预警出现时，对应处置手段的卡牌更容易进入本回合手牌
-# —— 现实中预警一出，应急专项就会上会；但只是「更容易」，不是必然。
-const CRISIS_COUNTERS := {
-	"drought": ["water_replenish", "water_control", "water_storage", "water_schedule"],  # 干旱 → 补水 / 控水 / 蓄水 / 调度
-	"disease": ["water_monitor", "veg_restore"],                     # 病害 → 监测防治 / 补种
-	"illegal_fishing": ["patrol", "smart_patrol"],                   # 非法捕捞 → 执法 / 智慧巡护
-	"bird_conflict": ["bird_canteen", "damage_insurance"],           # 人鸟冲突 → 候鸟食堂 / 致害保险
-	"flood": ["wetland_restore", "habitat_protect"],                 # 洪水 → 退田还湿 / 栖息地保护
-	"pollution": ["water_monitor", "floating_island", "dredge"],     # 污染 → 监测 / 浮岛 / 清淤
-	"invasive": ["invasive_clear", "veg_restore"],                   # 外来物种 → 清除 / 补种
-	"algal_bloom": ["floating_island", "dredge", "water_monitor"],   # 蓝藻 → 浮岛 / 清淤 / 监测
-	"wetland_encroach": ["wetland_law", "wetland_restore", "patrol"],# 围湖造田 → 立法 / 退田还湿 / 执法
-}
-
-# 预警期这些卡的抽取权重倍率（1.0 = 与普通卡同权重）
-# 实测 1.5：应对卡单张出现率 29% → 40%，普通卡 29% → 28%（更容易，但不喧宾夺主）
-const CRISIS_CARD_WEIGHT := 1.5
+# ==================== 危机对策卡（标签匹配 + 保底）====================
+# 卡牌上的 tags 与危机上的 needs 做标签匹配：命中任一 needs 的卡就是该危机的对策卡。
+# 映射不再写死成卡 id 列表 —— 以后加新卡，只要挂上对的标签就自动进对策池。
+# 预警期保证 CRISIS_COUNTER_QUOTA 张对策卡进入下批手牌：光靠权重软加权实测仍有
+# 约 1/3 的预警回合手里一张对策都没有（玩家只能看着危机爆发），所以改成硬保底。
+const CRISIS_COUNTER_QUOTA := 2
 
 # ==================== 卡牌协同（组合出招）====================
 # 同回合内同时执行 requires 中全部卡牌，触发额外效果
@@ -1037,39 +1060,71 @@ func tier_cost(card_id: String, tier: String) -> int:
 	return maxi(1, int(round(card["cost"] * TIER_COST_MULT[tier] * discount)))
 
 
-## 从卡池抽 n 张（不重复，加权不放回）。
-## 有危机预警时，对应处置卡权重提升 —— 预警一出，专项响应更容易上会。
+## 从卡池抽 n 张（不重复）。
+## 危机预警期先「保底」：把 CRISIS_COUNTER_QUOTA 张对策卡直接塞进手牌；
+## 剩下的名额走普通均匀随机，最后整体洗牌（对手牌顺序没有偏好）。
 func draw_cards(n: int) -> Array:
+	var total: int = mini(n, ACTION_CARDS.size())
 	var pool := ACTION_CARDS.duplicate()
-	var boosted := _crisis_counter_ids()
+	var wanted := _crisis_counter_set()
 	var picked: Array = []
-	for _i in mini(n, pool.size()):
-		var total_w := 0.0
-		for c in pool:
-			total_w += _card_weight(c["id"], boosted)
-		var roll := randf() * total_w
-		var idx := pool.size() - 1
-		for j in pool.size():
-			roll -= _card_weight(pool[j]["id"], boosted)
-			if roll <= 0.0:
-				idx = j
-				break
+
+	# 1) 保底：对策卡优先入牌，保证玩家手里一定有牌可打
+	if not wanted.is_empty():
+		var quota: int = mini(CRISIS_COUNTER_QUOTA, total)
+		while picked.size() < quota:
+			var gi := _pick_matching_index(pool, wanted)
+			if gi < 0:
+				break   # 卡池里的对策卡已经抽完
+			picked.append(pool[gi])
+			pool.remove_at(gi)
+
+	# 2) 其余名额：均匀随机
+	while picked.size() < total and not pool.is_empty():
+		var idx := randi() % pool.size()
 		picked.append(pool[idx])
 		pool.remove_at(idx)
+
+	picked.shuffle()   # 保底卡不该永远躺在手牌最左边
 	return picked
 
 
-## 单张卡的抽取权重（预警期内的应对卡更重）
-func _card_weight(card_id: String, boosted: Dictionary) -> float:
-	return CRISIS_CARD_WEIGHT if boosted.has(card_id) else 1.0
+## 在 pool 里随机挑一张「对策卡」的下标；没有则返回 -1
+func _pick_matching_index(pool: Array, wanted: Dictionary) -> int:
+	var idxs: Array = []
+	for j in pool.size():
+		if wanted.has(pool[j]["id"]):
+			idxs.append(j)
+	if idxs.is_empty():
+		return -1
+	return int(idxs[randi() % idxs.size()])
 
 
-## 当前预警危机对应的应对卡集合（无预警时为空）
-func _crisis_counter_ids() -> Dictionary:
+## 某个危机的对策卡 id 列表（卡牌 tags 命中危机 needs 任一项即算对策卡）
+func counter_ids_for(crisis: Dictionary) -> Array:
+	var needs: Array = crisis.get("needs", [])
+	var out: Array = []
+	if needs.is_empty():
+		return out
+	for c in ACTION_CARDS:
+		for tag in c.get("tags", []):
+			if tag in needs:
+				out.append(c["id"])
+				break
+	return out
+
+
+## 当前预警危机的对策卡 id 列表（无预警时为空）
+func counter_card_ids() -> Array:
 	if pending_crisis.is_empty():
-		return {}
+		return []
+	return counter_ids_for(pending_crisis)
+
+
+## 当前预警危机的对策卡集合（字典，抽牌时快速命中判定用）
+func _crisis_counter_set() -> Dictionary:
 	var out := {}
-	for cid in CRISIS_COUNTERS.get(pending_crisis["id"], []):
+	for cid in counter_card_ids():
 		out[cid] = true
 	return out
 

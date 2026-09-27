@@ -2802,12 +2802,16 @@ func _crisis_body_text(crisis: Dictionary, is_warning: bool) -> String:
 			body += "[color=#ffb060]⚠ 当前%s %d（%s，警戒线 %d）[/color]\n\n" % [mname, cur, low_high, threshold]
 		body += "[color=#ff9090]若未及时应对，下一回合可能造成：[/color]\n"
 		body += "\n".join(effect_lines)
-		var counters: Array = GameState.CRISIS_COUNTERS.get(crisis["id"], [])
+		var counters: Array = GameState.counter_ids_for(crisis)
 		if not counters.is_empty():
 			var names: Array = []
 			for cid in counters:
 				names.append(_card_name(cid))
-			body += "\n\n[color=#8fd0ff]应对建议：优先打出「%s」等卡[/color]" % "」「".join(names)
+			# 标签匹配后对策卡可能有 4~6 张，只列前 4 张，免得这段撑爆弹窗
+			var shown: Array = names.slice(0, 4)
+			var tail: String = "" if names.size() <= 4 else " 等 %d 张" % names.size()
+			body += "\n\n[color=#8fd0ff]应对建议（本回合保底 %d 张入手）：优先打出「%s」%s[/color]" % [
+				int(GameState.CRISIS_COUNTER_QUOTA), "」「".join(shown), tail]
 	else:
 		body += "%s\n\n" % crisis["hit"]
 		body += "[color=#ff9090]本次已造成：[/color]\n"
@@ -4181,9 +4185,12 @@ func _finish_turn() -> void:
 		lines.append("")
 		lines.append("[color=#ffb060]⏳ 预警：%s[/color]" % GameState.pending_crisis["name"])
 		var counter_names: Array = []
-		for cid in GameState.CRISIS_COUNTERS.get(GameState.pending_crisis["id"], []):
+		for cid in GameState.counter_card_ids():
 			counter_names.append(_card_name(cid))
-		lines.append("[color=#8a8a8a]   （专项响应已列入下批分配：%s）[/color]" % "、".join(counter_names))
+		var shown_c: Array = counter_names.slice(0, 3)
+		var tail_c: String = "" if counter_names.size() <= 3 else " 等 %d 张" % counter_names.size()
+		lines.append("[color=#8a8a8a]   （专项响应已列入下批：%s%s，保底 %d 张入手）[/color]" % [
+			"、".join(shown_c), tail_c, int(GameState.CRISIS_COUNTER_QUOTA)])
 
 	hand_panel.visible = false
 	bottom_right.visible = false
