@@ -1278,41 +1278,137 @@ func execute_action(card_id: String, tier: String) -> bool:
 
 ## 结算自然演化（每回合结束调用）
 ## 设计：不做决策生态会缓慢恶化（压力），但不会瞬间崩盘（给玩家反应时间）
+## ⚠ 增减清单由 natural_evolution_plan() 给出：HUD 的「悬停提示」读的是同一份 plan，
+##   所以提示里写的数字和实际结算的数字同源，不会各写一套。
 func natural_evolution() -> void:
-	# 水位随机波动（枯水更常见，符合鄱阳湖现实）
-	_apply_delta("water_level", _randi_range(-5, 3))
-
-	# 水质：无治理则缓慢恶化
-	if used_action_ids.has("water_monitor") or used_action_ids.has("research") or used_action_ids.has("smart_patrol"):
-		pass  # 本回合有监测/科研/智慧巡护投入 → 水质不恶化
-	else:
-		_apply_delta("water_quality", -2)
-
-	# 植被受水质拖累：水质差则植被退化（比之前更重）
-	if metrics["water_quality"] < 45:
-		_apply_delta("vegetation", -3)
-	elif metrics["water_quality"] > 70:
-		_apply_delta("vegetation", 1)
-
-	# 植被是候鸟食物基础
-	if metrics["vegetation"] < 42:
-		_apply_delta("birds", -3)
-	elif metrics["vegetation"] > 70:
-		_apply_delta("birds", 1)
-
-	# 鱼类：禁渔带来缓慢恢复，但执法不足则恢复停滞
-	if used_action_ids.has("patrol") or used_action_ids.has("guard_team"):
-		_apply_delta("fish", 2)
-	else:
-		_apply_delta("fish", -1)  # 无巡护 → 非法捕捞蚕食
-
-	# 社区信任：长期缺补偿则持续下降
-	if metrics["community"] < 45 and not used_action_ids.has("community_comp"):
-		_apply_delta("community", -3)
-
+	for e in natural_evolution_plan():
+		_apply_delta(str(e["metric"]), int(e["delta"]))
 	_sync_species()
 	_sync_plants()
 	metrics_changed.emit()
+
+
+## 本回合自然演化会发生哪些增减（只读推演，不改任何状态）
+## 返回 [{metric, delta, min, max, kind, why}]
+##   delta   = 引擎实际使用的原始值（水位那一条是本次随机到的值）
+##   min/max = 叠加难度负向倍率后，玩家真正会看到的区间
+##   kind    = random / loss / gain / none
+## roll_random=false 时不去动水位那次随机（HUD 每帧查它，绝不能扰动全局随机序列）
+func natural_evolution_plan(roll_random: bool = true) -> Array:
+	var sim: Dictionary = metrics.duplicate()   # 推演副本：后一步的条件要看前几步之后的值（与原执行顺序一致）
+	var out: Array = []
+
+	# 1) 水位随机波动（枯水更常见，符合鄱阳湖现实）
+	var wl: int = _randi_range(-5, 3) if roll_random else 0
+	out.append({"metric": "water_level", "delta": wl,
+		"min": _scaled_delta(-5), "max": _scaled_delta(3), "kind": "random",
+		"why": "水位随机波动（枯水更常见，最多涨 3）"})
+	sim["water_level"] = clampi(int(sim.get("water_level", 0)) + _scaled_delta(wl), 0, 100)
+
+	# 2) 水质：无治理则缓慢恶化
+	if used_action_ids.has("water_monitor") or used_action_ids.has("research") or used_action_ids.has("smart_patrol"):
+		out.append({"metric": "water_quality", "delta": 0, "min": 0, "max": 0, "kind": "none",
+			"why": "本回合已投入监测/科研/智慧巡护 → 水质不恶化"})
+	else:
+		out.append({"metric": "water_quality", "delta": -2,
+			"min": _scaled_delta(-2), "max": _scaled_delta(-2), "kind": "loss",
+			"why": "没打监测/科研/智慧巡护 → 缓慢恶化"})
+		sim["water_quality"] = clampi(int(sim.get("water_quality", 0)) + _scaled_delta(-2), 0, 100)
+
+	# 3) 植被受水质拖累：水质差则植被退化（看推演后的水质）
+	var q: int = int(sim.get("water_quality", 0))   # 一律 .get：残留/老存档可能缺项，HUD 每帧都要调它，不能抛错
+	if q < 45:
+		out.append({"metric": "vegetation", "delta": -3,
+			"min": _scaled_delta(-3), "max": _scaled_delta(-3), "kind": "loss",
+			"why": "水质 %d 已低于 45 → 植被被拖累" % q})
+		sim["vegetation"] = clampi(int(sim.get("vegetation", 0)) + _scaled_delta(-3), 0, 100)
+	elif q > 70:
+		out.append({"metric": "vegetation", "delta": 1, "min": 1, "max": 1, "kind": "gain",
+			"why": "水质 %d 良好（>70）→ 植被恢复" % q})
+		sim["vegetation"] = clampi(int(sim.get("vegetation", 0)) + 1, 0, 100)
+	else:
+		out.append({"metric": "vegetation", "delta": 0, "min": 0, "max": 0, "kind": "none",
+			"why": "水质 %d（45~70）→ 植被本回合不变" % q})
+
+	# 4) 植被是候鸟食物基础（看推演后的植被）
+	var veg: int = int(sim.get("vegetation", 0))
+	if veg < 42:
+		out.append({"metric": "birds", "delta": -3,
+			"min": _scaled_delta(-3), "max": _scaled_delta(-3), "kind": "loss",
+			"why": "植被 %d 已低于 42 → 候鸟食物不足" % veg})
+	elif veg > 70:
+		out.append({"metric": "birds", "delta": 1, "min": 1, "max": 1, "kind": "gain",
+			"why": "植被 %d 良好（>70）→ 候鸟种群回升" % veg})
+	else:
+		out.append({"metric": "birds", "delta": 0, "min": 0, "max": 0, "kind": "none",
+			"why": "植被 %d（42~70）→ 候鸟本回合不变" % veg})
+
+	# 5) 鱼类：禁渔带来缓慢恢复，但执法不足则恢复停滞
+	if used_action_ids.has("patrol") or used_action_ids.has("guard_team"):
+		out.append({"metric": "fish", "delta": 2, "min": 2, "max": 2, "kind": "gain",
+			"why": "本回合已投入巡护/护渔 → 鱼类缓慢恢复"})
+	else:
+		out.append({"metric": "fish", "delta": -1,
+			"min": _scaled_delta(-1), "max": _scaled_delta(-1), "kind": "loss",
+			"why": "没打巡护/护渔 → 被非法捕捞蚕食"})
+
+	# 6) 社区信任：长期缺补偿则持续下降
+	if int(sim.get("community", 0)) < 45 and not used_action_ids.has("community_comp"):
+		out.append({"metric": "community", "delta": -3,
+			"min": _scaled_delta(-3), "max": _scaled_delta(-3), "kind": "loss",
+			"why": "信任度 %d 低于 45 且本回合没打补偿 → 持续下降" % int(sim.get("community", 0))})
+	else:
+		out.append({"metric": "community", "delta": 0, "min": 0, "max": 0, "kind": "none",
+			"why": "本回合不变（信任度 ≥ 45，或已投入补偿）"})
+
+	return out
+
+
+## 只读：负向变动在本地难度下实际会掉多少（与 _apply_delta 走同一处代码，保证口径一致）
+func _scaled_delta(delta: int) -> int:
+	if delta < 0:
+		return roundi(delta * PENALTY_MULT[difficulty])
+	return delta
+
+
+## ── HUD 悬停提示用：某一项指标「本回合会掉多少 / 红线在哪」──
+## 只读，不改状态。数据来源：natural_evolution_plan()（回合末自然演化）+ pending_crisis（下回合开局爆发的危机）
+func metric_hover_preview(metric: String) -> Dictionary:
+	var cur: int = int(metrics.get(metric, 0))
+	var line: int = failure_threshold_for(metric)
+
+	var info: Dictionary = {}
+	for e in natural_evolution_plan(false):
+		if str(e["metric"]) == metric:
+			info = e
+			break
+	var nat_min: int = int(info.get("min", 0))
+	var nat_max: int = int(info.get("max", 0))
+	var end_min: int = clampi(cur + nat_min, 0, 100)
+	var end_max: int = clampi(cur + nat_max, 0, 100)
+
+	# 已预警、下回合开局才爆发的危机：只看它有没有打到这一项（危机伤害不吃难度负向倍率）
+	var crisis_name := ""
+	var crisis_delta := 0
+	if not pending_crisis.is_empty():
+		for e in pending_crisis.get("effects", []):
+			if str(e["metric"]) == metric:
+				crisis_name = str(pending_crisis.get("name", "危机"))
+				crisis_delta = int(e["delta"])
+				break
+
+	var worst: int = clampi(end_min + crisis_delta, 0, 100)
+	return {
+		"metric": metric, "cur": cur, "line": line,
+		"kind": str(info.get("kind", "none")), "why": str(info.get("why", "")),
+		"nat_min": nat_min, "nat_max": nat_max,
+		"end_min": end_min, "end_max": end_max,
+		"crisis_name": crisis_name, "crisis_delta": crisis_delta, "worst": worst,
+		"margin_nat": end_min - line,      # 只算自然演化时的余量（取最坏的一头）
+		"break_nat": end_min < line,       # 光自然演化就会跌破致死线
+		"break_total": worst < line,       # 把下回合那场危机一起算上
+		"penalty_mult": PENALTY_MULT[difficulty],
+	}
 
 
 ## 结算卡牌协同：本回合打出指定组合则触发额外效果
@@ -1476,7 +1572,7 @@ func _apply_delta(metric: String, delta: int, apply_penalty: bool = true) -> voi
 	#   再乘 1.5 / 2.0 会让困难档"任何一次危机都是一击必杀"——对策卡给的是正向数值
 	#   （正向不乘倍率），+8 永远追不上 -28，"预警 → 对策卡 → 应对"的核心循环就废了。
 	if delta < 0 and apply_penalty:
-		delta = roundi(delta * PENALTY_MULT[difficulty])
+		delta = _scaled_delta(delta)
 	metrics[metric] = clampi(metrics[metric] + delta, 0, 100)
 
 

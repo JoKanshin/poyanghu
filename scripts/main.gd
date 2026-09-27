@@ -34,6 +34,12 @@ var research_label: Label
 var event_label: Label
 var right_panel: PanelContainer
 var metric_bars: Dictionary = {}
+# 指标悬停小窗（跟随鼠标：本回合会掉多少 / 红线在哪）
+var metric_tip: PanelContainer = null
+var metric_tip_title: Label = null
+var metric_tip_body: RichTextLabel = null
+var _tip_metric: String = ""       # 当前小窗显示的是哪一项（"" = 没显示）
+var _tip_last_text: String = ""    # 上次写入的正文，内容没变就不重复塞（省得每帧重排版）
 var hand_panel: PanelContainer
 var end_turn_btn: Button
 var bottom_right: VBoxContainer
@@ -962,6 +968,8 @@ func _build_mudflats(parent: Node3D) -> void:
 
 
 func _process(delta: float) -> void:
+	# 指标悬停小窗：暂停/弹层时它自己会收起来，所以放在 _paused 提前返回之前
+	_update_metric_tip()
 	if _paused:
 		return
 	# 开场 PPT 计时：不按键则 8 秒自动过一张
@@ -1699,6 +1707,7 @@ func _build_ui() -> void:
 	_build_warn_history(canvas)
 	_build_deck_ui(canvas)
 	_build_deck_viewer()
+	_build_metric_tip(canvas)   # 最后加：小窗要画在 HUD 所有面板之上
 
 
 # ==================== 主菜单 ====================
@@ -3969,7 +3978,7 @@ func _make_metric_row(metric: String) -> VBoxContainer:
 
 	vb.add_child(wrap)
 
-	metric_bars[metric] = {"bar": bar, "val": val, "line": line}
+	metric_bars[metric] = {"bar": bar, "val": val, "line": line, "row": vb}
 	return vb
 
 
@@ -3982,6 +3991,196 @@ func _update_threshold_lines() -> void:
 			var ratio: float = GameState.failure_threshold_for(metric) / 100.0
 			line.anchor_left = ratio
 			line.anchor_right = ratio
+
+
+# ==================== 指标悬停小窗 ====================
+## 鼠标移到某一项指标上时，跟随指针弹出的小窗：
+## 本回合自然演化会掉多少 / 回合末大概落到哪 / 致死线（红线）在哪 / 余量还剩多少；
+## 若已有「已预警、下回合开局才爆发」的危机且正好打到这一项，也提前告诉你。
+## 数字全部来自 GameState.metric_hover_preview()（只读推演），这里只负责显示，不参与任何判定。
+const METRIC_TIP_W := 294.0
+
+
+func _build_metric_tip(parent: Node) -> void:
+	metric_tip = PanelContainer.new()
+	metric_tip.custom_minimum_size = Vector2(METRIC_TIP_W, 0)
+	metric_tip.anchor_left = 0.0
+	metric_tip.anchor_top = 0.0
+	metric_tip.anchor_right = 0.0
+	metric_tip.anchor_bottom = 0.0
+	metric_tip.visible = false
+	_panel_style(metric_tip, Color(0.16, 0.12, 0.08, 0.96))
+	parent.add_child(metric_tip)
+
+	var vb := VBoxContainer.new()
+	vb.add_theme_constant_override("separation", 3)
+	metric_tip.add_child(vb)
+
+	metric_tip_title = _make_label("", 14, Color(0.95, 0.95, 0.95))
+	vb.add_child(metric_tip_title)
+
+	metric_tip_body = RichTextLabel.new()
+	metric_tip_body.bbcode_enabled = true
+	metric_tip_body.fit_content = true
+	metric_tip_body.scroll_active = false
+	metric_tip_body.custom_minimum_size = Vector2(METRIC_TIP_W - 26, 0)
+	metric_tip_body.add_theme_font_size_override("normal_font_size", 13)
+	metric_tip_body.add_theme_color_override("default_color", Color(0.90, 0.90, 0.88))
+	vb.add_child(metric_tip_body)
+
+	# 小窗只负责「看」：整棵子树都不接收鼠标。否则指针一进小窗，指标行的悬停就断了，会闪。
+	_ignore_mouse(metric_tip)
+
+
+## 递归关掉一棵子树的鼠标响应
+func _ignore_mouse(n: Node) -> void:
+	if n is Control:
+		(n as Control).mouse_filter = Control.MOUSE_FILTER_IGNORE
+	for c in n.get_children():
+		_ignore_mouse(c)
+
+
+## 每帧判断鼠标是否落在某个指标行上：是 → 刷新内容并跟随指针；否 → 收起
+## mouse_override 仅供自动化测试顶替真实鼠标，正常游戏不传（默认取真实鼠标位置）
+func _update_metric_tip(mouse_override: Vector2 = Vector2.INF) -> void:
+	if metric_tip == null:
+		return
+	if not _tip_allowed():
+		metric_tip.visible = false
+		_tip_metric = ""
+		return
+	var mp: Vector2 = mouse_override if mouse_override != Vector2.INF else get_viewport().get_mouse_position()
+	var hovered := ""
+	for metric in metric_bars:
+		var row: Control = metric_bars[metric].get("row")
+		if row != null and row.is_visible_in_tree() and row.get_global_rect().has_point(mp):
+			hovered = str(metric)
+			break
+	if hovered == "":
+		metric_tip.visible = false
+		_tip_metric = ""
+		return
+	if hovered != _tip_metric:
+		_tip_metric = hovered
+		_tip_last_text = ""
+	_fill_metric_tip(hovered)
+	metric_tip.visible = true
+	_place_metric_tip(mp)
+
+
+## 什么时候允许显示：正常分配回合，且没有任何弹层盖在 HUD 上
+func _tip_allowed() -> bool:
+	if _current_phase != "allocate" or _paused or GameState.game_over:
+		return false
+	if right_panel == null or not right_panel.is_visible_in_tree():
+		return false
+	if popup_root != null and popup_root.visible:
+		return false
+	if crisis_root != null and crisis_root.visible:
+		return false
+	if warn_panel_root != null and warn_panel_root.visible:
+		return false
+	if deck_viewer != null and deck_viewer.visible:
+		return false
+	if menu_root != null and menu_root.visible:
+		return false
+	if pause_root != null and pause_root.visible:
+		return false
+	return true
+
+
+## 小窗正文。每次都按当前数值重算 → 出牌/结算后数字不会停在上一回合
+func _fill_metric_tip(metric: String) -> void:
+	var p: Dictionary = GameState.metric_hover_preview(metric)
+	metric_tip_title.text = "%s   %d" % [str(GameState.METRIC_NAMES.get(metric, metric)), int(p["cur"])]
+	metric_tip_title.add_theme_color_override("font_color", METRIC_COLORS.get(metric, Color(0.92, 0.92, 0.92)))
+
+	var cur: int = int(p["cur"])
+	var kind: String = str(p["kind"])
+	var nat_min: int = int(p["nat_min"])
+	var nat_max: int = int(p["nat_max"])
+	var end_min: int = int(p["end_min"])
+	var end_max: int = int(p["end_max"])
+
+	# ① 本回合自然演化会掉多少（水位是随机，给区间）
+	var dtxt := ""
+	var dcol := "#8e9aa4"
+	if kind == "random":
+		dtxt = "%+d ~ %+d" % [nat_min, nat_max]
+		dcol = "#ffcc66"
+	elif nat_min == 0 and nat_max == 0:
+		dtxt = "不变"
+	elif nat_min > 0:
+		dtxt = "%+d" % nat_min
+		dcol = "#7ee08a"
+	else:
+		dtxt = "%+d" % nat_min
+		dcol = "#ff8f7a"
+	var rows: Array = []
+	rows.append("[color=#cfd6dc]本回合自然演化[/color]   [color=%s][b]%s[/b][/color]" % [dcol, dtxt])
+	rows.append("[color=#8e9aa4]· %s[/color]" % str(p["why"]))
+
+	# ② 回合末大概落到哪
+	if kind == "random":
+		rows.append("[color=#cfd6dc]回合末约[/color]   [b]%d ~ %d[/b]" % [end_min, end_max])
+	else:
+		rows.append("[color=#cfd6dc]回合末约[/color]   [b]%d[/b] %s" % [end_min, _tip_delta_suffix(cur, end_min)])
+
+	# ③ 红线（致死线）与余量
+	var line: int = int(p["line"])
+	var margin: int = int(p["margin_nat"])
+	var mcol := "#7ee08a"
+	if margin < 0:
+		mcol = "#ff5a5a"
+	elif margin <= 3:
+		mcol = "#ffcc66"
+	rows.append("[color=#cfd6dc]致死线[/color]   [color=#ff8080][b]%d[/b][/color]    [color=#cfd6dc]余量[/color] [color=%s][b]%d[/b][/color]" % [line, mcol, margin])
+	var mult: float = float(p["penalty_mult"])
+	if mult > 1.0 and nat_min < 0:
+		rows.append("[color=#8e9aa4]（当前难度：负向变动 ×%.1f 已计入）[/color]" % mult)
+	if bool(p["break_nat"]):
+		rows.append("[color=#ff5a5a][b]⚠ 照这样到回合末就会跌破致死线[/b][/color]")
+	elif margin <= 3:
+		rows.append("[color=#ffcc66]⚠ 已经很贴红线了[/color]")
+
+	# ④ 预警中、下回合开局才爆发的危机正好打到这一项
+	if int(p["crisis_delta"]) != 0:
+		rows.append("[color=#ffb060]⚠ 预警中：%s[/color]" % str(p["crisis_name"]))
+		var tail := "会跌破致死线" if bool(p["break_total"]) else "仍在红线之上"
+		rows.append("[color=#8e9aa4]· 下回合开局 %+d → 约 %d，%s[/color]" % [int(p["crisis_delta"]), int(p["worst"]), tail])
+
+	var txt := ""
+	for r in rows:
+		txt += str(r) + "\n"
+	txt = txt.strip_edges()
+	if txt != _tip_last_text:
+		_tip_last_text = txt
+		metric_tip_body.text = txt
+
+
+func _tip_delta_suffix(from_v: int, to_v: int) -> String:
+	var d: int = to_v - from_v
+	if d == 0:
+		return "（不变）"
+	return "（%+d）" % d
+
+
+## 跟随指针：默认贴在指针左侧；指针右侧是右侧指标面板，所以再限一道「不许压住面板」
+func _place_metric_tip(mp: Vector2) -> void:
+	metric_tip.reset_size()
+	var s: Vector2 = metric_tip.size
+	var vp: Vector2 = get_viewport().get_visible_rect().size
+	var limit_x: float = vp.x - 8.0
+	if right_panel != null and right_panel.is_visible_in_tree():
+		limit_x = minf(limit_x, right_panel.get_global_rect().position.x - 8.0)
+	var pos := Vector2(mp.x - s.x - 16.0, mp.y - s.y * 0.5)
+	pos.x = clampf(pos.x, 8.0, maxf(8.0, limit_x - s.x))
+	# 窗口顶部 4~62px 是「当前事件横幅 + 危机预警日志条」，压住它们会看不清；
+	# 能整个让到下面就让（悬停上面几项时会触发），否则再退回居中。
+	if pos.y < 66.0 and 66.0 + s.y <= vp.y - 8.0:
+		pos.y = 66.0
+	pos.y = clampf(pos.y, 8.0, maxf(8.0, vp.y - s.y - 8.0))
+	metric_tip.position = pos
 
 
 func _update_hud() -> void:
