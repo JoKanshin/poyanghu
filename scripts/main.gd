@@ -51,9 +51,18 @@ var card_box: Control
 var selected_label: Label
 var action_hint: Label         # 右下角常驻提示「每回合最多 N 个行动」——N 随难度变化，见 _update_hud
 var current_hand: Array = []   # 当前手牌（card dict 数组）
-var card_infos: Array = []     # {panel, card_id, base_pos, theta, radial, selected}
+var card_infos: Array = []     # {panel, card_id, base_pos, theta, radial, selected, tier, cost_label}
 var _fan_layout_size: Vector2 = Vector2.ZERO  # 上次布局时的容器尺寸
 var play_deal_anim: bool = false              # 下次布局时播放发牌入场动画
+## 左下角「出牌档位」拉杆（局内 UI）：向左拨 = 基础投入（半价），中间 = 有效投入，向右拨 = 深度投入（双倍价）。
+## ⚠ 档位是**选牌那一刻**记进 card_infos 的（info["tier"]）——选中之后再拨拉杆，
+##   已选的牌不会改价、也不会改效果，玩家才能一回合内混着打不同档。
+var tier_lever: PanelContainer
+var lever_track: Control
+var lever_handle: Control
+var lever_slot_btns: Array = []
+var lever_state_label: Label
+var play_tier: String = "effective"           # 拉杆当前档位（新的一局复位成有效档）
 var popup_root: Control
 var dim: ColorRect
 var popup_center: CenterContainer
@@ -1779,6 +1788,9 @@ func _build_ui() -> void:
 	end_turn_btn.custom_minimum_size = Vector2(166, 48)
 	bottom_right.add_child(end_turn_btn)
 
+	# 左下角：出牌档位拉杆（向左拨 = 基础投入，中间 = 有效投入，向右拨 = 深度投入）
+	_build_tier_lever(canvas)
+
 	# --- 弹窗（顶层）---
 	popup_root = Control.new()
 	popup_root.set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -1988,9 +2000,21 @@ func _build_menu() -> void:
 	# 主菜单列少两个按钮，底部才不会溢出屏幕。
 	menu_achievements_btn = _make_button("成就", _show_achievements_panel, 18)
 	menu_achievements_btn.custom_minimum_size = Vector2(0, 44)
-	# 入口图标：像素小金牌。用 _pixel_icon_sized 而不是 _make_icon ——
-	# 后者返回的是 TextureRect 控件，而 Button.icon 要的是 Texture。
-	menu_achievements_btn.icon = _pixel_icon_sized(Achievements.MEDAL_GRID, ACH_GOLD, 22)
+	# 入口图标：像素小金牌。**不挂在 Button.icon 上** —— Button 会把图标宽度算进
+	# 「图标+文字」整体居中，结果「成就」两个字相对「技能树/设置/退出」右移约 14px
+	# （2026-09-28 截图实测）。改成在按钮内部左侧贴一个独立图标（不吃布局），
+	# 文字就与其它按钮完全同心。
+	var ach_icon := _make_icon(Achievements.MEDAL_GRID, ACH_GOLD, 22)
+	ach_icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	ach_icon.anchor_left = 0.0
+	ach_icon.anchor_top = 0.5
+	ach_icon.anchor_right = 0.0
+	ach_icon.anchor_bottom = 0.5
+	ach_icon.offset_left = 8
+	ach_icon.offset_right = 30
+	ach_icon.offset_top = -11
+	ach_icon.offset_bottom = 11
+	menu_achievements_btn.add_child(ach_icon)
 	menu_col.add_child(menu_achievements_btn)
 
 	menu_quit_btn = _make_button("退出", _on_menu_quit, 18)
@@ -3175,6 +3199,7 @@ func _on_pause_exit() -> void:
 	popup_root.visible = false
 	hand_panel.visible = false
 	bottom_right.visible = false
+	tier_lever.visible = false
 	_playing = false
 	_show_menu()
 
@@ -3271,6 +3296,7 @@ func _restore_hand(data: Dictionary) -> void:
 			_apply_gold_frame(info["panel"])
 	hand_panel.visible = true
 	bottom_right.visible = true
+	tier_lever.visible = true
 	_slide_side_panels(false)
 	_update_selected_label()
 
@@ -3984,7 +4010,7 @@ func _slide_main_ui(out: bool) -> void:
 			tw.kill()
 	_ui_slide_tweens.clear()
 	var vp := get_viewport().get_visible_rect().size
-	var ctrls: Array = [left_panel, right_panel, event_label, hand_panel, bottom_right, deck_root]
+	var ctrls: Array = [left_panel, right_panel, event_label, hand_panel, bottom_right, deck_root, tier_lever]
 	for c in ctrls:
 		if c == null:
 			continue
@@ -4046,7 +4072,8 @@ func _open_deck_viewer() -> void:
 	for card in _sorted_action_cards(_deck_sort_by_category):
 		# 卡牌内容放进 SubViewport 渲染成纹理，再挂到 TextureRect 上，
 		# 这样整张牌（面板 + 文字）是一个可被透视着色器整体倾斜的图元。
-		var panel := _make_card(card)
+		var made := _make_card(card, "effective")
+		var panel: PanelContainer = made["panel"]
 		var vp := SubViewport.new()
 		vp.size = Vector2(122, 165)
 		vp.transparent_bg = true
@@ -4493,7 +4520,8 @@ func _show_card_detail(view: Control, card: Dictionary) -> void:
 	if _detail_big_card != null and is_instance_valid(_detail_big_card):
 		_detail_big_card.queue_free()
 		_detail_big_card = null
-	var big := _make_card(card)
+	var made_big := _make_card(card)
+	var big: PanelContainer = made_big["panel"]
 	big.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	big.pivot_offset = Vector2(61, 82.5)
 	_detail_big_card = big
@@ -4531,7 +4559,10 @@ func _card_detail_text(card: Dictionary) -> String:
 			var d: int = e["delay"]
 			var suffix := "（%d 回合后）" % d if d > 0 else ""
 			parts.append("%s %+d%s" % [GameState.METRIC_NAMES[e["metric"]], int(e["delta"]), suffix])
-		body += "· %s：%s\n" % [GameState.TIER_NAMES[tier], "、".join(parts)]
+		# 顺带把每一档的价格印出来（图鉴是策划比价的地方，价格与效果要挨着看）
+		body += "· %s（%d 万）：%s%s\n" % [GameState.TIER_NAMES[tier],
+			GameState.tier_cost(str(card["id"]), tier), "、".join(parts),
+			"　← 当前档位" if tier == play_tier else ""]
 	if card.has("side_note") and not card["side_note"].is_empty():
 		for k in card["side_note"]:
 			body += "\n[color=#ffb060]※ %s[/color]" % card["side_note"][k]
@@ -4619,6 +4650,10 @@ func _on_start_pressed() -> void:
 	_playing = true
 	_hide_menu()
 	GameState.reset_game()
+	# 新的一局：拉杆回到默认的有效档（直接赋值 + 只刷拉杆外观 ——
+	# 此刻手牌还是上一局的残留对象，不能走 _set_play_tier 去刷牌面）
+	play_tier = "effective"
+	_refresh_lever_visuals(false)
 	_update_hud()
 	_update_3d()
 	_play_hud_enter()      # 开局登场：两块面板从屏幕外滑入
@@ -4961,6 +4996,7 @@ func _on_event(text: String) -> void:
 	_update_hud()
 	hand_panel.visible = false
 	bottom_right.visible = false
+	tier_lever.visible = false
 	_show_popup("第 %d 回合 · 事件" % GameState.turn, text, "开始分配资金", _enter_allocate)
 
 
@@ -4972,6 +5008,7 @@ func _enter_allocate() -> void:
 	_build_hand_panel()
 	hand_panel.visible = true
 	bottom_right.visible = true
+	tier_lever.visible = true
 
 
 func _build_hand_panel() -> void:
@@ -4983,13 +5020,17 @@ func _build_hand_panel() -> void:
 	# 比较器是全序（最后按 id 兜底），所以这里的结果与 _sort_hand_cards 的结果一致。
 	current_hand.sort_custom(func(a, b): return _card_dict_less(a, b, _deck_sort_by_category))
 	for card in current_hand:
-		var panel := _make_card(card)
+		var made := _make_card(card)
+		var panel: PanelContainer = made["panel"]
 		card_box.add_child(panel)
 		card_infos.append({
 			"panel": panel, "card_id": card["id"],
 			"base_pos": Vector2.ZERO, "theta": 0.0, "radial": Vector2.UP,
 			"selected": false, "shaking": false, "hovered": false,
+			"tier": "",                                  # "" = 跟随拉杆；非空 = 选中时锁定的档位
+			"cost_label": made["cost_label"],
 		})
+	_refresh_hand_display()      # 用当前档位把牌面的价格填上（加成只在悬停提示里）
 	_layout_fan.call_deferred()
 	_update_hud()
 
@@ -5088,13 +5129,214 @@ func _on_card_box_resized() -> void:
 		_layout_fan()
 
 
-func _make_card(card: Dictionary) -> PanelContainer:
+# ==================== 出牌档位拉杆 ====================
+# 拉杆的三个档位，顺序 = 从左到右
+const LEVER_TIERS := ["basic", "effective", "deep"]
+# 档位 → 状态文字。半价/全价/双倍价是 0.0.4 定价规则里**明确要给玩家**的那句话，
+# 属于规则而非隐性参数，可以上屏（难度负向倍率那类才不许写）。
+const LEVER_STATE_TEXT := {
+	"basic": "基础投入 · 半价",
+	"effective": "有效投入 · 全价",
+	"deep": "深度投入 · 双倍价",
+}
+## 左下角「出牌档位」拉杆。外观照拨杆做：一条木轨 + 三个刻度 + 一根左右平移的手柄（始终竖直）。
+## 交互：点最左那一格 = 基础投入，中间 = 有效投入，最右 = 深度投入；按住手柄左右拖也跟手。
+## ⚠ 只影响**之后选中的牌**。已选中的牌在选的那一刻就把档位记进了 card_infos[i]["tier"]，
+##   所以一回合内可以先拨到基础档选两张便宜牌、再拨到深度档选一张大牌。
+func _build_tier_lever(holder: Node) -> void:
+	tier_lever = PanelContainer.new()
+	tier_lever.anchor_left = 0.0
+	tier_lever.anchor_top = 1.0
+	tier_lever.anchor_right = 0.0
+	tier_lever.anchor_bottom = 1.0
+	tier_lever.offset_left = 14
+	tier_lever.offset_right = 226
+	tier_lever.offset_top = -136
+	tier_lever.offset_bottom = -14
+	_panel_style(tier_lever, Color(0.22, 0.16, 0.10, 0.96))
+	tier_lever.visible = false
+	holder.add_child(tier_lever)
+
+	var lvb := VBoxContainer.new()
+	lvb.add_theme_constant_override("separation", 2)
+	tier_lever.add_child(lvb)
+
+	var title := _make_label("出牌档位", 12, Color(0.86, 0.80, 0.68))
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	lvb.add_child(title)
+
+	lever_track = Control.new()
+	# 高度要同时容得下「手柄」（上半）+「基础/有效/深度」小字（下半），
+	# 否则手柄会压在档位文字上（实测截图里压到过「深度」）。
+	lever_track.custom_minimum_size = Vector2(0, 62)
+	lever_track.mouse_filter = Control.MOUSE_FILTER_STOP       # 整条轨都能点/拖
+	lever_track.resized.connect(_layout_lever_handle)
+	lever_track.gui_input.connect(_on_lever_input)
+	lvb.add_child(lever_track)
+
+	# 木轨：横贯整条轨，居中 6px 厚
+	var rail := ColorRect.new()
+	rail.color = Color(0.40, 0.29, 0.17, 1.0)
+	rail.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	rail.anchor_left = 0.0
+	rail.anchor_right = 1.0
+	rail.anchor_top = 0.5
+	rail.anchor_bottom = 0.5
+	rail.offset_top = -4
+	rail.offset_bottom = 4
+	lever_track.add_child(rail)
+
+	# 三个刻度（锚点固定在 1/6、3/6、5/6，自动跟随宽度）
+	for i in LEVER_TIERS.size():
+		var tick := ColorRect.new()
+		var fx: float = (2.0 * float(i) + 1.0) / 6.0
+		tick.anchor_left = fx
+		tick.anchor_right = fx
+		tick.anchor_top = 0.5
+		tick.anchor_bottom = 0.5
+		tick.offset_left = -1
+		tick.offset_right = 1
+		tick.offset_top = -7
+		tick.offset_bottom = 7
+		tick.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		tick.set_meta("lever_tier_index", i)
+		lever_track.add_child(tick)
+		lever_slot_btns.append(tick)     # 复用作「刻度节点」列表（高亮时改颜色）
+
+	# 三个小字标签（基础 / 有效 / 深度），各占 1/3 宽
+	for i in LEVER_TIERS.size():
+		var lab := _make_label(str(GameState.TIER_NAMES[LEVER_TIERS[i]]).substr(0, 2), 12,
+			Color(0.62, 0.58, 0.50))
+		lab.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		lab.anchor_left = float(i) / 3.0
+		lab.anchor_right = float(i + 1) / 3.0
+		lab.anchor_top = 1.0
+		lab.anchor_bottom = 1.0
+		lab.offset_top = -16
+		lab.offset_bottom = 0
+		lab.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		lab.set_meta("lever_tier_index", i)
+		lever_track.add_child(lab)
+		lever_slot_btns.append(lab)      # 同上：标签也一起高亮
+
+	# 手柄：杆 + 头，支点在底部中心，靠 rotation 做倾倒
+	lever_handle = Control.new()
+	lever_handle.custom_minimum_size = Vector2(28, 34)
+	lever_handle.size = Vector2(28, 34)
+	lever_handle.pivot_offset = Vector2(14, 32)
+	lever_handle.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	lever_track.add_child(lever_handle)
+
+	var stick := ColorRect.new()
+	stick.color = Color(0.74, 0.62, 0.44, 1.0)
+	stick.position = Vector2(10, 2)
+	stick.size = Vector2(8, 30)
+	stick.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	lever_handle.add_child(stick)
+
+	var knob := Panel.new()
+	var ksb := StyleBoxFlat.new()
+	ksb.bg_color = Color(0.56, 0.41, 0.23, 1.0)
+	ksb.border_color = Color(1.0, 0.86, 0.42, 1.0)
+	ksb.set_border_width_all(2)
+	ksb.corner_radius_top_left = 6
+	ksb.corner_radius_top_right = 6
+	ksb.corner_radius_bottom_left = 6
+	ksb.corner_radius_bottom_right = 6
+	knob.add_theme_stylebox_override("panel", ksb)
+	knob.position = Vector2(4, 0)
+	knob.size = Vector2(20, 17)
+	knob.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	lever_handle.add_child(knob)
+
+	lever_state_label = _make_label("", 12, Color(1.0, 0.92, 0.60))
+	lever_state_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	lvb.add_child(lever_state_label)
+
+	_refresh_lever_visuals(false)
+
+
+## 点在轨上的哪个位置 → 吸附到最近的一格（按住拖动时也走这里，所以能"拖着拨"）
+func _on_lever_input(event: InputEvent) -> void:
+	if _current_phase != "allocate" or _paused or GameState.game_over:
+		return
+	var pressed := false
+	var pos := Vector2.ZERO
+	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
+		pressed = event.pressed
+		pos = event.position
+	elif event is InputEventMouseMotion and (event.button_mask & MOUSE_BUTTON_MASK_LEFT) != 0:
+		pressed = true
+		pos = event.position
+	if not pressed:
+		return
+	var w: float = maxf(1.0, lever_track.size.x)
+	var idx := clampi(int(floor(pos.x / (w / 3.0))), 0, LEVER_TIERS.size() - 1)
+	_set_play_tier(LEVER_TIERS[idx], false)
+
+
+## 手柄按当前档位归位（尺寸变化时立刻归位，不播动画）
+func _layout_lever_handle() -> void:
+	if lever_handle == null or lever_track == null:
+		return
+	_place_lever_handle(false)
+
+
+func _place_lever_handle(animate: bool) -> void:
+	var idx: int = maxi(0, LEVER_TIERS.find(play_tier))
+	var w: float = maxf(1.0, lever_track.size.x)
+	var cx: float = w * (2.0 * float(idx) + 1.0) / 6.0
+	# 手柄底部落在「小字标签」上方，别压字（轨道下半 18px 留给标签）
+	var target_pos := Vector2(cx - lever_handle.size.x / 2.0, lever_track.size.y - 52.0)
+	# 手柄**始终竖直**，只左右平移。之前让它跟着倾斜 ±29°，实测在基础/深度档看着别扭：
+	# 圆头跟着转、还会离开它对应的刻度。竖直滑动读起来干净，位置同样一眼可辨。
+	lever_handle.rotation = 0.0
+	if not animate:
+		lever_handle.position = target_pos
+		return
+	var tw := lever_handle.create_tween()
+	tw.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+	tw.tween_property(lever_handle, "position", target_pos, 0.16)
+
+
+## 切档：更新手柄姿态、刻度/标签高亮、状态文字，并刷新手牌上还没被选中的牌
+func _set_play_tier(tier: String, animate: bool = true) -> void:
+	if not GameState.TIER_COST_MULT.has(tier):
+		return
+	var changed: bool = tier != play_tier
+	play_tier = tier
+	_refresh_lever_visuals(animate and changed)
+	if changed:
+		_refresh_hand_display()
+
+
+func _refresh_lever_visuals(animate: bool) -> void:
+	if tier_lever == null:
+		return
+	var idx: int = maxi(0, LEVER_TIERS.find(play_tier))
+	for node in lever_slot_btns:
+		var i: int = int(node.get_meta("lever_tier_index", 0))
+		var active: bool = i == idx
+		if node is ColorRect:
+			node.color = Color(1.0, 0.86, 0.42) if active else Color(0.55, 0.45, 0.33)
+		else:
+			node.add_theme_color_override("font_color",
+				Color(1.0, 0.94, 0.66) if active else Color(0.60, 0.55, 0.47))
+	if lever_state_label != null:
+		lever_state_label.text = str(LEVER_STATE_TEXT.get(play_tier, ""))
+	if lever_handle != null:
+		_place_lever_handle(animate)
+
+
+## 建一张卡（手牌 / 牌库网格 / 详情大图共用）。
+## 返回 {panel, cost_label}；牌面按 tier 先填一遍，
+## tier 传空则用当前拉杆档位。手牌那边之后还会由 _update_card_face() 反复重填。
+func _make_card(card: Dictionary, tier: String = "") -> Dictionary:
 	var panel := PanelContainer.new()
 	panel.custom_minimum_size = Vector2(122, 165)
 	panel.size = Vector2(122, 165)
 	panel.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
 	_panel_style(panel, Color(0.30, 0.22, 0.14, 0.98))
-	panel.tooltip_text = "%s\n\n%s" % [card["desc"], _effect_text(card)]
 	panel.gui_input.connect(_on_card_gui_input.bind(panel))
 
 	var vb := VBoxContainer.new()
@@ -5116,7 +5358,16 @@ func _make_card(card: Dictionary) -> PanelContainer:
 	cost_l.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	vb.add_child(cost_l)
 
-	return panel
+	# 卡面只保留 名称 / 类别 / 价格 三行 —— **加成一律不进卡面**，留在悬停提示里。
+	var use_tier: String = tier if tier != "" else play_tier
+	if not card["tiers"].has(use_tier):
+		use_tier = "effective"
+	var cost: int = GameState.tier_cost(str(card["id"]), use_tier)
+	cost_l.text = "%d 万" % cost
+	panel.tooltip_text = "%s\n\n%s（%d 万）：%s" % [card["desc"], GameState.TIER_NAMES[use_tier],
+		cost, _tier_effects_text(card, use_tier)]
+
+	return {"panel": panel, "cost_label": cost_l}
 
 
 ## 由卡 id 取中文名
@@ -5127,14 +5378,58 @@ func _card_name(card_id: String) -> String:
 	return card_id
 
 
-func _effect_text(card: Dictionary) -> String:
-	var t: Dictionary = card["tiers"]["effective"]
+## 由 id 取卡牌字典（刷新牌面要用）
+func _card_dict(card_id: String) -> Dictionary:
+	for c in GameState.ACTION_CARDS:
+		if str(c["id"]) == card_id:
+			return c
+	return {}
+
+
+## 某一档的效果文字：「水质 +3、沉水植被 +6（2 回合后）」
+func _tier_effects_text(card: Dictionary, tier: String) -> String:
+	var t: Dictionary = card["tiers"].get(tier, card["tiers"]["effective"])
 	var parts: Array = []
 	for e in t["effects"]:
-		var d: int = e["delay"]
+		var d: int = int(e["delay"])
 		var suffix := "（%d 回合后）" % d if d > 0 else ""
-		parts.append("%s %+d%s" % [GameState.METRIC_NAMES[e["metric"]], e["delta"], suffix])
-	return "效果：" + "、".join(parts)
+		parts.append("%s %+d%s" % [GameState.METRIC_NAMES[e["metric"]], int(e["delta"]), suffix])
+	return "、".join(parts)
+
+
+func _effect_text(card: Dictionary) -> String:
+	return "效果：" + _tier_effects_text(card, play_tier)
+
+
+## 这张牌锁定在哪一档：**已选中的牌用它自己被记下的档位**（选完再拨拉杆也不变），
+## 没选中的牌跟随拉杆当前档位。
+func _info_tier(info: Dictionary) -> String:
+	var t: String = str(info.get("tier", ""))
+	return t if t != "" else play_tier
+
+
+## 刷新一张牌的牌面：价格（含档位标签）+ 悬停提示里的「这一档」加成
+func _update_card_face(info: Dictionary) -> void:
+	var card := _card_dict(str(info["card_id"]))
+	if card.is_empty():
+		return
+	var tier: String = _info_tier(info)
+	var cost: int = GameState.tier_cost(str(info["card_id"]), tier)
+	var locked: bool = str(info.get("tier", "")) != ""
+	var tag: String = ("%s " % str(GameState.TIER_NAMES[tier]).substr(0, 2)) if locked else ""
+	var cost_l: Label = info["cost_label"]
+	cost_l.text = "%s%d 万" % [tag, cost]
+	# 锁定的牌用更亮的金色，一眼看出「这张是按哪个档锁住的」
+	cost_l.add_theme_color_override("font_color",
+		Color(1.0, 0.94, 0.66) if locked else Color(1, 0.9, 0.55))
+	info["panel"].tooltip_text = "%s\n\n%s（%d 万）：%s" % [
+		card["desc"], GameState.TIER_NAMES[tier], cost, _tier_effects_text(card, tier)]
+
+
+## 拉杆一动就把**还没选中**的牌全部刷新；已选中的保持锁定档位不动
+func _refresh_hand_display() -> void:
+	for info in card_infos:
+		_update_card_face(info)
 
 
 func _find_card_info(panel: PanelContainer) -> Dictionary:
@@ -5158,7 +5453,9 @@ func _toggle_card(panel: PanelContainer) -> void:
 		return
 	if info["selected"]:
 		info["selected"] = false
+		info["tier"] = ""              # 取消选中 → 这张牌重新跟随拉杆
 		_remove_gold_frame(panel)
+		_update_card_face(info)
 	else:
 		# 行动位上限（随难度变化：简单档 4，普通/困难 3 —— 见 MAX_ACTIONS_BY_DIFFICULTY）
 		var slots := GameState.action_slots()
@@ -5166,13 +5463,16 @@ func _toggle_card(panel: PanelContainer) -> void:
 			_reject_card(panel, "行动位已满（本难度每回合最多 %d 个）" % slots)
 			return
 		# 资金检查：已选卡的总花费 + 这张，不能超过可用资金
-		var cost := GameState.tier_cost(info["card_id"], "effective")
+		# ★ 用拉杆当前档位算价 —— 基础档便宜、深度档贵，选之前先把拉杆拨对
+		var cost := GameState.tier_cost(info["card_id"], play_tier)
 		if _committed_funds() + cost > GameState.funds:
 			_reject_card(panel, "资金不足（还需 %d 万，可用 %d 万）" % [cost, GameState.funds - _committed_funds()])
 			return
 		info["selected"] = true
+		info["tier"] = play_tier         # ★ 选中的那一刻把档位锁定在这张牌上
 		_apply_gold_frame(panel)
-	_update_selected_label()
+		_update_card_face(info)
+		_update_selected_label()
 
 
 ## 已选卡牌的总花费（万）
@@ -5180,7 +5480,8 @@ func _committed_funds() -> int:
 	var total := 0
 	for info in card_infos:
 		if info["selected"]:
-			total += GameState.tier_cost(info["card_id"], "effective")
+			# 每张牌按它自己锁定的档位算 —— 一回合里混着打不同档也能算对预算
+			total += GameState.tier_cost(info["card_id"], _info_tier(info))
 	return total
 
 
@@ -5393,7 +5694,7 @@ func _finish_turn() -> void:
 	for i in card_infos.size():
 		var info: Dictionary = card_infos[i]
 		if info["selected"]:
-			if GameState.execute_action(info["card_id"], "effective"):
+			if GameState.execute_action(info["card_id"], _info_tier(info)):
 				played.append(i)
 			else:
 				failed.append(info["card_id"])
@@ -5483,6 +5784,7 @@ func _finish_turn() -> void:
 
 	hand_panel.visible = false
 	bottom_right.visible = false
+	tier_lever.visible = false
 	_slide_side_panels(true)  # 结算后侧边栏收回屏幕外，让出沙盘
 	_current_phase = "popup_settlement"
 	_show_popup("结算反馈", "\n".join(lines), "继续", _on_resolve_continue)
