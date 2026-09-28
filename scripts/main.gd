@@ -18,6 +18,11 @@ const CATEGORY_COLORS := {
 const SEASONS := ["春", "夏", "秋", "冬"]
 const CATEGORY_ORDER := ["ecology", "social", "manage"]
 
+## 天赋树系统暂时关闭（2026-09-28 需求）：主菜单不再有「技能树」按钮，
+## 天赋改为**每局开局随机附赠 0~3 条词条**（见 talents.gd 的 roll_for_run）。
+## 恢复天赋树：把这里改回 true，并把 talents.gd 的 get_bonus 改回读 unlocked。
+const TALENT_TREE_ENABLED := false
+
 # 成就图标配色：解锁 = 金牌，未解锁 = 灰牌（同一个网格，只换颜色）
 const ACH_GOLD := Color(0.98, 0.80, 0.30)
 const ACH_LOCKED := Color(0.42, 0.42, 0.47)
@@ -1988,9 +1993,11 @@ func _build_menu() -> void:
 	menu_col.add_child(menu_back_btn)
 
 	# 一级：其余选项（设置与制作人员暂未实现效果）
-	menu_talent_btn = _make_button("技能树", _show_talent_panel, 18)
-	menu_talent_btn.custom_minimum_size = Vector2(0, 44)
-	menu_col.add_child(menu_talent_btn)
+	# 「技能树」按钮暂时删掉（天赋树系统暂关）。恢复时把 TALENT_TREE_ENABLED 改 true。
+	if TALENT_TREE_ENABLED:
+		menu_talent_btn = _make_button("技能树", _show_talent_panel, 18)
+		menu_talent_btn.custom_minimum_size = Vector2(0, 44)
+		menu_col.add_child(menu_talent_btn)
 
 	menu_settings_btn = _make_button("设置", _show_settings_panel, 18)
 	menu_settings_btn.custom_minimum_size = Vector2(0, 44)
@@ -2775,7 +2782,9 @@ func _menu_state(state: int) -> void:
 	var main_level := state == 0
 	menu_start_btn.visible = main_level          # 新游戏
 	menu_continue_btn.visible = main_level and has_save()  # 继续游戏（有存档才显示）
-	menu_talent_btn.visible = main_level
+	# 天赋树暂关时这个按钮根本没建（见 TALENT_TREE_ENABLED），必须判空
+	if menu_talent_btn != null:
+		menu_talent_btn.visible = main_level
 	menu_settings_btn.visible = main_level
 	# 更新日志 / 制作人员已移入设置面板，显隐由面板自己管，不在这里控制
 	menu_achievements_btn.visible = main_level
@@ -4658,6 +4667,36 @@ func _on_start_pressed() -> void:
 	_update_3d()
 	_play_hud_enter()      # 开局登场：两块面板从屏幕外滑入
 
+	# 本局天赋：第一回合开始前显示一次（0 条也说明一句，顺带公布本局种子）
+	_show_run_talents_popup()
+
+
+## 开局天赋弹窗：本局随机附赠的词条（0~3 条）。
+## 这是新一局的第一屏 —— 玩家点掉后才轮到「第 1 回合 · 事件」弹窗（若有）与分配资金。
+func _show_run_talents_popup() -> void:
+	var ids: Array = Talents.granted
+	var body := "[color=#8a8a8a]本局种子：%d[/color]\n\n" % GameState.run_seed
+	if ids.is_empty():
+		body += "本局没有随机到额外天赋。\n"
+	else:
+		body += "本局天赋（%d 项）\n" % ids.size()
+		for id in ids:
+			var t: Dictionary = Talents.entry(str(id))
+			if t.is_empty():
+				continue
+			body += "\n[b]%s[/b]　%s" % [t["name"], t["desc"]]
+	_show_popup("本局天赋", body, "开始", _on_run_talents_done)
+
+
+## 天赋弹窗点掉之后：把可能被它顶掉的「第 1 回合 · 事件」弹窗按原顺序补回来。
+## 事件弹窗是在 GameState.reset_game() 里同步弹出的，天赋弹窗必须压在它前面，
+## 所以只能这样接力（不能反过来改弹窗顺序：天赋是掷完种子才知道的）。
+func _on_run_talents_done() -> void:
+	if _current_phase == "popup_event" and _current_event != "":
+		_show_popup("第 %d 回合 · 事件" % GameState.turn, _current_event, "开始分配资金", _enter_allocate)
+	else:
+		_enter_allocate()
+
 
 ## 开局登场：左侧「回合 / 资金」面板从屏幕左外滑入，右侧「生态指标」面板从右外滑入。
 ## 方向与 _slide_side_panels 保持一致，落点就是两块面板的常驻位置。
@@ -6300,7 +6339,9 @@ func _show_report(r: Dictionary) -> void:
 		body += "  · %s\n" % n
 	body += "\n[b]知识卡收集[/b]：%d / %d　[b]科研点[/b]：%d\n" % [r["knowledge_count"], r["total_knowledge"], r["research_points"]]
 	body += "[color=#8a8a8a]本局种子：%d（同种子可复现，便于对照实验）[/color]\n" % r.get("seed", 0)
-	if earned > 0:
+	# 天赋树暂关期间不在报告里显示天赋点（有奖励没处花只会让人困惑）；
+	# 点数仍在后台累积（见上面的 Talents.award），恢复天赋树后继续可用。
+	if earned > 0 and TALENT_TREE_ENABLED:
 		body += "[color=#ffd060]获得天赋点：+%d[/color]\n" % earned
 	body += "\n[b]反思[/b]\n%s" % r["reflection"]
 	_show_popup(title, body, "返回主菜单", _restart)

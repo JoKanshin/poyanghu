@@ -1084,6 +1084,8 @@ func serialize() -> Dictionary:
 		"log_messages": log_messages.duplicate(),
 		"game_over": game_over, "total_spent": total_spent,
 		"run_seed": run_seed, "settlement": settlement,
+		# 本局天赋词条：继续游戏要原样带回来，否则中途读档会丢加成
+		"talents": Talents.granted.duplicate(),
 		"difficulty": difficulty, "floating_islands": floating_islands,
 		"pending_crisis": pending_crisis.duplicate(true),
 		"forecast_crisis": forecast_crisis.duplicate(true),
@@ -1115,6 +1117,7 @@ func load_state(d: Dictionary) -> void:
 	game_over = bool(d.get("game_over", false))
 	total_spent = int(d.get("total_spent", 0))
 	run_seed = int(d.get("run_seed", 0))
+	Talents.set_granted(d.get("talents", []))
 	settlement = int(d.get("settlement", 70))
 	difficulty = int(d.get("difficulty", 1 if d.get("hard_mode", false) else 0))
 	floating_islands = int(d.get("floating_islands", 0))
@@ -1172,6 +1175,9 @@ func reset_game() -> void:
 		randomize()
 		run_seed = randi()
 	seed(run_seed)
+	# 本局天赋：随种子随机附赠 0~3 条词条。必须在 _roll_starting_metrics() 之前 ——
+	# 开局指标要吃「开局 +N」这类词条。见 版本更新0.0.8.md。
+	Talents.roll_for_run(run_seed, difficulty)
 	metrics = _roll_starting_metrics()
 	_guard_starting_metrics()
 	_sync_species()
@@ -1189,16 +1195,6 @@ func _roll_starting_metrics() -> Dictionary:
 		"birds": 50,
 		"community": 55,
 	}
-	# 天赋加成：定点指标加成 + 全指标加成
-	base["water_level"] += int(Talents.get_bonus("start_water"))
-	base["vegetation"] += int(Talents.get_bonus("start_veg"))
-	base["fish"] += int(Talents.get_bonus("start_fish"))
-	base["birds"] += int(Talents.get_bonus("start_birds"))
-	base["water_quality"] += int(Talents.get_bonus("start_quality"))
-	base["community"] += int(Talents.get_bonus("start_community"))
-	var all_bonus := int(Talents.get_bonus("start_all"))
-	for k in base:
-		base[k] += all_bonus
 	# 开局数值各难度统一（难度差异体现在判负阈值上），统一抬高下限避免开局过低
 	var floor: int = START_FLOOR[difficulty]
 	var boost: int = START_BOOST[difficulty]
@@ -1210,6 +1206,21 @@ func _roll_starting_metrics() -> Dictionary:
 	var weak_keys: Array = out.keys()
 	var weak: String = weak_keys[_randi_range(0, weak_keys.size() - 1)]
 	out[weak] = clampi(out[weak] - 12, floor, 88)
+	# 本局天赋加成：定点指标加成 + 全指标加成。
+	# ⚠ 放在**最后**加（下限夹取和软肋 -12 都做完之后）：开局值贴着 48 下限的那几项
+	#   会把「开局 +N」吞掉 —— 0.0.8 实测：生态专家 +2 在 6 项里有 4 项被下限吞成 0，
+	#   还有 1 项被软肋压到下限、只显示出 +1（玩家拿到词条却量不出效果）。
+	#   加完再夹一次 [0,88]。
+	out["water_level"] = clampi(int(out["water_level"]) + int(Talents.get_bonus("start_water")), 0, 88)
+	out["vegetation"] = clampi(int(out["vegetation"]) + int(Talents.get_bonus("start_veg")), 0, 88)
+	out["fish"] = clampi(int(out["fish"]) + int(Talents.get_bonus("start_fish")), 0, 88)
+	out["birds"] = clampi(int(out["birds"]) + int(Talents.get_bonus("start_birds")), 0, 88)
+	out["water_quality"] = clampi(int(out["water_quality"]) + int(Talents.get_bonus("start_quality")), 0, 88)
+	out["community"] = clampi(int(out["community"]) + int(Talents.get_bonus("start_community")), 0, 88)
+	var all_bonus := int(Talents.get_bonus("start_all"))
+	if all_bonus != 0:
+		for k in out:
+			out[k] = clampi(int(out[k]) + all_bonus, 0, 88)
 	return out
 
 
@@ -1620,8 +1631,6 @@ func _crisis_counter_set() -> Dictionary:
 ## 能否执行：资金够 + 行动位够
 func can_execute(card_id: String, tier: String) -> bool:
 	var max_actions := action_slots()
-	if turn == 1:
-		max_actions += int(Talents.get_bonus("first_turn_actions"))
 	if used_action_ids.size() >= max_actions:
 		return false
 	return funds >= tier_cost(card_id, tier)
@@ -1953,7 +1962,13 @@ func end_turn() -> void:
 
 ## 当前难度的每回合行动位（= 一回合最多能打几张牌）
 func action_slots() -> int:
-	return int(MAX_ACTIONS_BY_DIFFICULTY.get(difficulty, 3))
+	# ⚠ 首回合要算上「运筹帷幄」类词条的 +N。所有地方（能否出牌判定、HUD 提示、
+	#   「已选 x/y」）都必须走这个入口 —— 0.0.8 真窗口实测：以前只有 can_execute
+	#   自己加这一项，结果首回合 HUD 写「每回合最多 3 个行动」、实际能打 4 张。
+	var n := int(MAX_ACTIONS_BY_DIFFICULTY.get(difficulty, 3))
+	if turn == 1:
+		n += int(Talents.get_bonus("first_turn_actions"))
+	return n
 
 
 ## 当前难度的判负阈值：指标低于此值即判负
