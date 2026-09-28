@@ -34,8 +34,12 @@ func _initialize() -> void:
 		DIFFICULTY = int(uargs[0])
 	if uargs.size() >= 2 and str(uargs[1]).is_valid_int():
 		N = int(uargs[1])
-	if uargs.size() >= 3 and str(uargs[2]) != "":
-		TIERS_ALLOWED = str(uargs[2]).split(",")
+	if uargs.size() >= 3:
+		# 第三参数 = 允许的档位，"all" / 空 / 缺省都表示三档全开。
+		# ⚠ 曾经把字面量 "all" 直接 split 成档位名 → tier_cost(id,"all") 全线报错、机器人一张牌都打不出。
+		var ta := str(uargs[2]).strip_edges()
+		if ta != "" and ta != "all":
+			TIERS_ALLOWED = ta.split(",")
 	var t0 := Time.get_ticks_msec()
 	GS = root.get_node_or_null("GameState")
 	Tal = root.get_node_or_null("Talents")
