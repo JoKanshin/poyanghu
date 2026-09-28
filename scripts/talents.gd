@@ -63,6 +63,15 @@ func _load() -> void:
 				unlocked.append(id)
 
 
+## 清空天赋：点数与已解锁全部归零，并立即落盘。
+## 供设置里的「清空当前存档」调用 —— 直接写空状态而不是删文件，
+## 效果等价，且不会留下「文件不存在」这个需要额外处理的分支。
+func reset_all() -> void:
+	points = 0
+	unlocked = []
+	save()
+
+
 func save() -> void:
 	# 确保存档目录存在（Godot 通常会自建，这里兜底防数据丢失）
 	DirAccess.make_dir_recursive_absolute(OS.get_user_data_dir())

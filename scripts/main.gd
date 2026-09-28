@@ -17,6 +17,10 @@ const CATEGORY_COLORS := {
 }
 const SEASONS := ["春", "夏", "秋", "冬"]
 const CATEGORY_ORDER := ["ecology", "social", "manage"]
+
+# 成就图标配色：解锁 = 金牌，未解锁 = 灰牌（同一个网格，只换颜色）
+const ACH_GOLD := Color(0.98, 0.80, 0.30)
+const ACH_LOCKED := Color(0.42, 0.42, 0.47)
 # 苦力怕彩蛋（左上角草地，lake_view 局部坐标）
 const CREEPER_X := -45.0
 const CREEPER_Z := 4.0
@@ -45,6 +49,7 @@ var end_turn_btn: Button
 var bottom_right: VBoxContainer
 var card_box: Control
 var selected_label: Label
+var action_hint: Label         # 右下角常驻提示「每回合最多 N 个行动」——N 随难度变化，见 _update_hud
 var current_hand: Array = []   # 当前手牌（card dict 数组）
 var card_infos: Array = []     # {panel, card_id, base_pos, theta, radial, selected}
 var _fan_layout_size: Vector2 = Vector2.ZERO  # 上次布局时的容器尺寸
@@ -72,7 +77,9 @@ var menu_talent_btn: Button
 var menu_settings_btn: Button
 var menu_credits_btn: Button
 var menu_changelog_btn: Button
+var menu_achievements_btn: Button
 var menu_quit_btn: Button
+var _info_back_to_settings: bool = false   # 更新日志/制作人员是从设置里点进去的 → 返回时回设置而不是主菜单
 var menu_seed_label: Label
 var menu_mode_label: Label
 var seed_input: LineEdit
@@ -81,21 +88,44 @@ var menu_talent_panel: PanelContainer
 var menu_settings_panel: PanelContainer
 var menu_credits_panel: PanelContainer
 var menu_changelog_panel: PanelContainer
+var menu_achievements_panel: PanelContainer
+var menu_clear_save_btn: Button
+var menu_clear_confirm_panel: PanelContainer
+var clear_status_label: Label
 
 # 音频 / BGM
 var bgm_player: AudioStreamPlayer
 var bgm_index: int = 1
 var bgm_volume: float = 0.8
+## 结算动画速度倍率（1.0 = 正常）。玩家可在设置里调 —— 手感因人而异，
+## 与其每次改代码重导，不如给个滑块。与音量一起存在 user://settings.json。
+var score_speed: float = 1.0
+const SCORE_SPEED_MIN := 0.5
+const SCORE_SPEED_MAX := 1.5
 var audio_volume_slider: HSlider
 var audio_volume_label: Label
+var score_speed_slider: HSlider
+var score_speed_label: Label
 var bgm_switch_btn: Button
 var pause_settings_panel: PanelContainer
 var pause_volume_slider: HSlider
 var pause_volume_label: Label
 var pause_bgm_btn: Button
+var pause_score_speed_slider: HSlider
+var pause_score_speed_label: Label
 const BGM_PATHS := ["res://assets/audio/poyanghu.mp3", "res://assets/audio/poyanghunaiyu.mp3"]
 const BGM_NAMES := ["鄱阳湖", "评委审核版"]
 const AUDIO_SETTINGS_PATH := "user://settings.json"
+
+# 音效（程序化合成，生成器见 tools/make_ding.py —— 要改音色请改脚本重跑，别手改 wav）
+const SFX_PATHS := {
+	"ding": "res://assets/audio/ding.wav",   # 逐张弹分 / 指标结算的「叮」
+	"land": "res://assets/audio/land.wav",   # 甩牌落桌的闷响
+}
+const SFX_POOL_SIZE := 6        # 复音池：支撑每 0.045s 一个叮而互不打断
+var _sfx_players: Array = []
+var _sfx_streams: Dictionary = {}
+var _sfx_cursor: int = 0        # 轮转下标（比"找空闲播放器"简单，且一定不会切掉正在响的那个）
 var menu_camera_far: bool = false      # 开始页期间镜头拉远看全景
 var talent_points_label: Label
 var talent_list: VBoxContainer
@@ -145,12 +175,67 @@ var _detail_big_card: Control = null   # 当前详情大牌（用于重开时清
 var _ui_slide_tweens: Array = []       # 牌库开合时收放主界面的 tween
 var _ui_slide_origin: Dictionary = {}  # Control -> [l, t, r, b] 初始 offset
 var deck_sort_btn: Button             # 排序切换按钮（互旋箭头）
+var hand_sort_btn: Button             # 出牌阶段的同一个排序按钮（与牌库共用模式与冷却）
 var _deck_sort_by_category: bool = true  # true=按类别，false=按费用；默认按类别
+## 手牌「抬起」的高度（选中/悬停时沿径向外移的距离）。
+## _update_card_hover 每帧用它，手牌排序的飞行落点也要用同一个值 ——
+## 写死两处早晚会漂移，抬起高度一变排序落点就不对了。
+const CARD_RAISE := 26.0
 var _sort_animating: bool = false
-var _sort_cooldown_ms: int = -6000   # 上次排序的时间戳，锁死两次切换最低间隔
-const SORT_COOLDOWN_MS := 5000
+var _sort_cooldown_ms: int = -6000   # 上次排序的时间戳；初始值只要足够久远即可（开局就能排序）
+const SORT_COOLDOWN_MS := 3000       # 两次切换排序方式的最低间隔（毫秒），冷却期间按钮禁用并显示倒计时
 var _deck_viewports: Array = []       # 牌库卡牌的 SubViewport（重建时清理）
 var _deck_gyro_view: Control = null   # 当前鼠标悬停的牌库卡牌（只对它做陀螺仪）
+
+# ==================== 算分动画（小丑牌风）====================
+# 五类来源的**展示**顺序。⚠ 与 end_turn() 的真实执行顺序**不同**：
+#   真实执行 = card → pending/leftover(advance_effects) → synergy(resolve_synergies) → routine(natural_evolution)
+# （pending 与 leftover 是同一处代码分出来的两支，见 game_state.gd 的 advance_effects：
+#   pending  = 本回合打出的延迟效果、当回合就到期（delay=1 即如此）
+#   leftover = 前几轮排队、现在才到期。
+#   拆两支是因为不拆的话，第 1 回合就会冒出「前几轮遗留」这种不存在的说法。）
+# 这里把 synergy 提到 leftover 之前（pending 留在原位），是为了让「协同」紧跟
+# 「本轮牌加成」出现，形成本回合组合技的即时反馈（玩家心智里协同属于"这一手牌"，不属于"旧账"）。
+# 代价：clampi(0,100) 的截断是路径相关的，按这个顺序累计时，若某指标被钉在
+#   100 附近且来源正负混合，数值条中间段可能偏几个点。
+# 兜底：_play_score_animation 把最后一段强制对齐真值 → 「终点」恒正确；
+#   而四段数字之和恒等于真实变化量（applied 已含截断修正）→ 「加总」恒正确。
+# 想让动画处处精确，把本数组换成 ["card", "leftover", "synergy", "routine"] 即可，
+# 其余代码一行都不用动（代价是协同节拍从中间挪到倒数第二拍）。
+const SCORE_PHASE_ORDER := ["card", "pending", "synergy", "leftover", "routine", "crisis"]
+const SCORE_PHASE_NAMES := {
+	"card": "本轮牌加成",
+	"pending": "本回合延迟生效",
+	"synergy": "卡牌协同",
+	"leftover": "前几轮遗留",
+	"routine": "常规演化",
+	"crisis": "危机爆发",
+}
+# ★ 指标结算节拍（③+④：图标放大抖动 → 四类来源依次弹 → 合计 → 数值条）的速度倍率。
+#   1.0 = 原速，0.8 = 慢到 80%（时长 ×1.25）。只影响指标结算这一段；
+#   甩牌与逐张弹分两拍不受影响（要一并调就改 T_TOTAL）。
+#   实现上不是只缩放总预算，而是把这一段里的**所有**时长（图标各段、
+#   小数字间隔、数值条推进、数值文本弹跳、小票滑入）都乘以 1/此值 ——
+#   否则图标那种固定的小节拍会保持原速，看起来像「顿一下」。
+const METRIC_SPEED := 0.80
+var score_layer: CanvasLayer = null        # 算分动画层（独立 CanvasLayer，层号 7）
+var score_stage: Control = null            # 舞台：全屏、不接收鼠标
+var score_floats: Control = null           # 卡牌上方 +N 飘字容器
+var score_receipt: PanelContainer = null   # 算分小票：滑到当前结算指标行的左侧
+var score_receipt_box: VBoxContainer = null
+var _score_anim_id: int = 0                # 动画代次：每个 await 回来校验，被作废就立刻退出
+var _score_animating: bool = false         # 动画中：锁输入 + 冻结指标 HUD/3D + 抑制悬停与小窗
+
+# ==================== 成就解锁提示 ====================
+var ach_layer: CanvasLayer = null          # 独立层，盖在 HUD 与算分动画之上
+var ach_popup: PanelContainer = null
+var ach_popup_icon: TextureRect = null
+var ach_popup_name: Label = null
+var ach_popup_desc: Label = null
+var _ach_queue: Array = []                 # 待播成就 id（一回合同时解锁多个时排队）
+var _ach_showing: bool = false
+var ach_count_label: Label = null          # 成就页顶部「已解锁 X / Y」
+var ach_rows_col: VBoxContainer = null     # 成就页列表容器（每次打开重建）
 
 # 3D 表现节点
 var lake_mesh: MeshInstance3D
@@ -187,6 +272,7 @@ const INTRO_SLIDE_SEC := 5.0
 func _ready() -> void:
 	_load_audio_settings()
 	_setup_bgm()
+	_setup_sfx()
 	_setup_pixel_font()
 	_setup_camera()
 	_build_3d()
@@ -199,6 +285,7 @@ func _ready() -> void:
 	GameState.crisis_warned.connect(_on_crisis_warn)
 	GameState.crisis_hit.connect(_on_crisis_hit)
 	GameState.game_ended.connect(_on_game_end)
+	Achievements.achievement_unlocked.connect(_on_achievement_unlocked)
 	# 窗口尺寸/全屏变化时自适应相机，避免全屏后沙盘被裁或留黑边
 	get_viewport().size_changed.connect(_fit_camera_to_window)
 	_fit_camera_to_window()
@@ -984,7 +1071,10 @@ func _process(delta: float) -> void:
 	_process_deck_gyro(delta)
 	_update_sort_cooldown()
 	# 容器尺寸变化时重排扇形（居中）
-	if card_box != null and card_box.size.x > 10.0:
+	# ⚠ 算分动画期间必须跳过：_layout_fan() 会把牌瞬间抓回扇形原位**并覆写 base_pos**，
+	#   飞出去排开的牌会被一把拽回来。（正常情况下这个尺寸判据是稳定的，
+	#   但动画期间任何一次布局抖动都会毁掉整段演出。）
+	if not _score_animating and card_box != null and card_box.size.x > 10.0:
 		if _fan_layout_size.distance_to(card_box.size) > 1.0:
 			_layout_fan()
 
@@ -1469,6 +1559,9 @@ func _plant_zone_point(kind: String, rng: RandomNumberGenerator) -> Vector3:
 
 
 func _update_3d() -> void:
+	# 算分动画期间冻结沙盘：3D 的变化留到动画收尾统一放出来，观感更聚焦
+	if _score_animating:
+		return
 	var m: Dictionary = GameState.metrics
 	var wscale := lerpf(0.55, 1.35, float(m["water_level"]) / 100.0)
 	lake_mesh.scale = Vector3(wscale, 1.0, wscale)
@@ -1579,6 +1672,20 @@ func _build_ui() -> void:
 	_panel_style(right_panel, Color(0.20, 0.14, 0.09, 0.60))
 	canvas.add_child(right_panel)
 
+	# ★ 在这里就把两块侧栏的「原位」登记好。
+	#   _slide_main_ui() 复位靠的是 _ui_slide_origin，而它是**惰性捕获**的
+	#   （if not _ui_slide_origin.has(c) 才记）。若玩家恰好在侧栏滑入/滑出的
+	#   0.35s tween 途中第一次打开牌库，捕获到的就是半路的中间值 ——
+	#   而且**一旦记错就永久错**，之后每次开合牌库都会把面板复位到那个错位置。
+	#   滑动行程有 200+ px，点到 tween 中段能错出上百像素。
+	#   搭建时的这两个 offset 就是设计好的常驻位置，是唯一可靠的「原位」来源。
+	#   （只登记这两块：_slide_side_panels() 也在改它们的 offset，是冲突的来源；
+	#     其余控件没有第二个函数去动，惰性捕获不会出问题。）
+	_ui_slide_origin[left_panel] = [left_panel.offset_left, left_panel.offset_top,
+			left_panel.offset_right, left_panel.offset_bottom]
+	_ui_slide_origin[right_panel] = [right_panel.offset_left, right_panel.offset_top,
+			right_panel.offset_right, right_panel.offset_bottom]
+
 	var rv := VBoxContainer.new()
 	rv.add_theme_constant_override("separation", 10)
 	right_panel.add_child(rv)
@@ -1639,7 +1746,9 @@ func _build_ui() -> void:
 	bottom_right.anchor_bottom = 1.0
 	bottom_right.offset_left = -180
 	bottom_right.offset_right = -14
-	bottom_right.offset_top = -104
+	# 高度要放得下 4 项（已选 / 行动提示 / 排序按钮 / 结束回合）。
+	# ⚠ 容器装不下时 Godot 会保 offset_top 而向下长，底部按钮会被顶出屏幕。
+	bottom_right.offset_top = -160
 	bottom_right.offset_bottom = -14
 	bottom_right.add_theme_constant_override("separation", 4)
 	bottom_right.visible = false
@@ -1651,11 +1760,20 @@ func _build_ui() -> void:
 	selected_label.add_theme_constant_override("outline_size", 4)
 	bottom_right.add_child(selected_label)
 
-	var action_hint := _make_label("每回合最多 3 个行动", 12, Color(0.92, 0.94, 0.96))
+	# 文案不写死：_build_ui 在 _ready 里就跑完了，那时玩家还没选难度。
+	# 实际文字由 _update_hud() 按 GameState.action_slots() 填。
+	action_hint = _make_label("", 12, Color(0.92, 0.94, 0.96))
 	action_hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	action_hint.add_theme_color_override("font_outline_color", Color(0.05, 0.08, 0.06, 0.8))
 	action_hint.add_theme_constant_override("outline_size", 4)
 	bottom_right.add_child(action_hint)
+
+	# 出牌阶段的排序按钮：与牌库那个共用 _deck_sort_by_category 和同一套冷却，
+	# 所以两边永远同步 —— 在牌库切过再回来，手牌也是同一套规则，
+	# 新一局发牌同样按它排（见 _build_hand_panel）。
+	hand_sort_btn = _make_button("按类别排序", _toggle_hand_sort, 14)
+	hand_sort_btn.custom_minimum_size = Vector2(166, 40)
+	bottom_right.add_child(hand_sort_btn)
 
 	end_turn_btn = _make_button("结束本回合 ▶", _finish_turn, 20)
 	end_turn_btn.custom_minimum_size = Vector2(166, 48)
@@ -1708,6 +1826,43 @@ func _build_ui() -> void:
 	_build_deck_ui(canvas)
 	_build_deck_viewer()
 	_build_metric_tip(canvas)   # 最后加：小窗要画在 HUD 所有面板之上
+	_build_score_layer()        # 算分动画层：独立 CanvasLayer，盖在 HUD 之上
+	_build_achievement_popup()  # 成就解锁提示层：盖在最上面
+
+
+## 算分动画层。独立 CanvasLayer(layer=7)：盖在 UICanvas(0) 之上，
+## 又低于牌库查看器(8) / 主菜单(10) / 暂停(20) / 开场(30)，遮挡关系正确。
+## 该层 transform 是单位阵、与主 canvas 同坐标系，所以可以直接用
+## metric_bars[...]["row"].get_global_rect() 定位小票，不必做坐标换算。
+func _build_score_layer() -> void:
+	score_layer = CanvasLayer.new()
+	score_layer.name = "ScoreLayer"
+	score_layer.layer = 7
+	score_layer.visible = false
+	add_child(score_layer)
+
+	score_stage = Control.new()
+	score_stage.name = "Stage"
+	score_stage.set_anchors_preset(Control.PRESET_FULL_RECT)
+	score_stage.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	score_layer.add_child(score_stage)
+
+	score_floats = Control.new()
+	score_floats.name = "Floats"
+	score_floats.set_anchors_preset(Control.PRESET_FULL_RECT)
+	score_floats.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	score_layer.add_child(score_floats)
+
+	# 算分小票：整场动画复用同一个节点，逐项滑到当前指标行的左侧
+	score_receipt = PanelContainer.new()
+	score_receipt.name = "Receipt"
+	score_receipt.visible = false
+	score_receipt.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_panel_style(score_receipt, Color(0.14, 0.10, 0.07, 0.94))
+	score_layer.add_child(score_receipt)
+	score_receipt_box = VBoxContainer.new()
+	score_receipt_box.add_theme_constant_override("separation", 2)
+	score_receipt.add_child(score_receipt_box)
 
 
 # ==================== 主菜单 ====================
@@ -1753,8 +1908,12 @@ func _build_menu() -> void:
 	menu_col.anchor_bottom = 1.0
 	menu_col.offset_left = 72.0
 	menu_col.offset_right = 404.0
-	menu_col.offset_top = -430.0
-	menu_col.offset_bottom = -60.0
+	# ⚠ 这里给的高度必须**大于内容的实际高度**。VBoxContainer 的最小高度会把
+	#   Control 撑大，一旦内容比这个矩形高，Godot 会保留 offset_top 而**向下长**，
+	#   底部那一项就被顶出屏幕（「退出」曾经半截在屏幕外就是这么来的）。
+	#   锚底 + ALIGNMENT_END ⇒ 内容的底边 = offset_bottom，所以想整体上移就把它调小。
+	menu_col.offset_top = -520.0
+	menu_col.offset_bottom = -100.0
 	menu_col.alignment = BoxContainer.ALIGNMENT_END
 	menu_col.add_theme_constant_override("separation", 8)
 	menu_root.add_child(menu_col)
@@ -1825,13 +1984,14 @@ func _build_menu() -> void:
 	menu_settings_btn.custom_minimum_size = Vector2(0, 44)
 	menu_col.add_child(menu_settings_btn)
 
-	menu_changelog_btn = _make_button("更新日志", _show_changelog_panel, 18)
-	menu_changelog_btn.custom_minimum_size = Vector2(0, 44)
-	menu_col.add_child(menu_changelog_btn)
-
-	menu_credits_btn = _make_button("制作人员", _show_credits_panel, 18)
-	menu_credits_btn.custom_minimum_size = Vector2(0, 44)
-	menu_col.add_child(menu_credits_btn)
+	# 「更新日志」「制作人员」已移入设置面板（见下面的 svb），不在这里建 ——
+	# 主菜单列少两个按钮，底部才不会溢出屏幕。
+	menu_achievements_btn = _make_button("成就", _show_achievements_panel, 18)
+	menu_achievements_btn.custom_minimum_size = Vector2(0, 44)
+	# 入口图标：像素小金牌。用 _pixel_icon_sized 而不是 _make_icon ——
+	# 后者返回的是 TextureRect 控件，而 Button.icon 要的是 Texture。
+	menu_achievements_btn.icon = _pixel_icon_sized(Achievements.MEDAL_GRID, ACH_GOLD, 22)
+	menu_col.add_child(menu_achievements_btn)
 
 	menu_quit_btn = _make_button("退出", _on_menu_quit, 18)
 	menu_quit_btn.custom_minimum_size = Vector2(0, 44)
@@ -1918,13 +2078,81 @@ func _build_menu() -> void:
 	svb.add_child(bgm_switch_btn)
 	_update_bgm_btn()
 
+	# 结算动画速度：手感因人而异，做成滑块而不是写死在代码里
+	var spd_row := HBoxContainer.new()
+	spd_row.add_theme_constant_override("separation", 8)
+	svb.add_child(spd_row)
+	spd_row.add_child(_make_label("结算速度", 16, Color(0.82, 0.86, 0.9)))
+	score_speed_slider = HSlider.new()
+	score_speed_slider.min_value = SCORE_SPEED_MIN * 100.0
+	score_speed_slider.max_value = SCORE_SPEED_MAX * 100.0
+	score_speed_slider.step = 5
+	score_speed_slider.value = score_speed * 100.0
+	score_speed_slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	score_speed_slider.tooltip_text = "结算动画的快慢。100% 为默认；调小则更慢、看得更清楚，调大则更快。下一回合结算起生效。"
+	score_speed_slider.value_changed.connect(_on_score_speed_changed)
+	spd_row.add_child(score_speed_slider)
+	score_speed_label = _make_label("", 14, Color(1, 0.95, 0.6))
+	spd_row.add_child(score_speed_label)
+	_sync_score_speed_ui()
+
 	var replay_btn := _make_button("重新观看开场动画", _on_replay_intro, 20)
 	replay_btn.custom_minimum_size = Vector2(0, 52)
 	svb.add_child(replay_btn)
 
+	# 更新日志 / 制作人员：从主菜单挪进设置里
+	menu_changelog_btn = _make_button("更新日志", _show_changelog_panel, 18)
+	menu_changelog_btn.custom_minimum_size = Vector2(0, 44)
+	svb.add_child(menu_changelog_btn)
+
+	menu_credits_btn = _make_button("制作人员", _show_credits_panel, 18)
+	menu_credits_btn.custom_minimum_size = Vector2(0, 44)
+	svb.add_child(menu_credits_btn)
+
+	# --- 危险操作：清空存档（红色 + 二次确认）---
+	svb.add_child(HSeparator.new())
+	clear_status_label = _make_label("", 13, Color(0.66, 0.88, 0.68))
+	clear_status_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	svb.add_child(clear_status_label)
+	menu_clear_save_btn = _make_button("清空当前存档", _show_clear_confirm, 18, true)
+	menu_clear_save_btn.custom_minimum_size = Vector2(0, 44)
+	svb.add_child(menu_clear_save_btn)
+
 	var s_back := _make_button("返回", _on_settings_back, 16)
 	s_back.custom_minimum_size = Vector2(0, 40)
 	svb.add_child(s_back)
+
+	# --- 清空存档的二次确认框 ---
+	menu_clear_confirm_panel = PanelContainer.new()
+	menu_clear_confirm_panel.custom_minimum_size = Vector2(440, 0)
+	_panel_style(menu_clear_confirm_panel, Color(0.26, 0.12, 0.10, 0.98))
+	menu_clear_confirm_panel.visible = false
+	center.add_child(menu_clear_confirm_panel)
+
+	# 变量名统一加 cl_ 前缀：_build_menu 是个超长函数，
+	# 制作人员面板已经占用了 cvb / c_title 这些短名字，别撞
+	var cl_vb := VBoxContainer.new()
+	cl_vb.add_theme_constant_override("separation", 12)
+	menu_clear_confirm_panel.add_child(cl_vb)
+
+	var cl_title := _make_label("确认清空存档？", 22, Color(1.0, 0.72, 0.66))
+	cl_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	cl_vb.add_child(cl_title)
+
+	var cl_body := _make_label(
+			"将永久删除：\n· 当前对局进度（继续游戏）\n· 全部天赋点与已解锁天赋\n· 全部成就\n\n此操作不可撤销。",
+			14, Color(0.92, 0.88, 0.86))
+	cl_body.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	cl_body.custom_minimum_size = Vector2(320, 0)
+	cl_vb.add_child(cl_body)
+
+	var cl_ok := _make_button("确认清空", _on_clear_confirm_ok, 18, true)
+	cl_ok.custom_minimum_size = Vector2(0, 46)
+	cl_vb.add_child(cl_ok)
+
+	var cl_cancel := _make_button("取消", _on_clear_confirm_cancel, 18)
+	cl_cancel.custom_minimum_size = Vector2(0, 44)
+	cl_vb.add_child(cl_cancel)
 
 	# --- 制作人员面板 ---
 	menu_credits_panel = PanelContainer.new()
@@ -2004,6 +2232,41 @@ func _build_menu() -> void:
 	g_back.custom_minimum_size = Vector2(0, 40)
 	gvb.add_child(g_back)
 
+	# --- 成就面板 ---
+	menu_achievements_panel = PanelContainer.new()
+	menu_achievements_panel.custom_minimum_size = Vector2(580, 0)
+	_panel_style(menu_achievements_panel, Color(0.20, 0.14, 0.09, 0.97))
+	menu_achievements_panel.visible = false
+	center.add_child(menu_achievements_panel)
+
+	var avb := VBoxContainer.new()
+	avb.add_theme_constant_override("separation", 10)
+	menu_achievements_panel.add_child(avb)
+
+	var a_title := _make_label("成就", 24, Color(1, 0.9, 0.55))
+	a_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	avb.add_child(a_title)
+
+	ach_count_label = _make_label("", 14, Color(0.72, 0.76, 0.80))
+	ach_count_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	avb.add_child(ach_count_label)
+
+	avb.add_child(HSeparator.new())
+
+	var a_scroll := ScrollContainer.new()
+	a_scroll.custom_minimum_size = Vector2(540, 300)
+	a_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	avb.add_child(a_scroll)
+
+	ach_rows_col = VBoxContainer.new()
+	ach_rows_col.add_theme_constant_override("separation", 14)
+	ach_rows_col.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	a_scroll.add_child(ach_rows_col)
+
+	var a_back := _make_button("返回", _on_achievements_back, 16)
+	a_back.custom_minimum_size = Vector2(0, 40)
+	avb.add_child(a_back)
+
 
 ## 把 Changelog.RELEASES 渲染进面板 —— 以后加版本只改 scripts/changelog.gd，这里不用动
 func _build_changelog_rows(col: VBoxContainer) -> void:
@@ -2025,6 +2288,172 @@ func _build_changelog_rows(col: VBoxContainer) -> void:
 				body.add_theme_color_override("default_color", Color(0.92, 0.90, 0.86))
 				body.text = "· " + str(item)
 				col.add_child(body)
+
+
+# ==================== 成就 ====================
+
+func _show_achievements_panel() -> void:
+	menu_col.visible = false
+	menu_talent_panel.visible = false
+	menu_settings_panel.visible = false
+	menu_credits_panel.visible = false
+	menu_changelog_panel.visible = false
+	_build_achievement_rows()   # 每次打开重建：解锁状态可能刚变过，不能只在建菜单时铺一次
+	menu_achievements_panel.visible = true
+
+
+func _on_achievements_back() -> void:
+	menu_achievements_panel.visible = false
+	menu_col.visible = true
+	_menu_state(0)
+
+
+## 重建成就列表。解锁的点亮成金牌，未解锁的用灰牌。
+func _build_achievement_rows() -> void:
+	if ach_rows_col == null:
+		return
+	for c in ach_rows_col.get_children():
+		c.queue_free()
+	ach_count_label.text = "已解锁 %d / %d" % [Achievements.unlocked_count(), Achievements.LIST.size()]
+	for a in Achievements.LIST:
+		var got: bool = Achievements.is_unlocked(str(a["id"]))
+		var row := HBoxContainer.new()
+		row.add_theme_constant_override("separation", 14)
+
+		var icon := _make_icon(str(a["icon"]), ACH_GOLD if got else ACH_LOCKED, 44)
+		icon.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		row.add_child(icon)
+
+		var col := VBoxContainer.new()
+		col.add_theme_constant_override("separation", 3)
+		col.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		col.add_child(_make_label(str(a["name"]), 18,
+				Color(1, 0.88, 0.55) if got else Color(0.60, 0.60, 0.64)))
+		var ds := _make_label(str(a["desc"]), 13,
+				Color(0.80, 0.78, 0.74) if got else Color(0.52, 0.52, 0.56))
+		ds.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		ds.custom_minimum_size = Vector2(430, 0)
+		col.add_child(ds)
+		row.add_child(col)
+		ach_rows_col.add_child(row)
+
+
+## 成就解锁提示层。layer=12：盖在算分动画(7)与结算弹窗之上，
+## 又低于暂停(20)/开场(30) —— 「Steam 式」提示本来就该压在游戏画面上。
+func _build_achievement_popup() -> void:
+	ach_layer = CanvasLayer.new()
+	ach_layer.name = "AchievementLayer"
+	ach_layer.layer = 12
+	ach_layer.visible = false
+	add_child(ach_layer)
+
+	ach_popup = PanelContainer.new()
+	ach_popup.name = "AchPopup"
+	ach_popup.mouse_filter = Control.MOUSE_FILTER_IGNORE   # 不挡操作
+	_panel_style(ach_popup, Color(0.12, 0.10, 0.08, 0.96))
+	ach_layer.add_child(ach_popup)
+
+	var hb := HBoxContainer.new()
+	hb.add_theme_constant_override("separation", 12)
+	ach_popup.add_child(hb)
+
+	ach_popup_icon = _make_icon(Achievements.MEDAL_GRID, ACH_GOLD, 44)
+	ach_popup_icon.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	hb.add_child(ach_popup_icon)
+
+	var col := VBoxContainer.new()
+	col.add_theme_constant_override("separation", 2)
+	col.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	hb.add_child(col)
+	col.add_child(_make_label("成就已解锁", 11, Color(0.72, 0.76, 0.80)))
+	ach_popup_name = _make_label("", 18, Color(1, 0.88, 0.55))
+	col.add_child(ach_popup_name)
+	# 触发条件用小字写在下面
+	ach_popup_desc = _make_label("", 12, Color(0.80, 0.78, 0.74))
+	ach_popup_desc.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	ach_popup_desc.custom_minimum_size = Vector2(206, 0)
+	col.add_child(ach_popup_desc)
+
+
+## Achievements.achievement_unlocked 的接收端。一回合可能同时解锁多个，排队播。
+func _on_achievement_unlocked(achievement_id: String) -> void:
+	_ach_queue.append(achievement_id)
+	if not _ach_showing:
+		_drain_achievement_queue()
+
+
+func _drain_achievement_queue() -> void:
+	_ach_showing = true
+	while not _ach_queue.is_empty():
+		await _show_achievement_popup(str(_ach_queue.pop_front()))
+	_ach_showing = false
+
+
+## 弹一次成就提示：从屏幕右侧滑入 → 停住 → 滑出，全程约 5 秒。
+## 位置取屏幕右侧偏下 —— 上方是生态指标面板与牌堆，别压上去。
+func _show_achievement_popup(achievement_id: String) -> void:
+	var a: Dictionary = Achievements.find(achievement_id)
+	if a.is_empty() or ach_popup == null:
+		return
+	const SLIDE := 0.35
+	const HOLD := 4.30        # 0.35 + 4.30 + 0.35 ≈ 5 秒
+
+	ach_popup_icon.texture = _pixel_icon_sized(str(a["icon"]), ACH_GOLD, 44)
+	ach_popup_name.text = str(a["name"])
+	ach_popup_desc.text = str(a["desc"])
+
+	ach_layer.visible = true
+	ach_popup.visible = true
+	# 先让它自己算出尺寸再定位：第一帧 size 还是 0，直接算会闪一下
+	await get_tree().process_frame
+	var vp := get_viewport().get_visible_rect().size
+	var w: float = maxf(ach_popup.size.x, 280.0)
+	var h: float = ach_popup.size.y
+	var y: float = clampf(vp.y * 0.66 - h * 0.5, 6.0, vp.y - h - 6.0)
+	var x_home: float = vp.x - w - 16.0
+	var x_hidden: float = vp.x + 8.0
+	ach_popup.position = Vector2(x_hidden, y)
+
+	var tw := ach_popup.create_tween()
+	tw.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+	tw.tween_property(ach_popup, "position:x", x_home, SLIDE)
+	await get_tree().create_timer(SLIDE + HOLD).timeout
+	# ⚠ 时序用 create_timer，不用 await tween.finished —— tween 被 kill 时该信号永不发出
+	var tw2 := ach_popup.create_tween()
+	tw2.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_IN)
+	tw2.tween_property(ach_popup, "position:x", x_hidden, SLIDE)
+	await get_tree().create_timer(SLIDE).timeout
+	ach_popup.visible = false
+	ach_layer.visible = false
+
+
+## 成就「？！同花！？」：同一回合打出三张及以上同一类别的牌
+## 调用点：_finish_turn 执行完所有牌之后。已解锁时 try_unlock 内部直接返回，
+## 所以这里可以无脑调，不用自己判重。
+func _check_flush_achievement(played: Array) -> void:
+	var cnt: Dictionary = {}
+	for i in played:
+		var cat := _card_category(str(card_infos[i]["card_id"]))
+		if cat == "":
+			continue
+		cnt[cat] = int(cnt.get(cat, 0)) + 1
+	for cat in cnt:
+		if int(cnt[cat]) >= 3:
+			Achievements.try_unlock("flush")
+			return
+
+
+## 按 id 取卡牌数据字典（找不到返回空字典）
+func _find_card_data(card_id: String) -> Dictionary:
+	for c in GameState.ACTION_CARDS:
+		if str(c["id"]) == card_id:
+			return c
+	return {}
+
+
+## 卡牌的类别（ecology / social / manage）；找不到返回空串
+func _card_category(card_id: String) -> String:
+	return str(_find_card_data(card_id).get("category", ""))
 
 
 # ==================== 开场像素 PPT（Undertale 风） ====================
@@ -2286,6 +2715,16 @@ DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD""",
 
 
 func _show_menu() -> void:
+	# 作废可能还在跑的算分动画：代次 +1，它每个 await 回来都会发现 ID 变了而立即退出。
+	# 不这样做的话，回到主菜单后那段协程会继续改已经不该动的节点。
+	_score_anim_id += 1
+	_score_animating = false
+	# 收掉可能在播的成就提示，别让它杵在主菜单上。
+	# 它的协程会自己跑完（时序用的是 create_timer，不会挂死），
+	# 跑完时再设一次 visible=false 也无害。
+	_ach_queue.clear()
+	if ach_layer != null:
+		ach_layer.visible = false
 	menu_root.visible = true
 	menu_col.visible = true
 	menu_talent_panel.visible = false
@@ -2314,8 +2753,8 @@ func _menu_state(state: int) -> void:
 	menu_continue_btn.visible = main_level and has_save()  # 继续游戏（有存档才显示）
 	menu_talent_btn.visible = main_level
 	menu_settings_btn.visible = main_level
-	menu_credits_btn.visible = main_level
-	menu_changelog_btn.visible = main_level
+	# 更新日志 / 制作人员已移入设置面板，显隐由面板自己管，不在这里控制
+	menu_achievements_btn.visible = main_level
 	menu_quit_btn.visible = main_level
 
 	menu_easy_btn.visible = state == 1
@@ -2406,6 +2845,11 @@ func _show_settings_panel() -> void:
 	menu_col.visible = false
 	menu_talent_panel.visible = false
 	menu_credits_panel.visible = false
+	menu_changelog_panel.visible = false
+	menu_achievements_panel.visible = false
+	# 每次重进都收起确认框、清掉上次的「已清空」提示，免得误导
+	menu_clear_confirm_panel.visible = false
+	clear_status_label.text = ""
 	menu_settings_panel.visible = true
 
 
@@ -2415,30 +2859,75 @@ func _on_settings_back() -> void:
 	_menu_state(0)
 
 
+# ==================== 清空存档 ====================
+
+## 清空「当前存档」—— 三份一起清：
+##   user://savegame.json      单局进度（「继续游戏」读的那个）
+##   user://talents.json       天赋点与已解锁天赋
+##   user://achievements.json  成就
+## 必须先过 _show_clear_confirm() 的二次确认，这个函数只负责真正动手。
+func _clear_all_saves() -> void:
+	_clear_save()
+	Talents.reset_all()
+	Achievements.reset_all()
+
+
+func _show_clear_confirm() -> void:
+	menu_settings_panel.visible = false
+	menu_clear_confirm_panel.visible = true
+
+
+func _on_clear_confirm_cancel() -> void:
+	menu_clear_confirm_panel.visible = false
+	menu_settings_panel.visible = true
+
+
+func _on_clear_confirm_ok() -> void:
+	_clear_all_saves()
+	menu_clear_confirm_panel.visible = false
+	menu_settings_panel.visible = true
+	clear_status_label.text = "已清空：对局进度 / 天赋 / 成就"
+	# 天赋页此时通常还没铺过内容，但铺过就要立刻反映归零后的点数与状态
+	_refresh_talent_panel()
+
+
 func _show_credits_panel() -> void:
+	_info_back_to_settings = menu_settings_panel.visible
 	menu_col.visible = false
 	menu_talent_panel.visible = false
 	menu_settings_panel.visible = false
 	menu_changelog_panel.visible = false
+	menu_achievements_panel.visible = false
 	menu_credits_panel.visible = true
 
 
 func _on_credits_back() -> void:
 	menu_credits_panel.visible = false
+	if _info_back_to_settings:
+		_info_back_to_settings = false
+		menu_settings_panel.visible = true
+		return
 	menu_col.visible = true
 	_menu_state(0)
 
 
 func _show_changelog_panel() -> void:
+	# 入口有两个：主菜单和设置面板。记下是从哪来的，返回时才知道该回哪儿。
+	_info_back_to_settings = menu_settings_panel.visible
 	menu_col.visible = false
 	menu_talent_panel.visible = false
 	menu_settings_panel.visible = false
 	menu_credits_panel.visible = false
+	menu_achievements_panel.visible = false
 	menu_changelog_panel.visible = true
 
 
 func _on_changelog_back() -> void:
 	menu_changelog_panel.visible = false
+	if _info_back_to_settings:
+		_info_back_to_settings = false
+		menu_settings_panel.visible = true
+		return
 	menu_col.visible = true
 	_menu_state(0)
 
@@ -2464,10 +2953,11 @@ func _load_audio_settings() -> void:
 	if data is Dictionary:
 		bgm_index = clampi(int(data.get("bgm_index", 0)), 0, BGM_PATHS.size() - 1)
 		bgm_volume = clampf(float(data.get("bgm_volume", 0.8)), 0.0, 1.0)
+		score_speed = clampf(float(data.get("score_speed", 1.0)), SCORE_SPEED_MIN, SCORE_SPEED_MAX)
 
 
 func _save_audio_settings() -> void:
-	var data := {"bgm_index": bgm_index, "bgm_volume": bgm_volume}
+	var data := {"bgm_index": bgm_index, "bgm_volume": bgm_volume, "score_speed": score_speed}
 	var f := FileAccess.open(AUDIO_SETTINGS_PATH, FileAccess.WRITE)
 	if f != null:
 		f.store_string(JSON.stringify(data))
@@ -2492,6 +2982,38 @@ func _apply_bgm() -> void:
 	bgm_player.play()
 
 
+## 建立音效播放池。同一个 AudioStream 可以被多个 player 同时播，
+## 所以轮转复用就能支撑「连击音阶」那种密集触发而互不打断。
+func _setup_sfx() -> void:
+	for i in SFX_POOL_SIZE:
+		var p := AudioStreamPlayer.new()
+		add_child(p)
+		_sfx_players.append(p)
+	for key in SFX_PATHS:
+		# 缺文件时只告警不崩溃：但必须喊一声 —— 最常见的翻车方式是
+		# 「wav 生成了但没在编辑器里导入」，那种情况下游戏照跑、全程静音，极难排查。
+		if ResourceLoader.exists(SFX_PATHS[key]):
+			_sfx_streams[key] = load(SFX_PATHS[key])
+		else:
+			push_warning("音效缺失：%s（跑一次 tools/make_ding.py，再在编辑器里打开工程让它导入）" % SFX_PATHS[key])
+
+
+## 播一个音效。
+## pitch 用来做「连击音阶」：同一种叮逐次升 key，是小丑牌那种层层叠加感的来源。
+## vol_db 是相对音量偏移 —— 密集的小数字要压到 -8dB，落定的合计给 0dB，
+## 否则 1.4 秒内响十几次会变成机关枪。
+func play_sfx(sfx_name: String, pitch: float = 1.0, vol_db: float = 0.0) -> void:
+	if _sfx_players.is_empty() or not _sfx_streams.has(sfx_name):
+		return
+	var p: AudioStreamPlayer = _sfx_players[_sfx_cursor]
+	_sfx_cursor = (_sfx_cursor + 1) % _sfx_players.size()
+	p.stream = _sfx_streams[sfx_name]
+	p.pitch_scale = pitch
+	# 音量复用 BGM 那一个滑块：拉到 0 就该全静音，不给音效单独开设置项
+	p.volume_db = linear_to_db(maxf(bgm_volume, 0.001)) + vol_db
+	p.play()
+
+
 ## 音量滑动条回调
 func _on_volume_changed(value: float) -> void:
 	bgm_volume = value / 100.0
@@ -2499,6 +3021,29 @@ func _on_volume_changed(value: float) -> void:
 	bgm_player.volume_db = linear_to_db(maxf(bgm_volume, 0.001))
 	_save_audio_settings()
 	_sync_audio_ui()
+
+
+## 结算动画速度滑块
+func _on_score_speed_changed(value: float) -> void:
+	score_speed = clampf(value / 100.0, SCORE_SPEED_MIN, SCORE_SPEED_MAX)
+	_sync_score_speed_ui()
+	_save_audio_settings()
+
+
+## 同步两处「结算速度」滑块（主菜单设置 + 暂停设置）——它们共用同一个 score_speed
+func _sync_score_speed_ui() -> void:
+	var pct := int(round(score_speed * 100.0))
+	# 光写百分比会有歧义（50% 是更慢还是更快？），补一个方向词
+	var tag := "正常" if is_equal_approx(score_speed, 1.0) else ("更慢" if score_speed < 1.0 else "更快")
+	var txt := "%d%%·%s" % [pct, tag]
+	if score_speed_slider != null:
+		score_speed_slider.set_value_no_signal(score_speed * 100.0)
+	if score_speed_label != null:
+		score_speed_label.text = txt
+	if pause_score_speed_slider != null:
+		pause_score_speed_slider.set_value_no_signal(score_speed * 100.0)
+	if pause_score_speed_label != null:
+		pause_score_speed_label.text = txt
 
 
 ## 切换 BGM（在两个曲目间循环）
@@ -2584,7 +3129,9 @@ func _unhandled_input(event: InputEvent) -> void:
 
 
 func _can_pause() -> bool:
-	return _playing and not GameState.game_over and not crisis_root.visible
+	# 算分动画期间禁止暂停：_paused 是自定义变量、不是 get_tree().paused，
+	# tween 在「暂停」下照常跑，放行只会得到「暂停菜单下面还在飞牌」的画面。
+	return _playing and not GameState.game_over and not crisis_root.visible and not _score_animating
 
 
 func _toggle_pause() -> void:
@@ -2818,11 +3365,30 @@ func _build_pause_menu() -> void:
 	pause_bgm_btn.custom_minimum_size = Vector2(0, 44)
 	psv.add_child(pause_bgm_btn)
 
+	# 结算速度：与主菜单设置共用同一个 score_speed，两边永远同步
+	# （_on_score_speed_changed → _sync_score_speed_ui 会同时刷两个滑块）
+	var pspd_row := HBoxContainer.new()
+	pspd_row.add_theme_constant_override("separation", 8)
+	psv.add_child(pspd_row)
+	pspd_row.add_child(_make_label("结算速度", 16, Color(0.82, 0.86, 0.9)))
+	pause_score_speed_slider = HSlider.new()
+	pause_score_speed_slider.min_value = SCORE_SPEED_MIN * 100.0
+	pause_score_speed_slider.max_value = SCORE_SPEED_MAX * 100.0
+	pause_score_speed_slider.step = 5
+	pause_score_speed_slider.value = score_speed * 100.0
+	pause_score_speed_slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	pause_score_speed_slider.tooltip_text = "结算动画的快慢。100% 为默认；调小则更慢、看得更清楚，调大则更快。下一回合结算起生效。"
+	pause_score_speed_slider.value_changed.connect(_on_score_speed_changed)
+	pspd_row.add_child(pause_score_speed_slider)
+	pause_score_speed_label = _make_label("", 14, Color(1, 0.95, 0.6))
+	pspd_row.add_child(pause_score_speed_label)
+
 	var ps_back := _make_button("返回", _on_pause_settings_back, 16)
 	ps_back.custom_minimum_size = Vector2(0, 40)
 	psv.add_child(ps_back)
 
-	_update_bgm_btn()   # 同步两个切换按钮文字
+	_update_bgm_btn()        # 同步两个切换按钮文字
+	_sync_score_speed_ui()   # 两个结算速度滑块的文字也要填上（建的时候标签是空的）
 
 
 # ==================== 危机警示 ====================
@@ -2841,6 +3407,10 @@ func _on_crisis_hit(crisis: Dictionary) -> void:
 func _process_crisis_queue() -> void:
 	if GameState.game_over:
 		return  # 已判负：失败报告优先，危机弹层不再抢屏
+	if _score_animating:
+		return  # 算分动画期间先攒着：危机预警/爆发已挪到回合末发射，
+		        # 此刻弹出来会糊在结算动画与结算弹窗上。
+		        # 队列不会丢 —— _finish_turn 在结算弹窗铺好后会再调一次本函数。
 	if _crisis_queue.is_empty() or crisis_root.visible:
 		return
 	var item: Dictionary = _crisis_queue.pop_front()
@@ -2882,6 +3452,14 @@ func _show_crisis_alert(crisis: Dictionary, is_warning: bool) -> void:
 	tw.tween_property(crisis_icon, "scale", Vector2.ONE, 0.45)
 
 
+## 危机的「会造成什么」逐条文案（预警与爆发共用）
+func _crisis_effect_lines(crisis: Dictionary) -> Array:
+	var out: Array = []
+	for e in crisis.get("effects", []):
+		out.append("· %s %+d" % [GameState.METRIC_NAMES.get(e["metric"], e["metric"]), int(e["delta"])])
+	return out
+
+
 ## 危机警示正文：描述 + 「当前 xx 值较低，可能影响 xx」 + 应对建议
 func _crisis_body_text(crisis: Dictionary, is_warning: bool) -> String:
 	var c := _parse_cond(str(crisis.get("cond", "")))
@@ -2892,17 +3470,17 @@ func _crisis_body_text(crisis: Dictionary, is_warning: bool) -> String:
 	var low_high := "偏低" if op in ["<", "<="] else "偏高"
 	var threshold := int(c.get("threshold", 0))
 
-	var effect_lines: Array = []
-	for e in crisis.get("effects", []):
-		effect_lines.append("· %s %+d" % [GameState.METRIC_NAMES.get(e["metric"], e["metric"]), int(e["delta"])])
+	var effect_lines: Array = _crisis_effect_lines(crisis)
 
 	var body := ""
 	if is_warning:
 		body += "%s\n\n" % crisis["warn"]
-		# 只在当前值真的落在危险侧时才引用警戒线，避免出现
-		# 「当前水质 90（偏低，警戒线 55）」这种自相矛盾的提示
+		# 只在当前值真的落在危险侧时才提示，避免出现「当前水质 90（偏低）」这种自相矛盾的话。
+		# ⚠ 这里**不写**危机的「触发阈值」：那和 HUD 上的「生态红线」（致死线）是两回事
+		#   （水质触发线 55，致死线简单/普通/困难 = 15/25/35），两个词又太像，
+		#   写出来玩家会以为是同一个数、进而误判自己离死还有多远，反而更糟。
 		if metric != "" and _cond_holds(cur, op, threshold):
-			body += "[color=#ffb060]⚠ 当前%s %d（%s，警戒线 %d）[/color]\n\n" % [mname, cur, low_high, threshold]
+			body += "[color=#ffb060]⚠ 当前%s %d（%s）[/color]\n\n" % [mname, cur, low_high]
 		body += "[color=#ff9090]若未及时应对，下一回合可能造成：[/color]\n"
 		body += "\n".join(effect_lines)
 		var counters: Array = GameState.counter_ids_for(crisis)
@@ -2916,6 +3494,21 @@ func _crisis_body_text(crisis: Dictionary, is_warning: bool) -> String:
 			# 对策卡是「大概率入手」而不是必出（肉鸽要有没抽到的局面），文案不承诺保底
 			body += "\n\n[color=#8fd0ff]应对建议（下批手牌里对策卡概率已提高，不保证到手）：优先打出「%s」%s[/color]" % [
 				"」「".join(shown), tail]
+		# 深预警（科研点累计达标后开启）：把「2 回合后」那一场一并预告出来 ——
+		# 这就是科研点的实际作用，写在弹窗里玩家才知道那个数字不只是评分。
+		var fc: Dictionary = GameState.forecast_crisis
+		if not fc.is_empty():
+			body += "\n\n[color=#a9b7c6]── 深预警 · 2 回合后 ──[/color]\n"
+			body += "[color=#ffb060]%s[/color]\n" % str(fc.get("name", "?"))
+			body += "\n".join(_crisis_effect_lines(fc))
+			var fc_counters: Array = GameState.counter_ids_for(fc)
+			if not fc_counters.is_empty():
+				var fnames: Array = []
+				for cid in fc_counters:
+					fnames.append(_card_name(cid))
+				var fshown: Array = fnames.slice(0, 4)
+				var ftail: String = "" if fnames.size() <= 4 else " 等 %d 张" % fnames.size()
+				body += "\n[color=#8fd0ff]可提前布局：%s%s[/color]" % ["」「".join(fshown), ftail]
 	else:
 		body += "%s\n\n" % crisis["hit"]
 		body += "[color=#ff9090]本次已造成：[/color]\n"
@@ -3141,7 +3734,6 @@ func _make_warn_row(e: Dictionary) -> Control:
 	var pc := _parse_cond(str(c.get("cond", "")))
 	var metric := str(pc.get("metric", ""))
 	var mname := str(GameState.METRIC_NAMES.get(metric, metric))
-	var line := int(pc.get("threshold", 0))
 
 	var panel := PanelContainer.new()
 	_panel_style(panel, Color(0.13, 0.11, 0.09, 0.94))
@@ -3153,9 +3745,15 @@ func _make_warn_row(e: Dictionary) -> Control:
 	body.add_theme_font_size_override("normal_font_size", _snap_px(14))
 	body.add_theme_color_override("default_color", Color(0.94, 0.92, 0.88))
 
-	var t := "[color=#ffb060]第 %d 回合 · ⚠ 危机预警：%s[/color]\n" % [turn, cname]
+	# lead=2 是深预警（科研点累计达标后开启，提前 2 回合告知），标出来，
+	# 否则回看时两条「预警」看着一样、分不清哪条更早
+	var lead := int(e.get("lead", 1))
+	var tag := "⚠ 危机预警" if lead <= 1 else "⏳ 深预警（提前 2 回合）"
+	var t := "[color=#ffb060]第 %d 回合 · %s：%s[/color]\n" % [turn, tag, cname]
 	t += "%s\n" % str(c.get("warn", ""))
-	t += "当时：%s %d（警戒线 %d）\n" % [mname, int(e.get("value", 0)), line]
+	# 不写「警戒线」：那是危机的触发阈值，和 HUD 上的「生态红线」（致死线）
+	# 完全不是一个数（水质 55 vs 15/25/35），词又像，写出来只会误导。
+	t += "当时：%s %d\n" % [mname, int(e.get("value", 0))]
 	if hit > 0:
 		var eff: Array = []
 		for ef in c.get("effects", []):
@@ -3306,6 +3904,8 @@ func _card_corners(back: TextureRect) -> PackedVector2Array:
 
 
 func _on_deck_gui_input(event: InputEvent) -> void:
+	if _score_animating:
+		return      # 算分动画期间不开牌库查看器（它的 CanvasLayer 会盖在动画层上）
 	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
 		_open_deck_viewer()
 
@@ -3550,30 +4150,43 @@ func _make_sort_button() -> Button:
 
 
 ## 刷新排序按钮文字与提示
+## 同步两处排序按钮（牌库面板里 + 出牌阶段右下角）。
+## 它们共用同一个 _deck_sort_by_category，所以文案永远一致。
+## ⚠ 不要因为某一个为 null 就整体 return —— 两个按钮不是同时创建的。
 func _update_sort_btn() -> void:
-	if deck_sort_btn == null:
-		return
 	var mode := "按类别排序" if _deck_sort_by_category else "按费用排序"
-	deck_sort_btn.text = mode
-	deck_sort_btn.tooltip_text = "切换排序方式（当前：%s）" % mode
+	var tip := "切换排序方式（当前：%s）" % mode
+	if deck_sort_btn != null:
+		deck_sort_btn.text = mode
+		deck_sort_btn.tooltip_text = tip
+	if hand_sort_btn != null:
+		hand_sort_btn.text = mode
+		hand_sort_btn.tooltip_text = tip
 
 
 ## 排序冷却：锁死期间按钮禁用并显示倒计时，禁止交互/无按下反馈
 func _update_sort_cooldown() -> void:
-	if deck_sort_btn == null:
-		return
 	var remaining := SORT_COOLDOWN_MS - (Time.get_ticks_msec() - _sort_cooldown_ms)
+	_apply_sort_cooldown(deck_sort_btn, remaining)
+	_apply_sort_cooldown(hand_sort_btn, remaining)
+
+
+## 冷却期间按钮禁用并显示倒计时。冷却也是两边共用的。
+## 抽成独立函数是为了避免每帧构造数组/闭包 —— 它每帧都被 _process 调到。
+func _apply_sort_cooldown(btn: Button, remaining: int) -> void:
+	if btn == null:
+		return
 	if remaining > 0:
-		if not deck_sort_btn.disabled:
-			deck_sort_btn.disabled = true
-		deck_sort_btn.text = "冷却中 %d 秒" % int(ceil(remaining / 1000.0))
-	elif deck_sort_btn.disabled:
-		deck_sort_btn.disabled = false
+		if not btn.disabled:
+			btn.disabled = true
+		btn.text = "冷却中 %d 秒" % int(ceil(remaining / 1000.0))
+	elif btn.disabled:
+		btn.disabled = false
 		_update_sort_btn()
 
 
 func _toggle_deck_sort() -> void:
-	# 锁死两次切换之间的最低时间间隔（5 秒），杜绝连点造成排列错乱
+	# 锁死两次切换之间的最低时间间隔（见 SORT_COOLDOWN_MS），杜绝连点造成排列错乱
 	var now := Time.get_ticks_msec()
 	if now - _sort_cooldown_ms < SORT_COOLDOWN_MS:
 		return
@@ -3649,6 +4262,111 @@ func _sort_deck_cards(by_category: bool) -> void:
 		tw.tween_property(p, "position", new_pos, 0.3)
 	# 等飞行动画完成，期间 _sort_animating 保持 true，避免连点造成位置 tween 重叠
 	await get_tree().create_timer(0.32).timeout
+
+
+## 出牌阶段的排序：与牌库共用一个模式、一套冷却，只是作用对象换成在场手牌。
+func _toggle_hand_sort() -> void:
+	var now := Time.get_ticks_msec()
+	if now - _sort_cooldown_ms < SORT_COOLDOWN_MS:
+		return
+	if _sort_animating or card_infos.size() < 2:
+		return
+	_sort_cooldown_ms = now
+	_sort_animating = true
+	_deck_sort_by_category = not _deck_sort_by_category
+	_update_sort_btn()
+	await _sort_hand_cards(_deck_sort_by_category)
+	_sort_animating = false
+
+
+## 给在场手牌重排。
+##
+## 扇形的位置全部由 _layout_fan() 统一算（base_pos / theta / radial 写回 card_infos），
+## 所以流程是：先排好 card_infos → 重新布局 → 把每张牌拉回它**原来那个位置** →
+## 再 tween 飞到新位置。这样看到的是「牌互相换位」，而不是全体瞬移重排。
+##
+## ⚠ 旧位置必须按 panel 存，不能按下标 —— 排完序下标就换人了。
+## ⚠ 选中状态挂在 card_infos 的条目上，跟着卡片一起走，不需要额外保存/恢复；
+##   金色选中框是画在 panel 上的，也随 panel 一起移动。
+func _sort_hand_cards(by_category: bool) -> void:
+	const GATHER_DUR := 0.24        # 收牌时长
+	const GATHER_LAG := 0.016       # 收牌错开（做出"被一把收拢"的层次）
+	const DEAL_DUR := 0.28          # 发牌时长
+	const DEAL_LAG := 0.040         # 发牌错开（沿用 _play_deal_animation 的节奏）
+	const PILE_SPREAD := 3.0        # 牌堆里每张牌往下错一点，完全重合就看不出一叠了
+	const PILE_SCALE := 0.92        # 收拢时略微缩小，像被攥成一把
+
+	if card_infos.size() < 2:
+		return
+	var n := card_infos.size()
+
+	# ① 收牌：全部飞到屏幕中央叠成一堆
+	#    屏幕坐标 → card_box 局部坐标；pivot 在底部中心，
+	#    所以 position = 落点 - pivot 才是把牌的底部中心放到那个点上。
+	var vp := get_viewport().get_visible_rect().size
+	var pile_center: Vector2 = _screen_to_card_box(vp * 0.5)
+	# 收牌落点按 **panel** 存 —— _layout_fan() 会重排位置，排完序下标就换人了
+	var pile_pos: Dictionary = {}
+	for i in n:
+		var info: Dictionary = card_infos[i]
+		var p: PanelContainer = info["panel"]
+		if not is_instance_valid(p):
+			return
+		# 让 _update_card_hover 让出控制权：它每帧把牌拽回 base_pos，
+		# 会和飞行 tween 逐帧打架（照抄 shaking / 算分飞牌的既有做法）
+		info["flying"] = true
+		var spot: Vector2 = pile_center - p.pivot_offset + Vector2(0.0, float(i) * PILE_SPREAD)
+		pile_pos[p] = spot
+		var d: float = float(i) * GATHER_LAG
+		var tw := p.create_tween()
+		tw.set_parallel(true)
+		tw.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_IN)
+		tw.tween_property(p, "position", spot, GATHER_DUR).set_delay(d)
+		tw.tween_property(p, "rotation", 0.0, GATHER_DUR).set_delay(d)
+		tw.tween_property(p, "scale", Vector2(PILE_SCALE, PILE_SCALE), GATHER_DUR).set_delay(d)
+	await get_tree().create_timer(GATHER_DUR + float(n - 1) * GATHER_LAG + 0.02).timeout
+
+	# ② 排序 + 重新布局。此刻牌全叠在一点，位置怎么变都看不出来，
+	#    排序这一步天然被收拢动作掩盖掉了 —— 顺序要到发牌时才揭晓。
+	card_infos.sort_custom(func(a, b):
+		return _card_id_dict_less(str(a["card_id"]), str(b["card_id"]), by_category))
+	_layout_fan()   # 重写每张牌的 position / rotation / base_pos / theta / radial
+
+	# ③ 发牌：从牌堆位置按新顺序逐张飞回自己的扇形位置
+	for i in n:
+		var info: Dictionary = card_infos[i]
+		var p: PanelContainer = info["panel"]
+		if not is_instance_valid(p):
+			continue
+		var target: Vector2 = info["base_pos"]
+		# 已选中的牌最终是「抬起来」的：直接发到抬起后的落点，
+		# 别先落平再由 _update_card_hover 抬一次（那样会多一次起落）
+		if bool(info["selected"]):
+			target += (info["radial"] as Vector2) * CARD_RAISE
+		p.position = pile_pos.get(p, target)
+		p.rotation = 0.0
+		p.scale = Vector2(PILE_SCALE, PILE_SCALE)
+		var d: float = float(i) * DEAL_LAG
+		var tw := p.create_tween()
+		tw.set_parallel(true)
+		tw.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+		tw.tween_property(p, "position", target, DEAL_DUR).set_delay(d)
+		tw.tween_property(p, "rotation", float(info["theta"]), DEAL_DUR).set_delay(d)
+		tw.tween_property(p, "scale", Vector2.ONE, DEAL_DUR).set_delay(d)
+
+	# 等发完，期间 _sort_animating 保持 true，避免连点让位置 tween 重叠
+	await get_tree().create_timer(DEAL_DUR + float(n - 1) * DEAL_LAG + 0.02).timeout
+	for info in card_infos:
+		info["flying"] = false
+
+
+## 按 card_id 比较（手牌排序用 —— card_infos 里存的是 id，不是卡牌字典）
+func _card_id_dict_less(a_id: String, b_id: String, by_category: bool) -> bool:
+	var a := _find_card_data(a_id)
+	var b := _find_card_data(b_id)
+	if a.is_empty() or b.is_empty():
+		return a_id < b_id
+	return _card_dict_less(a, b, by_category)
 
 
 # ==================== 牌库卡牌悬停 / 点击查看 ====================
@@ -3894,6 +4612,10 @@ func _on_start_pressed() -> void:
 		menu_hint.text = "种子需为非负整数（留空则随机）"
 		return
 	_clear_save()           # 放弃（判负）上一局暂停的进度
+	# 作废可能还在跑的算分动画（代次 +1）。新局的手牌稍后会由 _build_hand_panel()
+	# 整体重建并清空 card_infos，所以这里不必手工复位卡牌状态。
+	_score_anim_id += 1
+	_score_animating = false
 	_playing = true
 	_hide_menu()
 	GameState.reset_game()
@@ -3942,7 +4664,9 @@ func _make_metric_row(metric: String) -> VBoxContainer:
 	var head := HBoxContainer.new()
 	head.add_theme_constant_override("separation", 4)
 	vb.add_child(head)
-	head.add_child(_make_icon(_icon_grid_for(metric), METRIC_COLORS[metric], 14))
+	# 图标留引用：算分动画要让它放大 + 抖动（原来这里是匿名创建的，拿不到节点）
+	var icon := _make_icon(_icon_grid_for(metric), METRIC_COLORS[metric], 14)
+	head.add_child(icon)
 	head.add_child(_make_label(GameState.METRIC_NAMES[metric], 12, Color(0.95, 0.95, 0.95)))
 	var val := _make_label("0", 12, METRIC_COLORS[metric])
 	val.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -3978,7 +4702,7 @@ func _make_metric_row(metric: String) -> VBoxContainer:
 
 	vb.add_child(wrap)
 
-	metric_bars[metric] = {"bar": bar, "val": val, "line": line, "row": vb}
+	metric_bars[metric] = {"bar": bar, "val": val, "line": line, "row": vb, "icon": icon}
 	return vb
 
 
@@ -3996,7 +4720,7 @@ func _update_threshold_lines() -> void:
 # ==================== 指标悬停小窗 ====================
 ## 鼠标移到某一项指标上时，跟随指针弹出的小窗：
 ## 本回合自然演化会掉多少 / 回合末大概落到哪 / 生态红线在哪 / 余量还剩多少；
-## 若已有「已预警、下回合开局才爆发」的危机且正好打到这一项，也提前告诉你。
+## 若已有「已预警、下回合结算时才爆发」的危机且正好打到这一项，也提前告诉你。
 ## 数字全部来自 GameState.metric_hover_preview()（只读推演），这里只负责显示，不参与任何判定。
 ## ⚠ 只给结果，不给解释：指标之间的因果链、难度对衰减的放大，都是**隐性参数**，
 ##   玩家应该自己从数字里总结，不能写在这块板上。
@@ -4072,6 +4796,9 @@ func _update_metric_tip(mouse_override: Vector2 = Vector2.INF) -> void:
 
 ## 什么时候允许显示：正常分配回合，且没有任何弹层盖在 HUD 上
 func _tip_allowed() -> bool:
+	# 算分动画期间关掉指标悬停小窗，否则鼠标扫过右侧面板弹的小窗会糊在算分小票上
+	if _score_animating:
+		return false
 	if _current_phase != "allocate" or _paused or GameState.game_over:
 		return false
 	if right_panel == null or not right_panel.is_visible_in_tree():
@@ -4128,26 +4855,37 @@ func _fill_metric_tip(metric: String) -> void:
 	else:
 		rows.append("[color=#cfd6dc]回合末约[/color]   [b]%d[/b] %s" % [end_min, _tip_delta_suffix(cur, end_min)])
 
-	# ③ 生态红线与余量
+	# ③ 生态红线与两个余量
+	# ⚠ 必须写清是哪个余量。它们**不相等**：
+	#   当前余量   = 眼下的值 - 红线（水位 47、红线 37 → 10）
+	#   回合末余量 = 按本回合自然演化的**最坏一头**算（47 - 10 = 37，再减 37 → 0）
+	# 以前只写「余量」两个字，同一屏上又摆着 47 和 37，玩家会算成 10 而觉得是 bug。
 	var line: int = int(p["line"])
 	var margin: int = int(p["margin_nat"])
+	var cur_margin: int = int(p["cur"]) - line
 	var mcol := "#7ee08a"
 	if margin < 0:
 		mcol = "#ff5a5a"
 	elif margin <= 3:
 		mcol = "#ffcc66"
-	rows.append("[color=#cfd6dc]生态红线[/color]   [color=#ff8080][b]%d[/b][/color]    [color=#cfd6dc]余量[/color] [color=%s][b]%d[/b][/color]" % [line, mcol, margin])
+	var ccol := "#7ee08a"
+	if cur_margin < 0:
+		ccol = "#ff5a5a"
+	elif cur_margin <= 3:
+		ccol = "#ffcc66"
+	rows.append("[color=#cfd6dc]生态红线[/color]   [color=#ff8080][b]%d[/b][/color]    [color=#cfd6dc]当前余量[/color] [color=%s][b]%d[/b][/color]" % [line, ccol, cur_margin])
+	rows.append("[color=#cfd6dc]回合末余量[/color]   [color=%s][b]%d[/b][/color]" % [mcol, margin])
 	# 难度怎么放大衰减也是隐性参数，不写出来（两档都玩两把自然就有数）
 	if bool(p["break_nat"]):
 		rows.append("[color=#ff5a5a][b]⚠ 回合末就会跌破生态红线[/b][/color]")
 	elif margin <= 3:
-		rows.append("[color=#ffcc66]⚠ 已经很贴生态红线了[/color]")
+		rows.append("[color=#ffcc66]⚠ 回合末将贴近生态红线[/color]")
 
-	# ④ 预警中、下回合开局才爆发的危机正好打到这一项
+	# ④ 预警中、下回合结算时才爆发的危机正好打到这一项
 	if int(p["crisis_delta"]) != 0:
 		rows.append("[color=#ffb060]⚠ 预警中：%s[/color]" % str(p["crisis_name"]))
 		var tail := "会跌破生态红线" if bool(p["break_total"]) else "仍在生态红线上"
-		rows.append("[color=#8e9aa4]· 下回合开局 %+d → 约 %d，%s[/color]" % [int(p["crisis_delta"]), int(p["worst"]), tail])
+		rows.append("[color=#8e9aa4]· 下回合结算时 %+d → 约 %d，%s[/color]" % [int(p["crisis_delta"]), int(p["worst"]), tail])
 
 	var txt := ""
 	for r in rows:
@@ -4185,14 +4923,19 @@ func _place_metric_tip(mp: Vector2) -> void:
 
 func _update_hud() -> void:
 	var m: Dictionary = GameState.metrics
-	for metric in metric_bars:
-		var bar: ProgressBar = metric_bars[metric]["bar"]
-		var val: Label = metric_bars[metric]["val"]
-		# 指标变化不是玩家直接操作 → 用动画"告知"变化（速查表：非用户触发可较长时长）
-		var tw := bar.create_tween()
-		tw.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
-		tw.tween_property(bar, "value", float(m[metric]), 0.35)
-		val.text = str(m[metric])
+	# 算分动画期间**只**冻结指标条与数值 —— 这两样由动画逐项驱动，
+	# 若在这里一次性刷到终值，动画还没播就先跳完了。
+	# ⚠ 不能整体 return：所有 metrics_changed / funds_changed 都在动画开始**之前**
+	#   就发完了，整体早退会让左侧「回合/资金/科研」停在旧值，2.8s 后再"啪"地跳一次。
+	if not _score_animating:
+		for metric in metric_bars:
+			var bar: ProgressBar = metric_bars[metric]["bar"]
+			var val: Label = metric_bars[metric]["val"]
+			# 指标变化不是玩家直接操作 → 用动画"告知"变化（速查表：非用户触发可较长时长）
+			var tw := bar.create_tween()
+			tw.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+			tw.tween_property(bar, "value", float(m[metric]), 0.35)
+			val.text = str(m[metric])
 
 	var t: int = GameState.turn
 	turn_label.text = "第 %d / %d 回合" % [t, GameState.TOTAL_TURNS]
@@ -4202,6 +4945,10 @@ func _update_hud() -> void:
 	spent_label.text = "已消耗：%d 万" % GameState.total_spent
 	funds_label.text = "%d 万" % GameState.funds
 	research_label.text = "科研点：%d" % GameState.research_points
+	# 行动位上限随难度变化（简单 4 / 普通·困难 3），必须每帧从这个入口刷，
+	# 不能在 _build_ui 里写死 —— 那时难度还没选。
+	if action_hint != null:
+		action_hint.text = "每回合最多 %d 个行动" % GameState.action_slots()
 	event_label.text = _current_event if _current_event != "" else "暂无"
 	_update_selected_label()
 	_refresh_warn_bar()
@@ -4231,6 +4978,10 @@ func _build_hand_panel() -> void:
 	for c in card_box.get_children():
 		c.queue_free()
 	card_infos = []
+	# 发牌就按当前排序模式排好。排序模式是全局的（与牌库共用），
+	# 所以新一局/新一回合发牌都沿用上一次的选择，不会又变回无序抽取的顺序。
+	# 比较器是全序（最后按 id 兜底），所以这里的结果与 _sort_hand_cards 的结果一致。
+	current_hand.sort_custom(func(a, b): return _card_dict_less(a, b, _deck_sort_by_category))
 	for card in current_hand:
 		var panel := _make_card(card)
 		card_box.add_child(panel)
@@ -4244,6 +4995,16 @@ func _build_hand_panel() -> void:
 
 
 ## 扇形摆放手牌：圆心在下方，牌绕圆心径向排列（牌底小弧、牌顶大弧）
+## 屏幕坐标 → card_box 的局部坐标。
+##
+## ⚠ 不要用 card_box.get_global_transform().affine_inverse()：容器布局尚未跑过时
+##   card_box.size 可能是 0（headless 下实测为 (0, 200)），变换矩阵会把 x 轴压成 0，
+##   反变换出来的落点是垃圾值 —— 表现是动画目标点乱跳、牌飞不到位。
+##   card_box 没有缩放/旋转，所以直接减 global_position 既正确又不受尺寸影响。
+func _screen_to_card_box(screen_pt: Vector2) -> Vector2:
+	return screen_pt - card_box.global_position
+
+
 func _layout_fan() -> void:
 	var n := card_infos.size()
 	if n == 0:
@@ -4385,6 +5146,8 @@ func _find_card_info(panel: PanelContainer) -> Dictionary:
 
 ## 点击卡牌：切换选中（可取消）
 func _on_card_gui_input(event: InputEvent, panel: PanelContainer) -> void:
+	if _score_animating or _sort_animating:
+		return      # 算分动画 / 手牌换位进行中，牌正在飞，不接受选中切换
 	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
 		_toggle_card(panel)
 
@@ -4397,9 +5160,10 @@ func _toggle_card(panel: PanelContainer) -> void:
 		info["selected"] = false
 		_remove_gold_frame(panel)
 	else:
-		# 行动位上限
-		if _selected_count() >= GameState.MAX_ACTIONS:
-			_reject_card(panel, "行动位已满（每回合最多 3 个）")
+		# 行动位上限（随难度变化：简单档 4，普通/困难 3 —— 见 MAX_ACTIONS_BY_DIFFICULTY）
+		var slots := GameState.action_slots()
+		if _selected_count() >= slots:
+			_reject_card(panel, "行动位已满（本难度每回合最多 %d 个）" % slots)
 			return
 		# 资金检查：已选卡的总花费 + 这张，不能超过可用资金
 		var cost := GameState.tier_cost(info["card_id"], "effective")
@@ -4431,7 +5195,7 @@ func _selected_count() -> int:
 func _update_selected_label() -> void:
 	var used := _committed_funds()
 	selected_label.text = "已选：%d/%d　预算：%d/%d 万" % [
-		_selected_count(), GameState.MAX_ACTIONS, used, GameState.funds]
+		_selected_count(), GameState.action_slots(), used, GameState.funds]
 
 
 ## 拒绝选中：红框闪烁 + 左右抖动 + 提示原因
@@ -4474,6 +5238,8 @@ func _flash_hint(text: String) -> void:
 func _update_card_hover(delta: float) -> void:
 	if hand_panel.visible == false or card_infos.is_empty():
 		return
+	if _score_animating:
+		return      # 算分动画期间由动画独占控制卡牌位置/缩放（本函数每帧把牌拽回 base_pos）
 	var mouse_global := get_viewport().get_mouse_position()
 	var box_tf := card_box.get_global_transform()
 	# 1) 命中判定：用「静止位置」base_pos，牌弹起后会整体上移，
@@ -4484,7 +5250,8 @@ func _update_card_hover(delta: float) -> void:
 		var panel: PanelContainer = info["panel"]
 		if not is_instance_valid(panel):
 			continue
-		if info.get("shaking", false):
+		# flying = 正在被动画独占控制（算分飞牌 / 手牌收拢发牌），别做悬停命中
+		if info.get("shaking", false) or info.get("flying", false):
 			info["hovered"] = false
 			continue
 		if _point_in_card(panel, info["base_pos"], mouse_global, box_tf):
@@ -4506,14 +5273,18 @@ func _update_card_hover(delta: float) -> void:
 	for i in card_infos.size():
 		var info: Dictionary = card_infos[i]
 		var panel: PanelContainer = info["panel"]
-		if not is_instance_valid(panel) or info.get("shaking", false):
-			continue  # 抖动动画期间不要抢它的 position
+		# ⚠ flying 必须在这里挡住：本函数每帧把牌 lerp 回 base_pos，
+		#   会与飞行 tween 逐帧打架（表现为牌往目标飞一点又被拽回来，来回抖）。
+		#   算分动画靠 _score_animating 整段挡掉了本函数所以看不出问题，
+		#   手牌收拢发牌没有那种全局开关，只能靠这个逐张的标志。
+		if not is_instance_valid(panel) or info.get("shaking", false) or info.get("flying", false):
+			continue  # 抖动 / 飞行期间不要抢它的 position
 		var hovering: bool = (i == hovered_idx)
 		info["hovered"] = hovering
 		# 抬起：鼠标悬停的牌 + 已选定的牌（已选牌保持"抬起来挂在那儿"的状态）
 		var raised: bool = hovering or info["selected"]
 		# 弹起方向：沿径向向外（远离圆心，即向上弹出）
-		var target: Vector2 = info["base_pos"] + info["radial"] * (26.0 if raised else 0.0)
+		var target: Vector2 = info["base_pos"] + info["radial"] * (CARD_RAISE if raised else 0.0)
 		panel.position = panel.position.lerp(target, 1.0 - exp(-12.0 * delta))
 		var s: float = 1.06 if hovering else 1.0
 		panel.scale = panel.scale.lerp(Vector2(s, s), 1.0 - exp(-14.0 * delta))
@@ -4606,17 +5377,39 @@ func _remove_gold_frame(panel: PanelContainer) -> void:
 
 
 func _finish_turn() -> void:
+	if _score_animating or _sort_animating:
+		return      # 算分动画 / 手牌排序进行中，忽略连点
+
 	# 执行所有选中的卡（防御：资金/行动位不足的记录为失败，不静默吞掉）
+	GameState.clear_score_ledger()
+	# ★ 出牌**前**的快照：这是本轮动画的起点，也是唯一含「本轮牌加成」的口径。
+	#   注意与下面那个 before 的区别 —— 那个取在 execute_action 之后，是弹窗文案用的旧口径。
+	var before_all: Dictionary = GameState.metrics.duplicate()
 	var failed: Array = []
-	for info in card_infos:
+	var played: Array = []      # 成功执行的卡片下标（甩牌与逐张弹分用）
+	# ★ 必须在 execute_action 之前置位：否则每张牌 emit 的 metrics_changed
+	#   会把指标条先刷到中途值，动画还没开始就已经跳过了。
+	_score_animating = true
+	for i in card_infos.size():
+		var info: Dictionary = card_infos[i]
 		if info["selected"]:
-			if not GameState.execute_action(info["card_id"], "effective"):
+			if GameState.execute_action(info["card_id"], "effective"):
+				played.append(i)
+			else:
 				failed.append(info["card_id"])
 			if GameState.game_over:
 				break   # 已经判负，剩下的牌不再执行
 
-	# 判负即时化：出牌当场把指标打到致死线以下 → 不再结算、不再进分配，直接给失败报告
+	# 成就判定放在判负早退**之前**：玩家确实打出了三张同类别，
+	# 哪怕这一手同时把自己打崩了，成就也该照给。
+	_check_flush_achievement(played)
+
+	# 判负即时化：出牌当场把指标打到致死线以下 → 不播动画、直接给失败报告
+	# （保住已修复的 P0 体验：判负必须立刻可见，不能先播 2.8 秒动画）
 	if GameState.game_over:
+		_score_animating = false
+		_update_hud()
+		_update_3d()
 		if _current_phase != "popup_report":
 			_show_report(GameState.generate_report())
 		return
@@ -4626,6 +5419,7 @@ func _finish_turn() -> void:
 	GameState.end_turn()
 	_defer_game_over = false
 	var after: Dictionary = GameState.metrics
+	var ledger: Array = GameState.score_ledger.duplicate(true)
 
 	var lines: Array = []
 	if GameState.last_crisis_name != "":
@@ -4645,10 +5439,33 @@ func _finish_turn() -> void:
 		lines.append("  ⚠ 以下行动因资金不足未能执行：%s" % "、".join(names))
 	lines.append("")
 	lines.append("结转资金：%d 万（未用资金享 %d%% 利息，上限 %d 万）" % [GameState.carry, int(GameState.INTEREST_RATE * 100), GameState.MAX_CARRY])
-	# 下回合危机预警
+	# 下回合危机预警。
+	# ⚠ 光报名字是不够的：危机是在**下回合结算时**才爆发的，而玩家在结算弹窗里看到的
+	#    指标是「本回合结算后」的值（还都在红线上）。只写个名字，玩家点「继续」
+	#    下一刻就判负，会觉得「明明条都还是绿的，怎么就输了」。所以这里必须把
+	#    「会掉多少 → 大概落到哪 → 会不会跌破红线」逐项写清楚。
 	if not GameState.pending_crisis.is_empty():
 		lines.append("")
-		lines.append("[color=#ffb060]⏳ 预警：%s[/color]" % GameState.pending_crisis["name"])
+		lines.append("[color=#ffb060]⏳ 预警：%s（下回合结算时爆发）[/color]" % GameState.pending_crisis["name"])
+		var fatal_names: Array = []
+		for e in GameState.pending_crisis.get("effects", []):
+			var em := str(e["metric"])
+			var ed := int(e["delta"])
+			var ecur := int(GameState.metrics.get(em, 0))
+			var eline := GameState.failure_threshold_for(em)
+			var eafter := clampi(ecur + ed, 0, 100)
+			var verdict := "[color=#7ee08a]仍在生态红线 %d 之上[/color]" % eline
+			if eafter < eline:
+				verdict = "[color=#ff5a5a]会跌破生态红线 %d[/color]" % eline
+				fatal_names.append(str(GameState.METRIC_NAMES.get(em, em)))
+			lines.append("  %s %+d → 约 %d，%s" % [GameState.METRIC_NAMES.get(em, em), ed, eafter, verdict])
+		# 逐项列了数字，但玩家未必会自己加总 —— 会致死时再补一句总括。
+		# ⚠ 措辞要**如实反映还能补救**：危机是在下一回合的回合末才结算的，
+		#   玩家下一回合整回合可以出牌把这一项拉上去，真的有可能救回来。
+		#   （早先这里写过「来不及补救了」—— 那是照搬危机还在「下回合开局」结算时的
+		#     旧时序，时序一挪就变成了假话。文案必须跟着机制走。）
+		if not fatal_names.is_empty():
+			lines.append("[color=#ff5a5a][b]⚠ 下回合结算时若仍未改善，将因「%s」跌破生态红线而被撤换 —— 你还有下回合一整个回合可以补救[/b][/color]" % "、".join(fatal_names))
 		var counter_names: Array = []
 		for cid in GameState.counter_card_ids():
 			counter_names.append(_card_name(cid))
@@ -4657,11 +5474,430 @@ func _finish_turn() -> void:
 		lines.append("[color=#8a8a8a]   （专项响应已列入下批：%s%s，出现概率已提高，不保证到手）[/color]" % [
 			"、".join(shown_c), tail_c])
 
+	# ★ 算分动画。必须在收起手牌 / 侧栏之**前**播 —— 指标行得留在屏幕上才有的演。
+	await _play_score_animation(ledger, before_all, played, after)
+
 	hand_panel.visible = false
 	bottom_right.visible = false
 	_slide_side_panels(true)  # 结算后侧边栏收回屏幕外，让出沙盘
 	_current_phase = "popup_settlement"
 	_show_popup("结算反馈", "\n".join(lines), "继续", _on_resolve_continue)
+	# 结算弹窗铺好之后再放攒下的危机预警/爆发。
+	# ⚠ 此时 popup_root 已可见，所以 _on_crisis_dismiss 里那句
+	#   `elif not popup_root.visible: _enter_allocate()` 不会误触发 ——
+	#   否则玩家在结算期间点掉危机弹窗会直接跳进分配阶段、把刚发的手牌重建掉。
+	_process_crisis_queue()
+
+
+## 小丑牌风算分动画：甩牌 → 逐张弹分 → 指标从上到下结算（含四类来源小票）
+##
+## 时长预算（秒）：甩牌 0.00-0.35 / 逐张弹分 0.35-1.40 / 指标结算 1.40-2.80
+##
+## ⚠ 时序一律用 create_timer，**绝不用 await tw.finished**：
+##   Tween 被 kill() 时 finished 永远不会发射，await 会永久挂起 = 游戏假死。
+## ⚠ 每个 await 之后都要校验 _score_anim_id：动画可能被重开/回主菜单作废。
+## ⚠ 本函数不做任何游戏逻辑、不碰任何随机数 —— 它只是「回放」已经算完的流水账。
+##   一旦在这里调了带 roll_random 的推演，同种子复现就废了。
+func _play_score_animation(ledger: Array, before_all: Dictionary, played: Array, after: Dictionary) -> void:
+	const T_FLY_END := 0.35        # 甩牌节拍结束时刻
+	const FLY_DUR := 0.26          # 单张牌飞行时长
+	const FLY_LAG := 0.035         # 相邻牌甩出的错开间隔
+	const FLY_LEAD := 10.0         # 砸桌过冲高度 —— 「重量感」的来源：先冲过头再砸下来
+	const FLY_SPACING := 132.0     # 落点间距（牌宽 122 + 10）
+	const CARD_BUDGET := 1.30      # 逐张弹分总预算（0.35 → 1.65）
+	const CARD_BEAT_MIN := 0.24
+	const CARD_BEAT_MAX := 0.45
+	const T_TOTAL := 3.00          # 全片目标时长（实测含收尾约 3.45s；玩测反馈偏快，已放慢）
+	const METRIC_MIN_STEP := 0.07
+	const METRIC_MAX_STEP := 0.55
+	const IDLE_WEIGHT := 0.25      # 未变动指标的权重（快速掠过）
+	const SHAKE_A := 7.0           # 卡牌抖动振幅（像素）
+	const DISMISS_DY := 260.0      # 未选中牌向下滑出的距离（手牌贴屏幕底，260 足够完全出屏）
+	const DISMISS_DUR := 0.26      # 滑出时长
+	const DISMISS_LAG := 0.012     # 相邻牌轻微错开，做出"扫过去"的层次
+
+	# 玩家在设置里可调的「结算速度」。这里是**时长倍率**（速度的倒数）：
+	# 速度 0.5× → 时长 2×。下面每一处节拍都乘它，整段动画才是匀速缩放，
+	# 不会出现「某个阶段还是原速」的断层。
+	var ds: float = 1.0 / clampf(score_speed, SCORE_SPEED_MIN, SCORE_SPEED_MAX)
+	var my_id := _score_anim_id
+	var vp := get_viewport().get_visible_rect().size
+	var t_start := Time.get_ticks_msec() / 1000.0
+
+	# ---- 建索引：metric → phase → 条目；card_id → 该卡的即时效果 ----
+	var by_metric: Dictionary = {}
+	for metric in GameState.METRIC_NAMES:
+		by_metric[metric] = {}
+	var card_fx: Dictionary = {}
+	for e in ledger:
+		var ph: String = str(e["phase"])
+		# crisis 也进小票了：危机结算已从「下回合开局」挪到「回合末」
+		# （见 game_state.gd 的 end_turn 注释），所以它本来就该出现在本回合的结算里。
+		var mt: String = str(e["metric"])
+		if not by_metric.has(mt):
+			continue
+		if not by_metric[mt].has(ph):
+			by_metric[mt][ph] = []
+		by_metric[mt][ph].append(e)
+		# card_delayed 是延迟效果的「预告」（applied=0），只用来在牌上标「N 回合后」，
+		# 不参与小票求和（它不在 SCORE_PHASE_ORDER 里）
+		if ph == "card" or ph == "card_delayed":
+			var rid: String = str(e["ref_id"])
+			if not card_fx.has(rid):
+				card_fx[rid] = []
+			card_fx[rid].append(e)
+
+	# ---- ① 甩牌（0.00 → 0.35）----
+	score_layer.visible = true
+	score_receipt.visible = false
+	# 把指标条钉回出牌前的值：动画从这里出发，不受之前残留 tween 的影响
+	for metric in metric_bars:
+		metric_bars[metric]["bar"].value = float(before_all.get(metric, 0))
+		metric_bars[metric]["val"].text = str(int(before_all.get(metric, 0)))
+
+	var n_played: int = played.size()
+	var slot_y: float = vp.y * 0.42
+	for k in n_played:
+		var info: Dictionary = card_infos[played[k]]
+		var panel: PanelContainer = info["panel"]
+		if not is_instance_valid(panel):
+			continue
+		info["flying"] = true          # 让 _update_card_hover 让出控制权（照抄 shaking 的既有模式）
+		panel.z_index = 5              # 保证甩出去的牌画在最上层
+		panel.scale = Vector2.ONE
+		var slot := Vector2(vp.x * 0.5 + (float(k) - float(n_played - 1) * 0.5) * FLY_SPACING, slot_y)
+		var target: Vector2 = _screen_to_card_box(slot) - panel.pivot_offset
+		var d: float = k * FLY_LAG * ds
+		var tw := panel.create_tween()
+		tw.set_trans(Tween.TRANS_QUART).set_ease(Tween.EASE_OUT)
+		tw.tween_property(panel, "position", target + Vector2(0, -FLY_LEAD), FLY_DUR * 0.70 * ds).set_delay(d)
+		# 末段换成 BACK/EASE_OUT：越过落点再弹回来 —— 这一下就是「砸在桌上」
+		tw.set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+		tw.tween_property(panel, "position", target, FLY_DUR * 0.30 * ds)
+		var tw_rot := panel.create_tween()
+		tw_rot.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+		tw_rot.tween_property(panel, "rotation", 0.0, FLY_DUR * 0.85 * ds).set_delay(d)
+		# 甩牌落桌：闷响，比叮低一档，做"拍在桌上"的质感
+		play_sfx("land", 1.0 + 0.05 * float(k), -4.0)
+
+	# 未选中的牌同步「收走」：向下滑出 + 淡出。
+	# 留在原地会变成碍眼的背景，视觉上也说不通 —— 这一手已经打完了。
+	# 与选中牌往上飞形成一上一下的分流，读起来就是「打出去的留下、没用的清掉」。
+	var dismissed: int = 0
+	for i in card_infos.size():
+		if played.has(i):
+			continue
+		var info_u: Dictionary = card_infos[i]
+		var panel_u: PanelContainer = info_u["panel"]
+		if not is_instance_valid(panel_u):
+			continue
+		info_u["flying"] = true      # 同样让 _update_card_hover 让出控制权
+		# 错开量按「第几张被收走」算，不按手牌下标 —— 否则手牌一多，
+		# 最后一张的延迟会拖过 T_FLY_END，跟后面第一处代次校验抢时序。
+		var du: float = float(dismissed) * DISMISS_LAG
+		dismissed += 1
+		var tw_u := panel_u.create_tween()
+		tw_u.set_parallel(true)
+		tw_u.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_IN)
+		tw_u.tween_property(panel_u, "position:y", panel_u.position.y + DISMISS_DY, DISMISS_DUR).set_delay(du)
+		tw_u.tween_property(panel_u, "modulate:a", 0.0, DISMISS_DUR * 0.75).set_delay(du)
+		tw_u.tween_property(panel_u, "scale", Vector2(0.88, 0.88), DISMISS_DUR).set_delay(du)
+
+	await get_tree().create_timer(T_FLY_END * ds).timeout
+	if _score_anim_id != my_id:
+		return _score_anim_cleanup()
+
+	# ---- ② 逐张弹分（0.35 → 1.40）----
+	var card_beat: float = clampf(CARD_BUDGET * ds / float(maxi(1, n_played)), CARD_BEAT_MIN * ds, CARD_BEAT_MAX * ds)
+	for k in n_played:
+		var info: Dictionary = card_infos[played[k]]
+		var panel: PanelContainer = info["panel"]
+		if not is_instance_valid(panel):
+			continue
+		_play_card_shake(panel, SHAKE_A)
+		# 连击音阶：逐张升高半音，是小丑牌那种层层叠加感的听觉来源
+		# 逐张弹分的叮：连击音阶是灵魂，但**不要给满音量** ——
+		# 3~4 张牌各响一次 0dB，和指标合计的 0dB 叠起来能到 9 次满音量，玩测反馈"吵"。
+		# 现在压到 -4dB，把"最响"留给指标合计那一下"落定"。
+		play_sfx("ding", 1.0 + 0.05 * float(k), -4.0)
+		var fx: Array = card_fx.get(str(info["card_id"]), [])
+		var anchor: Vector2 = panel.global_position + Vector2(panel.size.x * 0.5, 0.0)
+		for j in fx.size():
+			var e: Dictionary = fx[j]
+			var col: Color = METRIC_COLORS.get(str(e["metric"]), Color.WHITE)
+			if str(e["phase"]) == "card_delayed":
+				# 延迟预告压暗一档，与「已经落地」的即时效果在视觉上区分开
+				col = col.lerp(Color(0.72, 0.70, 0.66), 0.45)
+			_play_delta_float(_fmt_delta_line(e), col,
+					anchor + Vector2(0.0, -20.0 * float(j)), 0.04 + 0.05 * float(j))
+		await get_tree().create_timer(card_beat).timeout
+		if _score_anim_id != my_id:
+			return _score_anim_cleanup()
+
+	# ---- ③+④ 指标结算（→ 2.80）：按已耗时自适应预算，保证总时长贴近 2.8s ----
+	var elapsed: float = Time.get_ticks_msec() / 1000.0 - t_start
+	# 指标结算节拍的时长倍率（速度 ÷0.8 ⇔ 时长 ×1.25）
+	var ms: float = 1.0 / METRIC_SPEED
+	var budget: float = maxf(0.6 * ds, T_TOTAL * ds - elapsed) * ms
+	var weights: Dictionary = {}
+	var wsum: float = 0.0
+	for metric in GameState.METRIC_NAMES:
+		var w: float = IDLE_WEIGHT
+		if _phase_sum(by_metric[metric]) != 0:
+			w = 0.55 + 0.14 * float(by_metric[metric].size())
+		weights[metric] = w
+		wsum += w
+	for metric in GameState.METRIC_NAMES:
+		var step: float = clampf(budget * float(weights[metric]) / maxf(wsum, 0.001),
+				METRIC_MIN_STEP * ms, METRIC_MAX_STEP * ms)
+		await _play_metric_settle(metric, by_metric[metric], before_all, after, step)
+		if _score_anim_id != my_id:
+			return _score_anim_cleanup()
+
+	# ---- 收尾 ----
+	await get_tree().create_timer(0.12 * ds).timeout
+	if _score_anim_id != my_id:
+		return _score_anim_cleanup()
+	_score_anim_cleanup()
+
+
+## 某个指标的四类来源合计（按 applied 求和，天然含 clampi 截断修正）
+func _phase_sum(by_phase: Dictionary) -> int:
+	var s: int = 0
+	for ph in by_phase:
+		for e in by_phase[ph]:
+			s += int(e["applied"])
+	return s
+
+
+## 单项指标的结算演出：图标放大抖动 → 四类来源小数字依次弹 → 合计 → 数值条推进
+func _play_metric_settle(metric: String, by_phase: Dictionary, before_all: Dictionary,
+		after: Dictionary, step: float) -> void:
+	const ICON_SCALE := 1.75        # 图标放大倍数
+	const ICON_UP := 0.07           # 放大耗时
+	const ICON_SHAKE := 0.03        # 抖动单次行程
+	const ICON_DOWN := 0.09         # 缩回耗时
+	const SUB_GAP_MIN := 0.045
+	const SUB_GAP_MAX := 0.075
+	# 指标结算段的时长倍率（见 METRIC_SPEED）。下面每一处时长都要乘它 ——
+	# 少乘一处就会露出「某一段还是原速」的破绽。
+	var ms: float = 1.0 / METRIC_SPEED
+
+	var icon: TextureRect = metric_bars[metric]["icon"]
+	var bar: ProgressBar = metric_bars[metric]["bar"]
+	var val: Label = metric_bars[metric]["val"]
+	var row: VBoxContainer = metric_bars[metric]["row"]
+
+	# 图标 pivot 必须运行时取：容器会把图标纵向拉伸，写死尺寸会绕着错的点缩放
+	if is_instance_valid(icon):
+		icon.pivot_offset = icon.size * 0.5
+		var ti := icon.create_tween()
+		ti.set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+		ti.tween_property(icon, "scale", Vector2(ICON_SCALE, ICON_SCALE), ICON_UP * ms)
+		ti.set_trans(Tween.TRANS_SINE)
+		for r in 3:
+			ti.tween_property(icon, "rotation", deg_to_rad(7.0), ICON_SHAKE * ms)
+			ti.tween_property(icon, "rotation", deg_to_rad(-7.0), ICON_SHAKE * ms)
+		ti.tween_property(icon, "rotation", 0.0, ICON_SHAKE * ms)
+		ti.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+		ti.tween_property(icon, "scale", Vector2.ONE, ICON_DOWN * ms)
+
+	# 四类来源：按展示顺序累计真值，最后一段强制对齐录制真值
+	var parts: Array = []
+	var acc: int = int(before_all.get(metric, 0))
+	for ph in SCORE_PHASE_ORDER:
+		if not by_phase.has(ph):
+			continue
+		var v: int = _phase_sum({ph: by_phase[ph]})
+		acc += v
+		parts.append({"phase": ph, "value": v, "capped": _phase_capped(by_phase[ph]),
+				"target": clampi(acc, 0, 100)})
+	var true_end: int = int(after.get(metric, acc))
+	if not parts.is_empty():
+		parts[parts.size() - 1]["target"] = true_end   # ★ 末段对齐真值 → 终点恒正确
+
+	var shown: Array = parts.filter(func(p): return int(p["value"]) != 0)
+	# 0.22 是留给「图标各段 + 合计」的固定时间，同样要跟着缩放
+	var gap: float = clampf((step - 0.22 * ms) / float(maxi(1, shown.size())),
+			SUB_GAP_MIN * ms, SUB_GAP_MAX * ms)
+
+	# 小票：先填第一行并定位，再逐行追加
+	_rebuild_receipt(metric, shown, 0, true_end)
+	await get_tree().process_frame      # 等容器算完 size 才能定位
+	_place_receipt(row)
+	for i in shown.size():
+		if i > 0:
+			_rebuild_receipt(metric, shown, i, true_end)
+		# 小数字逐次降 key 且压到 -8dB；合计给 0dB —— 听感是「噼啪数完 → 咚，落定」。
+		# 不分层的话，1.4 秒内响十几次会变成机关枪。
+		play_sfx("ding", 1.15 - 0.05 * float(i), -11.0)
+		var seg: float = gap
+		var target_v: int = int(shown[i]["target"])
+		var tbs := bar.create_tween()
+		tbs.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+		tbs.tween_property(bar, "value", float(target_v), seg)
+		await get_tree().create_timer(seg).timeout
+
+	if shown.is_empty():
+		# 该项本轮无变化：图标只放大缩回，数值不动
+		await get_tree().create_timer(step).timeout
+		return
+
+	# 合计 + 数值文本
+	await get_tree().create_timer(maxf(0.0, step * 0.62 - gap * float(shown.size()))).timeout
+	_rebuild_receipt(metric, shown, shown.size(), true_end)
+	# 合计的那一声是整段里最"重"的落定音（0dB 层里最低频），
+	# 其余都压在它之下，听感才是"噼啪数完 → 咚，落定"
+	play_sfx("ding", 0.85, -3.0)
+	var tbf := bar.create_tween()
+	tbf.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+	tbf.tween_property(bar, "value", float(true_end), maxf(0.10 * ms, step * 0.25))
+	val.text = str(true_end)
+	var tv := val.create_tween()
+	tv.set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	tv.tween_property(val, "scale", Vector2(1.25, 1.25), 0.06 * ms)
+	tv.tween_property(val, "scale", Vector2.ONE, 0.08 * ms)
+	await get_tree().create_timer(maxf(0.0, step * 0.38)).timeout
+
+
+## 该 phase 的条目里有没有被 clampi 截断的（用于「已满/见底」角标）
+func _phase_capped(entries: Array) -> bool:
+	for e in entries:
+		if int(e["applied"]) != int(e["raw"]):
+			return true
+	return false
+
+
+## 把一笔增减格式化成「水质 +8」/「水质 +0（已满）」/「水质 +4（2 回合后）」
+func _fmt_delta_line(e: Dictionary) -> String:
+	var name: String = str(GameState.METRIC_NAMES.get(str(e["metric"]), str(e["metric"])))
+	# 延迟效果的预告：显示 raw（未来会生效的值）而不是 applied（恒为 0），
+	# 并带上倒计时 —— 否则会显示成「水质 +0」，比不显示更让人困惑
+	if str(e["phase"]) == "card_delayed":
+		# ⚠ 口径：remaining=1 表示**本回合结算时**就生效，不是「1 回合后」——
+		# advance_effects() 在本回合的 end_turn 里就把它减到 0 并立即结算了。
+		# 所以 remaining>=2 时，真正还要等的回合数是 remaining-1。
+		var rem: int = int(e.get("remaining", 1))
+		var when: String = "本回合结算时生效" if rem <= 1 else "%d 回合后生效" % (rem - 1)
+		return "%s %+d（%s）" % [name, int(e["raw"]), when]
+	var applied: int = int(e["applied"])
+	var suffix: String = ""
+	if applied != int(e["raw"]):
+		suffix = "（已满）" if applied >= 0 else "（见底）"
+	return "%s %+d%s" % [name, applied, suffix]
+
+
+## 算分小票：重建内容并滑到当前指标行的左侧
+##   shown       = 需要展示的来源行 [{phase, value, capped, target}]
+##   reveal_cnt  = 显示到第几行（传 shown.size() 表示再追加「合计」行）
+func _rebuild_receipt(metric: String, shown: Array, reveal_cnt: int, true_end: int) -> void:
+	if score_receipt_box == null:
+		return
+	for c in score_receipt_box.get_children():
+		c.queue_free()
+	var col: Color = METRIC_COLORS.get(metric, Color.WHITE)
+	for i in mini(reveal_cnt, shown.size()):
+		var p: Dictionary = shown[i]
+		var hb := HBoxContainer.new()
+		hb.add_theme_constant_override("separation", 8)
+		var nm := _make_label(str(SCORE_PHASE_NAMES.get(str(p["phase"]), str(p["phase"]))), 11,
+				Color(0.68, 0.66, 0.62))
+		nm.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		hb.add_child(nm)
+		var v: int = int(p["value"])
+		var txt: String = "%+d" % v
+		var vc: Color = col
+		if bool(p["capped"]):
+			txt += "（已满）" if v >= 0 else "（见底）"
+			vc = Color(0.62, 0.60, 0.56)
+		hb.add_child(_make_label(txt, 13, vc))
+		score_receipt_box.add_child(hb)
+	if reveal_cnt >= shown.size():
+		var hb2 := HBoxContainer.new()
+		hb2.add_theme_constant_override("separation", 8)
+		var nm2 := _make_label("合计", 13, Color(0.90, 0.86, 0.78))
+		nm2.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		hb2.add_child(nm2)
+		hb2.add_child(_make_label("%+d" % true_end, 15, col))
+		score_receipt_box.add_child(hb2)
+	score_receipt.visible = true
+
+
+## 把小票滑到指标行的左侧（避开右上角的牌堆区域）
+func _place_receipt(row: VBoxContainer) -> void:
+	if score_receipt == null or row == null or not is_instance_valid(row):
+		return
+	var vp := get_viewport().get_visible_rect().size
+	var rg: Rect2 = row.get_global_rect()
+	var target := Vector2(
+		rg.position.x - score_receipt.size.x - 10.0,
+		clampf(rg.get_center().y - score_receipt.size.y * 0.5, 6.0, vp.y - score_receipt.size.y - 6.0))
+	var tw := score_receipt.create_tween()
+	tw.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+	tw.tween_property(score_receipt, "position", target, 0.12 / METRIC_SPEED)
+
+
+## 卡牌抖动：在**当前位置**上抖（甩牌后牌已经不在 base_pos 了）
+func _play_card_shake(panel: PanelContainer, amp: float) -> void:
+	const SHAKE_T := 0.035
+	var base: Vector2 = panel.position
+	var tw := panel.create_tween()
+	tw.set_trans(Tween.TRANS_SINE)
+	for i in 3:
+		tw.tween_property(panel, "position:x", base.x + amp, SHAKE_T)
+		tw.tween_property(panel, "position:x", base.x - amp, SHAKE_T)
+	tw.tween_property(panel, "position:x", base.x, SHAKE_T * 1.2)
+
+
+## 卡牌上方弹出「+N」飘字：弹入 → 停留 → 上升淡出
+func _play_delta_float(text: String, color: Color, anchor: Vector2, delay: float) -> void:
+	if score_floats == null:
+		return
+	var l := _make_label(text, 18, color)
+	l.position = anchor + Vector2(-60.0, -14.0)
+	l.custom_minimum_size = Vector2(120.0, 0.0)
+	l.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	l.pivot_offset = Vector2(60.0, 10.0)
+	l.modulate.a = 0.0
+	l.scale = Vector2(0.6, 0.6)
+	score_floats.add_child(l)
+	var tw := l.create_tween()
+	tw.set_parallel(true)
+	tw.set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	tw.tween_property(l, "scale", Vector2.ONE, 0.10).set_delay(delay)
+	tw.tween_property(l, "modulate:a", 1.0, 0.08).set_delay(delay)
+	tw.chain().set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN)
+	tw.tween_property(l, "position:y", l.position.y - 26.0, 0.30)
+	tw.parallel().tween_property(l, "modulate:a", 0.0, 0.30)
+
+
+## 唯一的复位出口：成功播完与中途作废都走这里。
+## ⚠ _update_hud() 必须在 _score_animating = false **之后**调，
+##   否则会被它自己的抑制逻辑吞掉，指标条永远停在动画中途的值。
+func _score_anim_cleanup() -> void:
+	_score_animating = false
+	for info in card_infos:
+		var panel: PanelContainer = info.get("panel")
+		if not is_instance_valid(panel):
+			continue
+		if info.get("flying", false):
+			info["flying"] = false
+			panel.z_index = 0
+			panel.scale = Vector2.ONE
+			# 未选中的牌是被淡出收走的，必须把 alpha 也复位，
+			# 否则中断复位后它们会以全透明状态"复活"
+			panel.modulate.a = 1.0
+			panel.rotation = info.get("theta", 0.0)
+			panel.position = info.get("base_pos", panel.position)
+	if score_layer != null:
+		score_layer.visible = false
+	if score_receipt != null:
+		score_receipt.visible = false
+	if score_floats != null:
+		for c in score_floats.get_children():
+			c.queue_free()
+	_update_hud()
+	_update_3d()
 
 
 func _on_resolve_continue() -> void:
@@ -4711,6 +5947,14 @@ func _on_game_end(report: Dictionary) -> void:
 func _show_report(r: Dictionary) -> void:
 	_current_phase = "popup_report"
 	_clear_save()  # 一局已结束，清掉存档（不能再继续）
+	# 通关成就必须在**这里**判，不能放进 _on_game_end：
+	# 打满回合的通关走的是 _finish_turn → _advance_to_next → _show_report 这条路，
+	# 而 _on_game_end 只处理判负（`if report.is_failure`），通关时它什么都不做；
+	# 何况结算期间 _defer_game_over 还会让它整个提前 return。
+	# _show_report 是两种结局的唯一汇合点，判在这里才不会漏。
+	# 只认「不是判负」，不看分数档位 —— 困难难度能撑满 16 回合本身就是成就。
+	if not bool(r.get("is_failure", false)) and GameState.difficulty == GameState.Difficulty.HARD:
+		Achievements.try_unlock("hard_clear")
 	var earned: int = r.get("talent_points", 0)
 	if earned > 0:
 		Talents.award(earned)
@@ -4812,18 +6056,29 @@ func _make_label(text: String, size: int, color: Color) -> Label:
 	return l
 
 
-func _make_button(text: String, cb: Callable, size: int) -> Button:
+## danger = true 时换成暗红木纹 + 浅红字：危险操作（清空存档）要一眼看出来
+func _make_button(text: String, cb: Callable, size: int, danger: bool = false) -> Button:
 	var b := Button.new()
 	b.text = text
 	b.add_theme_font_size_override("font_size", _snap_px(size))
-	b.add_theme_color_override("font_color", Color(0.96, 0.90, 0.76))
-	b.add_theme_color_override("font_hover_color", Color(1.0, 0.95, 0.82))
-	b.add_theme_color_override("font_pressed_color", Color(0.90, 0.82, 0.66))
-	b.add_theme_color_override("font_disabled_color", Color(0.55, 0.50, 0.42))
-	b.add_theme_stylebox_override("normal", _wood_button(Color(0.42, 0.30, 0.18), Color(0.24, 0.16, 0.09)))
-	b.add_theme_stylebox_override("hover", _wood_button(Color(0.52, 0.38, 0.23), Color(0.30, 0.20, 0.11)))
-	b.add_theme_stylebox_override("pressed", _wood_button(Color(0.28, 0.19, 0.11), Color(0.16, 0.10, 0.05)))
-	b.add_theme_stylebox_override("disabled", _wood_button(Color(0.26, 0.22, 0.17), Color(0.18, 0.15, 0.11)))
+	if danger:
+		b.add_theme_color_override("font_color", Color(1.0, 0.86, 0.82))
+		b.add_theme_color_override("font_hover_color", Color(1.0, 0.95, 0.91))
+		b.add_theme_color_override("font_pressed_color", Color(0.92, 0.74, 0.70))
+		b.add_theme_color_override("font_disabled_color", Color(0.62, 0.48, 0.46))
+		b.add_theme_stylebox_override("normal", _wood_button(Color(0.52, 0.16, 0.14), Color(0.30, 0.07, 0.06)))
+		b.add_theme_stylebox_override("hover", _wood_button(Color(0.68, 0.22, 0.18), Color(0.40, 0.10, 0.08)))
+		b.add_theme_stylebox_override("pressed", _wood_button(Color(0.36, 0.10, 0.09), Color(0.20, 0.05, 0.04)))
+		b.add_theme_stylebox_override("disabled", _wood_button(Color(0.30, 0.18, 0.17), Color(0.20, 0.12, 0.11)))
+	else:
+		b.add_theme_color_override("font_color", Color(0.96, 0.90, 0.76))
+		b.add_theme_color_override("font_hover_color", Color(1.0, 0.95, 0.82))
+		b.add_theme_color_override("font_pressed_color", Color(0.90, 0.82, 0.66))
+		b.add_theme_color_override("font_disabled_color", Color(0.55, 0.50, 0.42))
+		b.add_theme_stylebox_override("normal", _wood_button(Color(0.42, 0.30, 0.18), Color(0.24, 0.16, 0.09)))
+		b.add_theme_stylebox_override("hover", _wood_button(Color(0.52, 0.38, 0.23), Color(0.30, 0.20, 0.11)))
+		b.add_theme_stylebox_override("pressed", _wood_button(Color(0.28, 0.19, 0.11), Color(0.16, 0.10, 0.05)))
+		b.add_theme_stylebox_override("disabled", _wood_button(Color(0.26, 0.22, 0.17), Color(0.18, 0.15, 0.11)))
 	b.pressed.connect(cb)
 	return b
 
@@ -4863,6 +6118,8 @@ func _panel_style(p: PanelContainer, color: Color) -> void:
 
 ## 左侧/右侧信息面板滑出屏幕（结算后）或滑回（下一回合开始）
 func _slide_side_panels(out: bool) -> void:
+	# 收出屏幕后额外留的余量（像素）。必须让整块面板离开可视区。
+	const GAP := 24.0
 	if left_panel == null or right_panel == null:
 		return
 	var tw := create_tween()
@@ -4871,10 +6128,15 @@ func _slide_side_panels(out: bool) -> void:
 	if out:
 		var lw := left_panel.offset_right - left_panel.offset_left
 		var rw := right_panel.offset_right - right_panel.offset_left
-		tw.tween_property(left_panel, "offset_left", -lw - 6, 0.35)
-		tw.tween_property(left_panel, "offset_right", -6, 0.35)
-		tw.tween_property(right_panel, "offset_left", -6, 0.35)
-		tw.tween_property(right_panel, "offset_right", rw - 6, 0.35)
+		# 左面板锚在左缘：offset 取负值 = 移到屏幕左侧之外
+		tw.tween_property(left_panel, "offset_left", -lw - GAP, 0.35)
+		tw.tween_property(left_panel, "offset_right", -GAP, 0.35)
+		# 右面板锚在**右缘**（anchor_left = anchor_right = 1.0，x = 屏宽 + offset）：
+		# offset 必须取**正值**才表示移出屏幕右侧。
+		# ⚠ 原实现照抄了左面板的负号（-6 / rw-6），结果是面板左缘停在「屏宽-6」处，
+		#   屏幕上残留 6px 的一条边 —— 方向反了，等于往屏幕里推。
+		tw.tween_property(right_panel, "offset_left", GAP, 0.35)
+		tw.tween_property(right_panel, "offset_right", rw + GAP, 0.35)
 	else:
 		tw.tween_property(left_panel, "offset_left", 6, 0.35)
 		tw.tween_property(left_panel, "offset_right", 210, 0.35)
@@ -4907,6 +6169,16 @@ func _grid_image(grid: String, main: Color, dark: Color, light: Color) -> Image:
 				"o": img.set_pixel(x, y, light)
 				_: img.set_pixel(x, y, Color(0, 0, 0, 0))
 	return img
+
+
+## 生成放大到约 px 宽的像素图标**纹理**（最近邻，保持锐利）。
+## 与 _make_icon 的区别：那个返回 TextureRect 控件，用于往容器里塞；
+## 这个返回 Texture，因为 Button.icon 和运行时换图要的是纹理本身。
+func _pixel_icon_sized(grid: String, main_color: Color, px: int) -> ImageTexture:
+	var img := _grid_image(grid, main_color, main_color.darkened(0.38), main_color.lightened(0.32))
+	var scale := maxi(1, int(round(float(px) / maxf(1.0, float(img.get_width())))))
+	img.resize(img.get_width() * scale, img.get_height() * scale, Image.INTERPOLATE_NEAREST)
+	return ImageTexture.create_from_image(img)
 
 
 ## 生成指定显示尺寸的像素图标控件（最近邻放大保持锐利）
