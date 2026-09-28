@@ -3,6 +3,13 @@
 
 用法（在工程根目录）：
     python tools/balance_scan.py
+    python tools/balance_scan.py --tiers effective     # 只扫「实际能打出来的档位」
+    python tools/balance_scan.py --gs old_game_state.gd   # 扫另一份卡表（改动前后对照）
+
+⚠ 为什么要能只扫一档（2026-09-28 发现）：出牌界面把档位**写死成 effective**
+  （main.gd 的 _effect_text / _toggle_card / _committed_funds / execute_action 四处），
+  基础档与深度档目前只在「卡牌详情」弹窗里作为文字出现、玩家打不出来。
+  所以「玩家真正会遇到的定价问题」只存在于 effective 这一档 —— 用本参数验证那个子空间。
 
 判据：
   1) 套利：存在两张卡（可跨卡、任意档位）合计费用 < 某一张的费用，
@@ -37,10 +44,14 @@ def load(path=GS):
 
 
 def main():
-    cards = load()
+    tiers = TIERS
+    if "--tiers" in sys.argv:
+        tiers = sys.argv[sys.argv.index("--tiers") + 1].split(",")
+    gs = sys.argv[sys.argv.index("--gs") + 1] if "--gs" in sys.argv else GS
+    cards = load(gs)
     plays = []
     for c in cards:
-        for t in TIERS:
+        for t in tiers:
             vec = {m: 0.0 for m in METRICS}
             for e in c["tiers"][t]["effects"]:
                 vec[e["metric"]] += e["delta"] * DELAY_W[e["delay"]]
@@ -86,7 +97,7 @@ def main():
     # 性价比分布
     rates = []
     for c in cards:
-        for t in TIERS:
+        for t in tiers:
             v = sum(e["delta"] * DELAY_W[e["delay"]] for e in c["tiers"][t]["effects"])
             cost = max(1, gr(c["cost"] * TIER_MULT[t]))
             if v > 0:

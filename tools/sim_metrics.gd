@@ -23,6 +23,9 @@ var Tal: Node
 var METRICS_ORDER: Array = []
 var N := N_GAMES
 var DIFFICULTY := DIFF
+## 本次允许出的档位。默认三档全开（= 引擎数据层的能力）；
+## 传 "effective" 则模拟**当前真实对局**（出牌界面把档位写死成 effective，见 main.gd）。
+var TIERS_ALLOWED: Array = ["basic", "effective", "deep"]
 
 func _initialize() -> void:
 	# 命令行：-- <难度 0/1/2> <局数>
@@ -31,6 +34,8 @@ func _initialize() -> void:
 		DIFFICULTY = int(uargs[0])
 	if uargs.size() >= 2 and str(uargs[1]).is_valid_int():
 		N = int(uargs[1])
+	if uargs.size() >= 3 and str(uargs[2]) != "":
+		TIERS_ALLOWED = str(uargs[2]).split(",")
 	var t0 := Time.get_ticks_msec()
 	GS = root.get_node_or_null("GameState")
 	Tal = root.get_node_or_null("Talents")
@@ -46,6 +51,7 @@ func _initialize() -> void:
 		"n_games": N, "difficulty": DIFFICULTY,
 		"difficulty_name": ["简单", "普通", "困难"][DIFFICULTY],
 		"turns": GS.TOTAL_TURNS, "action_slots": GS.action_slots(),
+		"tiers_allowed": TIERS_ALLOWED,
 		"funding_per_turn": GS.BASE_FUNDING - int(GS.FUNDING_PENALTY[DIFFICULTY]) - GS.OPERATION_COST,
 		"thresholds": {},
 		"metrics": METRICS_ORDER,
@@ -132,7 +138,7 @@ func _choose(strategy: String, pool: Array) -> Dictionary:
 		var cid := _pick_for(strategy, pool)
 		if cid == "":
 			return {}
-		for tier in [_roll_tier(), "basic", "effective", "deep"]:
+		for tier in [_roll_tier()] + TIERS_ALLOWED:
 			if GS.can_execute(cid, tier):
 				return {"id": cid, "tier": tier}
 	return {}
@@ -149,7 +155,7 @@ func _greedy_choice(absolute: bool = false, income: bool = false) -> Dictionary:
 	for c in GS.ACTION_CARDS:
 		var cid := str(c["id"])
 		var is_counter: bool = cid in counter
-		for tier in ["basic", "effective", "deep"]:
+		for tier in TIERS_ALLOWED:
 			if not GS.can_execute(cid, tier):
 				continue
 			var cost: int = int(GS.tier_cost(cid, tier))
@@ -329,10 +335,12 @@ func _run(strategy: String, pool: Array) -> Dictionary:
 
 
 func _roll_tier() -> String:
+	if TIERS_ALLOWED.size() == 1:
+		return str(TIERS_ALLOWED[0])
 	var r := randf()
 	var acc := 0.0
-	for t in ["basic", "effective", "deep"]:
+	for t in TIERS_ALLOWED:
 		acc += float(TIER_ROLL[t])
 		if r <= acc:
 			return t
-	return "basic"
+	return str(TIERS_ALLOWED[0])
