@@ -2325,14 +2325,33 @@ func _build_changelog_rows(col: VBoxContainer) -> void:
 			col.add_child(_make_label("◆ " + str(sec["head"]), 16, Color(0.62, 0.82, 1.0)))
 			for item in sec["items"]:
 				var body := RichTextLabel.new()
-				body.bbcode_enabled = false
+				# 公告正文里作者会写 **重点**（markdown 习惯）。以前 bbcode 是关的，
+				# 于是星号原样露在页面上（0.0.5 那几条一直是这样）。
+				# 现在开 bbcode + 把 **x** 转成 [b]x[/b]，顺带把其余方括号转义，
+				# 免得正文里出现 [某字] 被当成标签吃掉。
+				body.bbcode_enabled = true
 				body.fit_content = true
 				body.scroll_active = false
 				body.custom_minimum_size = Vector2(520, 0)
 				body.add_theme_font_size_override("normal_font_size", _snap_px(14))
 				body.add_theme_color_override("default_color", Color(0.92, 0.90, 0.86))
-				body.text = "· " + str(item)
+				body.text = "· " + _md_emphasis(str(item))
 				col.add_child(body)
+
+
+## 把公告里的 **重点** 转成 BBCode 加粗。
+## ⚠ 开了 bbcode 之后，正文里其余的方括号必须转义成 [lb]，否则会被当成标签吃掉 ——
+##   例如「[已解决]」这种写法会静默消失。所以先转义、再插 [b]。
+func _md_emphasis(s: String) -> String:
+	var parts := s.split("**")
+	var out := ""
+	for i in parts.size():
+		var chunk: String = str(parts[i]).replace("[", "[lb]")
+		if i % 2 == 1:
+			out += "[b]" + chunk + "[/b]"
+		else:
+			out += chunk
+	return out
 
 
 # ==================== 成就 ====================
