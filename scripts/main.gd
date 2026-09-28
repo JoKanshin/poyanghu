@@ -5438,6 +5438,10 @@ func _finish_turn() -> void:
 			names.append(_card_name(cid))
 		lines.append("  ⚠ 以下行动因资金不足未能执行：%s" % "、".join(names))
 	lines.append("")
+	# 指标换来的额外拨款：**只报结果，不解释是哪一项换来的** ——
+	# 「哪些指标决定钱」属于隐性参数，要玩家自己从数字里总结（与 METRIC_REMEDY 同一条铁律）。
+	if GameState.last_metric_funding != 0:
+		lines.append("额外拨款：%+d 万" % GameState.last_metric_funding)
 	lines.append("结转资金：%d 万（未用资金享 %d%% 利息，上限 %d 万）" % [GameState.carry, int(GameState.INTEREST_RATE * 100), GameState.MAX_CARRY])
 	# 下回合危机预警。
 	# ⚠ 光报名字是不够的：危机是在**下回合结算时**才爆发的，而玩家在结算弹窗里看到的

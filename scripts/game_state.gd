@@ -26,6 +26,27 @@ const PENALTY_MULT := { Difficulty.EASY: 1.0, Difficulty.NORMAL: 1.5, Difficulty
 #   困难档最坏 -9 仍然比普通档的 -8 更凶，难度梯度保住。
 const HARD_ROUTINE_FLOOR_BONUS := 1
 const FUNDING_PENALTY := { Difficulty.EASY: 0, Difficulty.NORMAL: 20, Difficulty.HARD: 35 }       # 每回合拨款削减（万）
+
+# ==================== 指标 → 每回合拨款（2026-09-28 第二条玩测反馈）====================
+# 反馈原话：「在困难模式里有几个数值，比如社会信任和候鸟，感觉没啥用」。
+#
+# 量化诊断（tools/sim_metrics.gd，困难档 400 局）：这两项原本**只进结算报告的分数**，
+# 涨也好、掉也好，都不会改变牌桌上的收益，于是玩家没有任何理由为它们出牌 ——
+#   候鸟：死因占比 0.3%、危机伤害占比 5.6%，且只在「植被 < 42」时才会自然衰减；
+#   社区信任：自然衰减的门槛（< 45）**比困难档自己的致死线（50）还低**，
+#             也就是说，只要你还活着，它就永远不会自然掉 —— 需要维护的理由根本不存在。
+#
+# 修法：把「钱从哪来」接到这两项上 —— 它们从"只读的分数"变成"经济引擎"。
+#   · 社区信任高 → 地方配套与群众配合到位，拨款更多
+#   · 候鸟种群旺 → 观鸟 / 生态旅游能拉到的社会资金更多
+# 表格格式：指标 → [[阈值, 金额(万)], ...]，**从上往下取第一个满足的**（写的时候按强度递减）。
+# 阈值正数 = 指标 ≥ 阈值 时生效；负数 = 指标 ≤ |阈值| 时生效。
+# ⚠ 玩家可见文案不解释因果（只给结果）—— 结算里只多一行「额外拨款：+N 万」，
+#   "为什么多"要玩家自己从数字里总结。
+const FUNDING_STEPS := {
+	"community": [[70, 15], [60, 8], [-30, -15]],
+	"birds":     [[70, 10], [-25, -5]],
+}
 const CRISIS_CHANCE := { Difficulty.EASY: 0.38, Difficulty.NORMAL: 0.55, Difficulty.HARD: 0.68 }  # 危机概率基数
 const CRISIS_SLOPE := { Difficulty.EASY: 0.22, Difficulty.NORMAL: 0.25, Difficulty.HARD: 0.28 }   # 危机概率随回合增幅
 const START_FLOOR := { Difficulty.EASY: 48, Difficulty.NORMAL: 48, Difficulty.HARD: 48 }          # 开局指标下限（各难度统一，难度只体现在阈值）
@@ -1027,6 +1048,7 @@ const EVENTS := {
 var turn: int = 0
 var funds: int = 0          # 本回合可用资金
 var carry: int = 0          # 结转下回合
+var last_metric_funding: int = 0   # 上一回合由六项指标换来的额外拨款（结算里显示用，仅结果不给解释）
 var research_points: int = 0
 var metrics: Dictionary = {}
 var species_pop: Dictionary = {}     # 每物种数量 0-100
@@ -1085,6 +1107,7 @@ func _ready() -> void:
 func serialize() -> Dictionary:
 	return {
 		"turn": turn, "funds": funds, "carry": carry,
+		"last_metric_funding": last_metric_funding,
 		"research_points": research_points,
 		"metrics": metrics.duplicate(),
 		"species_pop": species_pop.duplicate(),
@@ -1114,6 +1137,7 @@ func load_state(d: Dictionary) -> void:
 	turn = int(d.get("turn", 0))
 	funds = int(d.get("funds", 0))
 	carry = int(d.get("carry", 0))
+	last_metric_funding = int(d.get("last_metric_funding", 0))
 	research_points = int(d.get("research_points", 0))
 	metrics = _int_dict(d.get("metrics", {}))
 	species_pop = _int_dict(d.get("species_pop", {}))
@@ -1264,18 +1288,31 @@ func _plant_target(pid: String) -> int:
 	return int(sum / drivers.size())
 
 
+## 本回合由六项指标换来的额外拨款（万）。FUNDING_STEPS 的求值器。
+## 每一项取**第一个**满足的阶梯（表按强度递减写），不累加同一项的多档。
+func _metric_funding() -> int:
+	var extra := 0
+	for metric in FUNDING_STEPS:
+		var cur: int = int(metrics.get(metric, 0))
+		for step in FUNDING_STEPS[metric]:
+			var thr: int = int(step[0])
+			var hit: bool = (cur >= thr) if thr > 0 else (cur <= -thr)
+			if hit:
+				extra += int(step[1])
+				break
+	return extra
+
+
 ## 回合开始：结算拨款 + 扣运营支出
 func start_new_turn() -> void:
 	turn += 1
 	used_action_ids = []
 	log_messages = []
 
-	# 基础拨款随信任度浮动
-	var funding := BASE_FUNDING
-	if metrics["community"] >= 70:
-		funding += 15
-	elif metrics["community"] <= 30:
-		funding -= 15
+	# 基础拨款随指标浮动：社区信任、候鸟种群决定能拉到多少社会/旅游资金。
+	# 具体阶梯见 FUNDING_STEPS；这一段是「指标 → 钱」的唯一入口。
+	last_metric_funding = _metric_funding()
+	var funding := BASE_FUNDING + last_metric_funding
 	# 按难度削减每回合拨款（普通/困难）
 	funding -= FUNDING_PENALTY[difficulty]
 	# 天赋加成：基础拨款 + 运营成本减免
