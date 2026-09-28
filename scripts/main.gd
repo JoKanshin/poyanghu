@@ -36,6 +36,10 @@ var creeper_mesh: MeshInstance3D = null
 # UI 节点
 var left_panel: PanelContainer
 var turn_label: Label
+## 左上「资金 / 回合」栏最下面的「本局天赋」常驻区（0.0.8）。
+## 词条每局开局随机，所以这里只建容器、内容由 _refresh_run_talents() 按需重画。
+var talents_row: VBoxContainer
+var _talents_sig: String = ""      # 已画出的词条签名，内容没变就不重建节点
 var season_label: Label
 var funds_label: Label
 var spent_label: Label
@@ -1672,6 +1676,16 @@ func _build_ui() -> void:
 	research_label.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	research_row.add_child(research_label)
 	lv.add_child(research_row)
+
+	# --- 本局天赋：常驻在资金栏最下面 ---
+	# 每局开局随机 0~3 条（见 talents.gd roll_for_run），这里只做展示；
+	# 显示口径与开局弹窗一致：词条名 + 效果，右边对齐（和上面几行同样的排版习惯）。
+	lv.add_child(HSeparator.new())
+	lv.add_child(_make_label("本局天赋", 13, Color(0.9, 0.86, 0.72)))
+	talents_row = VBoxContainer.new()
+	talents_row.add_theme_constant_override("separation", 3)
+	lv.add_child(talents_row)
+	_refresh_run_talents()
 
 	# --- 右侧：六项指标（收窄为竖条）---
 	right_panel = PanelContainer.new()
@@ -5026,6 +5040,7 @@ func _update_hud() -> void:
 	event_label.text = _current_event if _current_event != "" else "暂无"
 	_update_selected_label()
 	_refresh_warn_bar()
+	_refresh_run_talents()      # 左上「本局天赋」常驻行（内容没变时直接跳过）
 
 
 # ==================== 事件 / 结算 / 知识卡 / 报告 ====================
@@ -5037,6 +5052,41 @@ func _on_event(text: String) -> void:
 	bottom_right.visible = false
 	tier_lever.visible = false
 	_show_popup("第 %d 回合 · 事件" % GameState.turn, text, "开始分配资金", _enter_allocate)
+
+
+## 画左上「本局天赋」常驻区：每局开局掷出的 0~3 条词条。
+## ⚠ 本函数被 _update_hud() 调得很勤（指标/资金一变就调），所以拿签名做缓存：
+##   词条列表没变就直接返回，绝不每帧重建节点。
+func _refresh_run_talents() -> void:
+	if talents_row == null:
+		return
+	var sig := ",".join(Talents.granted)
+	if sig == _talents_sig:
+		return
+	_talents_sig = sig
+	for c in talents_row.get_children():
+		talents_row.remove_child(c)
+		c.queue_free()
+	if Talents.granted.is_empty():
+		talents_row.add_child(_make_label("本局无额外天赋", 12, Color(0.68, 0.66, 0.62)))
+		return
+	for id in Talents.granted:
+		var t: Dictionary = Talents.entry(str(id))
+		if t.is_empty():
+			continue
+		var row := HBoxContainer.new()
+		row.add_theme_constant_override("separation", 4)
+		var nm := _make_label(str(t["name"]), 12, Color(1, 0.88, 0.55))
+		nm.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		row.add_child(nm)
+		var ef := _make_label(str(t["desc"]), 11, Color(0.88, 0.90, 0.92))
+		ef.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		ef.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+		ef.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		ef.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART   # 名字长的词条不至于被裁
+		row.add_child(ef)
+		row.tooltip_text = "%s　%s" % [str(t["name"]), str(t["desc"])]
+		talents_row.add_child(row)
 
 
 func _enter_allocate() -> void:
