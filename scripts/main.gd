@@ -139,6 +139,7 @@ var menu_start_btn: Button
 var menu_easy_btn: Button
 var menu_normal_btn: Button
 var menu_hard_btn: Button
+var menu_nightmare_btn: Button
 var menu_back_btn: Button
 var menu_seed_start_btn: Button
 var menu_talent_btn: Button
@@ -2048,20 +2049,29 @@ func _build_menu() -> void:
 	menu_col.add_child(menu_continue_btn)
 
 	# 二级：难度（点「开始」后出现在它正下方）
-	menu_easy_btn = _make_button("简单模式", _on_difficulty_easy, 20)
+	# 四个按钮共用 _on_difficulty_pick，用 bind 把难度值传进去 ——
+	# 之前是四个近乎一样的处理函数，加噩梦档时就得再抄一份，容易漂移。
+	menu_easy_btn = _make_button("简单模式", _on_difficulty_pick.bind(GameState.Difficulty.EASY), 20)
 	menu_easy_btn.custom_minimum_size = Vector2(0, 46)
 	menu_easy_btn.visible = false
 	menu_col.add_child(menu_easy_btn)
 
-	menu_normal_btn = _make_button("普通模式", _on_difficulty_normal, 20)
+	menu_normal_btn = _make_button("普通模式", _on_difficulty_pick.bind(GameState.Difficulty.NORMAL), 20)
 	menu_normal_btn.custom_minimum_size = Vector2(0, 46)
 	menu_normal_btn.visible = false
 	menu_col.add_child(menu_normal_btn)
 
-	menu_hard_btn = _make_button("困难模式", _on_difficulty_hard, 20)
+	menu_hard_btn = _make_button("困难模式", _on_difficulty_pick.bind(GameState.Difficulty.HARD), 20)
 	menu_hard_btn.custom_minimum_size = Vector2(0, 46)
 	menu_hard_btn.visible = false
 	menu_col.add_child(menu_hard_btn)
+
+	# 噩梦档：照搬早期困难档的参数（开局就离死 3~5 点），几乎必死。
+	# 按钮用暗红 danger 样式，与另外三档在视觉上分开。
+	menu_nightmare_btn = _make_button("噩梦模式", _on_difficulty_pick.bind(GameState.Difficulty.NIGHTMARE), 20, true)
+	menu_nightmare_btn.custom_minimum_size = Vector2(0, 46)
+	menu_nightmare_btn.visible = false
+	menu_col.add_child(menu_nightmare_btn)
 
 	# 三级：填写种子
 	menu_mode_label = _make_label("模式：简单", 14, Color(0.82, 0.86, 0.9))
@@ -2914,6 +2924,7 @@ func _menu_state(state: int) -> void:
 	menu_easy_btn.visible = state == 1
 	menu_normal_btn.visible = state == 1
 	menu_hard_btn.visible = state == 1
+	menu_nightmare_btn.visible = state == 1
 
 	var seed_level := state == 2
 	menu_mode_label.visible = seed_level
@@ -2931,23 +2942,11 @@ func _on_title_start() -> void:
 	_menu_state(1)
 
 
-func _on_difficulty_easy() -> void:
-	GameState.difficulty = GameState.Difficulty.EASY
-	menu_mode_label.text = "模式：简单"
-	_update_threshold_lines()
-	_menu_state(2)
-
-
-func _on_difficulty_normal() -> void:
-	GameState.difficulty = GameState.Difficulty.NORMAL
-	menu_mode_label.text = "模式：普通"
-	_update_threshold_lines()
-	_menu_state(2)
-
-
-func _on_difficulty_hard() -> void:
-	GameState.difficulty = GameState.Difficulty.HARD
-	menu_mode_label.text = "模式：困难"
+## 四档难度共用（用 bind 传难度值）。难度名走 GameState.difficulty_name()，
+## 界面不再各写一份字面量。
+func _on_difficulty_pick(d: int) -> void:
+	GameState.difficulty = d
+	menu_mode_label.text = "模式：%s" % GameState.difficulty_name()
 	_update_threshold_lines()
 	_menu_state(2)
 
@@ -6840,6 +6839,19 @@ func _show_report(r: Dictionary) -> void:
 	# 只认「不是判负」，不看分数档位 —— 困难难度能撑满 16 回合本身就是成就。
 	if not bool(r.get("is_failure", false)) and GameState.difficulty == GameState.Difficulty.HARD:
 		Achievements.try_unlock("hard_clear")
+	# 「被做局了」：噩梦档第 1 或第 2 回合就被撤换。
+	# 这个模式本来就打不过，能死得这么快纯粹是开局掷得差（或运气）——
+	# 所以它是枚**纪念章**，不是惩罚。turns_survived 就是死亡时的回合号（见 generate_report）。
+	if bool(r.get("is_failure", false)) \
+			and GameState.difficulty == GameState.Difficulty.NIGHTMARE \
+			and int(r.get("turns_survived", 0)) <= 2:
+		Achievements.try_unlock("rigged")
+	# 「廉政先锋」：通关，且全程平均每回合花费不到门槛。
+	# 用 total_spent / 总回合数 这个**均值**口径，而不是"每一回合都得少花"——
+	# 后者太苛刻：玩家偶尔砸一张大牌救火就会被判出局，不给人留余地。
+	if not bool(r.get("is_failure", false)) \
+			and float(GameState.total_spent) / float(GameState.TOTAL_TURNS) <= float(Achievements.THRIFTY_SPEND_PER_TURN):
+		Achievements.try_unlock("thrifty")
 	var earned: int = r.get("talent_points", 0)
 	if earned > 0:
 		Talents.award(earned)

@@ -53,7 +53,8 @@ func _initialize() -> void:
 
 	var out := {
 		"n_games": N, "difficulty": DIFFICULTY,
-		"difficulty_name": ["简单", "普通", "困难"][DIFFICULTY],
+		# 名字表按 GameState.Difficulty 的顺序排；加档位时要同步加，否则下标越界
+		"difficulty_name": ["简单", "普通", "困难", "噩梦"][DIFFICULTY],
 		"turns": GS.TOTAL_TURNS, "action_slots": GS.action_slots(),
 		"tiers_allowed": TIERS_ALLOWED,
 		"funding_per_turn": GS.BASE_FUNDING - int(GS.FUNDING_PENALTY[DIFFICULTY]) - GS.OPERATION_COST,

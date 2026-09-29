@@ -14,8 +14,10 @@ extends Node
 
 const SAVE_PATH := "user://talents.json"
 
-## 词条等级 → 难度（下标 = GameState.Difficulty 枚举值：0 简单 / 1 普通 / 2 困难）
-const TIER_FOR_DIFFICULTY := [1, 2, 3]
+## 词条等级 → 难度（下标 = GameState.Difficulty 枚举值：0 简单 / 1 普通 / 2 困难 / 3 噩梦）
+## 噩梦档取困难档同一池（等级 3）：它是"照搬早期困难档"的挑战模式，
+## 词条上没有理由再给它开小灶 —— 那反而会把"几乎必死"的设定冲淡。
+const TIER_FOR_DIFFICULTY := [1, 2, 3, 3]
 
 ## 词条表：30 条，每条带一个 tier（词条等级）。
 ## 等级划分依据 = 原天赋树的段位：基础 8 条 / 扩展 7 条 / 强化（多为 I 的 II 版）15 条。

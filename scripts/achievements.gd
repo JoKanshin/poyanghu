@@ -50,6 +50,43 @@ const SHIELD_GRID := """
 	.....##.....
 """
 
+## 「被做局了」用的骰子：四个点，读作「开局就被灌了铅」。
+const DICE_GRID := """
+	..########..
+	.#XXXXXXXX#.
+	.#XXXXXXXX#.
+	.#X##XX##X#.
+	.#X##XX##X#.
+	.#XXXXXXXX#.
+	.#XXXXXXXX#.
+	.#X##XX##X#.
+	.#X##XX##X#.
+	.#XXXXXXXX#.
+	.#XXXXXXXX#.
+	..########..
+"""
+
+## 「廉政先锋」用的方孔钱。
+const COIN_GRID := """
+	..########..
+	.#XXXXXXXX#.
+	.#XXXXXXXX#.
+	.#XX####XX#.
+	.#XX#..#XX#.
+	.#XX#..#XX#.
+	.#XX#..#XX#.
+	.#XX####XX#.
+	.#XXXXXXXX#.
+	.#XXXXXXXX#.
+	.#XXXXXXXX#.
+	..########..
+"""
+
+## 「廉政先锋」的花费门槛（万/回合）。
+## ⚠ 改这个数字时**必须同步改下面 LIST 里那条 desc 的文字** ——
+##   desc 是 const 字符串，常量表达式里没法做格式化，只能靠这条注释互相提醒。
+const THRIFTY_SPEND_PER_TURN := 40
+
 ## 成就定义表。desc 会被原样显示在弹窗与成就页里，写成「触发条件」的口气。
 const LIST := [
 	{
@@ -63,6 +100,18 @@ const LIST := [
 		"name": "最强管理员",
 		"desc": "在困难难度下打满 16 回合通关（不是中途被撤换）",
 		"icon": SHIELD_GRID,
+	},
+	{
+		"id": "rigged",
+		"name": "被做局了",
+		"desc": "在噩梦模式下第 1 或第 2 回合就被撤换 —— 这局从发牌起就没打算让你赢",
+		"icon": DICE_GRID,
+	},
+	{
+		"id": "thrifty",
+		"name": "廉政先锋",
+		"desc": "打满 16 回合通关，且全程平均每回合花费不超过 40 万",
+		"icon": COIN_GRID,
 	},
 ]
 

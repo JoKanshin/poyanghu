@@ -37,12 +37,21 @@ const OPERATION_COST := 20       # 固定运营支出（万）
 const MAX_CARRY := 60            # 结转上限（万）
 const INTEREST_RATE := 0.05      # 结转利息（每回合，利滚利，利率从低）
 
-# 难度档位：简单 / 普通 / 困难
-enum Difficulty { EASY, NORMAL, HARD }
+# 难度档位：简单 / 普通 / 困难 / 噩梦
+enum Difficulty { EASY, NORMAL, HARD, NIGHTMARE }
 
-# 各难度参数（简单 / 普通 / 困难）
-const FAILURE_THRESHOLD := { Difficulty.EASY: 20, Difficulty.NORMAL: 30, Difficulty.HARD: 40 }   # 判负阈值
-const PENALTY_MULT := { Difficulty.EASY: 1.0, Difficulty.NORMAL: 1.5, Difficulty.HARD: 2.0 }     # 扣分惩罚倍率
+# 各难度参数（简单 / 普通 / 困难 / 噩梦）
+#
+# ★ 噩梦档 = 本项目**刚分出三档难度时（提交 995f784）那个困难档的原样照搬**：
+#   六项指标共用一条 45 的红线、开局下限 48、负向 ×2.0、拨款削减 35、危机概率 0.68/0.28，
+#   而且当时**既没有每指标红线偏移、也没有开局保护**（见 failure_threshold_for 与
+#   _guard_starting_metrics 里对 NIGHTMARE 的特判）。
+#   于是开局只离死 3~5 点，一回合水位最坏 -9 就直接出局 ——
+#   反馈原话「大概率活不过第二回合」说的就是这套参数。
+#   ⚠ 动这几个数字之前先想清楚：它的"乐趣"完全来自"几乎必死"，
+#     别顺手把它调平衡了（平衡版的困难档已经存在，就是上面的 HARD）。
+const FAILURE_THRESHOLD := { Difficulty.EASY: 20, Difficulty.NORMAL: 30, Difficulty.HARD: 40, Difficulty.NIGHTMARE: 45 }   # 判负阈值
+const PENALTY_MULT := { Difficulty.EASY: 1.0, Difficulty.NORMAL: 1.5, Difficulty.HARD: 2.0, Difficulty.NIGHTMARE: 2.0 }     # 扣分惩罚倍率
 
 # 困难档「常规随机扣分」的下限额外抬这么多点，**在难度负向倍率之后**生效。
 # 目的：削弱「随机到最坏值 + 指标恰好贴线 = 暴毙」的挫败感。
@@ -53,7 +62,7 @@ const PENALTY_MULT := { Difficulty.EASY: 1.0, Difficulty.NORMAL: 1.5, Difficulty
 #   在倍率之后再抬 1 才是字面意义上的「上调一分」——
 #   困难档最坏 -9 仍然比普通档的 -8 更凶，难度梯度保住。
 const HARD_ROUTINE_FLOOR_BONUS := 1
-const FUNDING_PENALTY := { Difficulty.EASY: 0, Difficulty.NORMAL: 20, Difficulty.HARD: 35 }       # 每回合拨款削减（万）
+const FUNDING_PENALTY := { Difficulty.EASY: 0, Difficulty.NORMAL: 20, Difficulty.HARD: 35, Difficulty.NIGHTMARE: 35 }       # 每回合拨款削减（万）
 
 # ==================== 指标 → 每回合拨款（2026-09-28 第二条玩测反馈）====================
 # 反馈原话：「在困难模式里有几个数值，比如社会信任和候鸟，感觉没啥用」。
@@ -75,15 +84,24 @@ const FUNDING_STEPS := {
 	"community": [[70, 15], [60, 8], [-30, -15]],
 	"birds":     [[70, 10], [-25, -5]],
 }
-const CRISIS_CHANCE := { Difficulty.EASY: 0.38, Difficulty.NORMAL: 0.55, Difficulty.HARD: 0.68 }  # 危机概率基数
-const CRISIS_SLOPE := { Difficulty.EASY: 0.22, Difficulty.NORMAL: 0.25, Difficulty.HARD: 0.28 }   # 危机概率随回合增幅
-const START_FLOOR := { Difficulty.EASY: 48, Difficulty.NORMAL: 48, Difficulty.HARD: 48 }          # 开局指标下限（各难度统一，难度只体现在阈值）
-const START_BOOST := { Difficulty.EASY: 6, Difficulty.NORMAL: 6, Difficulty.HARD: 6 }             # 开局指标加成（各难度统一）
-const REPORT_SCORE := { Difficulty.EASY: 80.0, Difficulty.NORMAL: 70.0, Difficulty.HARD: 65.0 }   # 天赋点达标平均分
+const CRISIS_CHANCE := { Difficulty.EASY: 0.38, Difficulty.NORMAL: 0.55, Difficulty.HARD: 0.68, Difficulty.NIGHTMARE: 0.68 }  # 危机概率基数
+const CRISIS_SLOPE := { Difficulty.EASY: 0.22, Difficulty.NORMAL: 0.25, Difficulty.HARD: 0.28, Difficulty.NIGHTMARE: 0.28 }   # 危机概率随回合增幅
+const START_FLOOR := { Difficulty.EASY: 48, Difficulty.NORMAL: 48, Difficulty.HARD: 48, Difficulty.NIGHTMARE: 48 }          # 开局指标下限（各难度统一，难度只体现在阈值）
+const START_BOOST := { Difficulty.EASY: 6, Difficulty.NORMAL: 6, Difficulty.HARD: 6, Difficulty.NIGHTMARE: 6 }             # 开局指标加成（各难度统一）
+const REPORT_SCORE := { Difficulty.EASY: 80.0, Difficulty.NORMAL: 70.0, Difficulty.HARD: 65.0, Difficulty.NIGHTMARE: 65.0 }   # 天赋点达标平均分
 # 每回合行动位（行动位 = 一回合最多能打几张牌）
 # 简单档多给一个位：新手还没建立起「先补水再护鸟」这类联动的直觉，
-# 三个位常常只够救火、铺不出组合，体验偏挫败。普通/困难维持 3。
-const MAX_ACTIONS_BY_DIFFICULTY := { Difficulty.EASY: 4, Difficulty.NORMAL: 3, Difficulty.HARD: 3 }
+# 三个位常常只够救火、铺不出组合，体验偏挫败。普通/困难/噩梦维持 3。
+const MAX_ACTIONS_BY_DIFFICULTY := { Difficulty.EASY: 4, Difficulty.NORMAL: 3, Difficulty.HARD: 3, Difficulty.NIGHTMARE: 3 }
+
+## 难度中文名（界面与报告共用一处，免得四个按钮各写一份字面量、早晚漂移）。
+func difficulty_name() -> String:
+	match difficulty:
+		Difficulty.EASY: return "简单"
+		Difficulty.NORMAL: return "普通"
+		Difficulty.HARD: return "困难"
+		Difficulty.NIGHTMARE: return "噩梦"
+	return "未知"
 
 # 每项指标相对「难度致死线」的偏移（正数 = 线更高更严格，负数 = 更宽容）
 # 留空 = 六项都用难度线（与旧版行为完全一致）。想调平衡只改这张表，不用动卡牌数值。
@@ -1339,7 +1357,12 @@ func _roll_starting_metrics() -> Dictionary:
 ## 开局不该"站在悬崖上"：任何低于「该项致死线 + 2」的开局值都抬上来。
 ## 背景：困难档社区信任致死线是 50、而开局下限只有 48 → 实测 9.3% 的局
 ## 玩家还没出手就在第一回合被判负（必现的 bug 级体验，且与"难度"无关）。
+## ⚠ 噩梦档**不做开局保护**：995f784 那版根本没有这个函数，
+##   "开局就离死 3~5 点"正是噩梦档的设计前提 —— 加了保护等于把它废掉。
+##   其余三档照旧（那条保护是修「还没出手就输」的 P0 bug 加的，别退回去）。
 func _guard_starting_metrics() -> void:
+	if difficulty == Difficulty.NIGHTMARE:
+		return
 	for m in metrics.keys():
 		var safe: int = failure_threshold_for(str(m)) + 2
 		if int(metrics[m]) < safe:
@@ -2263,6 +2286,11 @@ func failure_threshold() -> int:
 ## 某一项指标的判负阈值 = 难度线 + 该项偏移 + 该难度下的额外调整
 ## （两张表里都没写就是难度线本身）
 func failure_threshold_for(metric: String) -> int:
+	# ⚠ 噩梦档**不叠任何偏移**：995f784 那版就是六项共用一条线，
+	#   "每指标单独红线"是后来才加的。照搬偏移会把噩梦档悄悄变简单
+	#   （社区 +10 会把它的线从 45 抬到 55，等于开局凭空多出 7 点余量）。
+	if difficulty == Difficulty.NIGHTMARE:
+		return clampi(failure_threshold(), 5, 95)
 	var offset: int = int(FAILURE_THRESHOLD_OFFSET.get(metric, 0))
 	offset += int(FAILURE_THRESHOLD_EXTRA.get(difficulty, {}).get(metric, 0))
 	return clampi(failure_threshold() + offset, 5, 95)
