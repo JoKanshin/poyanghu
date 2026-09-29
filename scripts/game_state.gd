@@ -1269,6 +1269,11 @@ func reset_game() -> void:
 	triggered_synergies = []
 	_fired_synergies = []
 	ever_played = {}
+	# ⚠ 紧急调度的冷却必须跟着新局一起归零。它只在**声明处**初始化过，
+	#   若不在 reset_game 里重置，上一局用掉之后新局（turn 又是 1）会继续判冷却中 ——
+	#   实测 bug：困难档第 1 回合用过，退回主菜单开简单档，紧急调度仍是灰的。
+	dispatched_cards = []
+	dispatch_last_turn = -99
 	is_failure = false
 	failure_reason = ""
 	failure_metric = ""

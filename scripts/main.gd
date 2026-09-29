@@ -83,8 +83,9 @@ var season_tagline: Label
 var season_dial: SeasonDial
 var dispatch_btn: Button          # 紧急调度：花 40 万点名一张当季牌
 var refresh_btn: Button           # 刷新手牌：花 5 万重抽整手，每回合限一次
-var dispatch_panel: Control       # 紧急调度的选牌面板（全屏遮罩 + 可滚动列表）
-var _dispatch_list: VBoxContainer
+var dispatch_panel: Control       # 紧急调度的选牌面板（与牌库同款的全屏卡牌网格）
+var dispatch_grid: HFlowContainer
+var _dispatch_viewports: Array = []   # 调度面板卡牌的 SubViewport（重建时清理）
 var _refresh_used_turn: int = -1  # 本回合是否已刷过手牌（-1 = 没刷过）
 var _season_dial_index: int = -1  # 指针当前停在第几季，避免 _update_hud 每帧重触发动画
 var funds_label: Label
@@ -4580,11 +4581,22 @@ func _kill_card_tweens(view: Control) -> void:
 
 ## 牌库陀螺仪：只对鼠标悬停的那张牌做 3D 透视倾斜（绕 X/Y 轴），其余回正
 func _process_deck_gyro(delta: float) -> void:
-	if not _deck_open or deck_viewer_grid == null:
+	# 两个网格（牌库 / 紧急调度）任一开着就继续跑
+	var dispatch_open: bool = dispatch_panel != null and dispatch_panel.visible
+	if not _deck_open and not dispatch_open:
+		return
+	if deck_viewer_grid == null and dispatch_grid == null:
 		return
 	var mouse := get_viewport().get_mouse_position()
 	var k := 1.0 - exp(-12.0 * delta)
-	for view in deck_viewer_grid.get_children():
+	# 牌库与紧急调度面板用的是同一套卡牌网格与同一个 _deck_gyro_view，
+	# 所以这里按「当前开着哪个网格」选目标，两处都能有透视倾斜。
+	var grid: HFlowContainer = deck_viewer_grid
+	if not _deck_open and dispatch_panel != null and dispatch_panel.visible:
+		grid = dispatch_grid
+	if grid == null:
+		return
+	for view in grid.get_children():
 		if not is_instance_valid(view):
 			continue
 		var mat: ShaderMaterial = view.material
@@ -5302,7 +5314,7 @@ func _play_refresh_break_animation() -> void:
 	refresh_btn.modulate.a = 0.0
 
 
-## 打开紧急调度的选牌面板（列出当季可抽池里每一张牌，按费用排序）
+## 打开紧急调度的选牌面板
 func _open_dispatch_panel() -> void:
 	if _current_phase != "allocate" or _score_animating or _sort_animating:
 		return
@@ -5310,86 +5322,143 @@ func _open_dispatch_panel() -> void:
 		return
 	if dispatch_panel == null:
 		_build_dispatch_panel()
-	_fill_dispatch_list()
 	dispatch_panel.visible = true
+	_deck_gyro_view = null          # 悬停态是从牌库那边借来的，开面板前先清干净
+	_fill_dispatch_grid()
 
 
 func _close_dispatch_panel() -> void:
 	if dispatch_panel != null:
 		dispatch_panel.visible = false
+	_deck_gyro_view = null          # 别把悬停引用留在已隐藏的卡上
 
 
+## 请卡面板 —— **直接照搬牌库查看器的 UI 与交互**：同一套
+## _make_card → SubViewport → 透视材质 TextureRect + 悬停黄框/浮起/陀螺仪，
+## 连悬停处理器都是同一个（_on_viewer_card_hover）。差别只有两处：
+##   ① 卡池限定为「当季可抽池」（不是全部 44 张）
+##   ② 点一下 = **调度它**，而不是打开卡牌详情
+## 这样玩家不必学第二套交互。
 func _build_dispatch_panel() -> void:
+	var layer := CanvasLayer.new()
+	layer.name = "DispatchLayer"
+	layer.layer = 8
+	add_child(layer)
+
 	dispatch_panel = Control.new()
 	dispatch_panel.set_anchors_preset(Control.PRESET_FULL_RECT)
+	dispatch_panel.mouse_filter = Control.MOUSE_FILTER_STOP
 	dispatch_panel.visible = false
-	var cv := _ui_canvas()
-	if cv == null:
-		return
-	cv.add_child(dispatch_panel)
+	layer.add_child(dispatch_panel)
 
 	var dim := ColorRect.new()
-	dim.color = Color(0, 0, 0, 0.55)
+	dim.color = Color(0, 0, 0, 0.62)
 	dim.set_anchors_preset(Control.PRESET_FULL_RECT)
-	dim.mouse_filter = Control.MOUSE_FILTER_STOP   # 挡掉底下的手牌点击
 	dispatch_panel.add_child(dim)
 
-	var box := PanelContainer.new()
-	box.anchor_left = 0.5
-	box.anchor_right = 0.5
-	box.anchor_top = 0.5
-	box.anchor_bottom = 0.5
-	box.offset_left = -300
-	box.offset_right = 300
-	box.offset_top = -215
-	box.offset_bottom = 215
-	_panel_style(box, Color(0.18, 0.13, 0.09, 0.98))
+	var box := VBoxContainer.new()
+	box.set_anchors_preset(Control.PRESET_FULL_RECT)
+	box.offset_left = 70
+	box.offset_right = -70
+	box.offset_top = 40
+	box.offset_bottom = -40
+	box.add_theme_constant_override("separation", 12)
 	dispatch_panel.add_child(box)
 
-	var vb := VBoxContainer.new()
-	vb.add_theme_constant_override("separation", 6)
-	box.add_child(vb)
-	var title := _make_label("紧急调度 —— 从当季可抽池里点名一张牌", 18, Color(1, 0.88, 0.55))
-	vb.add_child(title)
-	var l1 := _make_label("花 %d 万，一律按「有效投入」档结算；不占行动位，回合末与手牌一起算分。" % GameState.DISPATCH_COST,
+	var title := _make_label("紧急调度 · 从当季可抽池点名一张牌", 28, Color(1, 0.9, 0.55))
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	box.add_child(title)
+
+	# ⚠ 卡面写的是这张牌自己的定价，不是调度费（调度费固定 DISPATCH_COST）——
+	#   不写清楚的话，玩家会以为「卡面 42 万」就是要付的钱。
+	var hint := _make_label("花 %d 万，一律按「有效投入」档结算·卡面数字是它的定价，不是调度费·不占行动位、回合末与手牌一起算分·本局首次可用，之后每用一次空 %d 个回合" % [GameState.DISPATCH_COST, GameState.DISPATCH_COOLDOWN_TURNS],
 		12, Color(0.86, 0.88, 0.90))
-	l1.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	vb.add_child(l1)
-	var l2 := _make_label("本局首次可直接用，之后每用一次要空 %d 个回合。" % GameState.DISPATCH_COOLDOWN_TURNS,
-		12, Color(0.70, 0.74, 0.78))
-	vb.add_child(l2)
+	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	box.add_child(hint)
 
-	var sc := ScrollContainer.new()
-	sc.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	sc.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	vb.add_child(sc)
-	_dispatch_list = VBoxContainer.new()
-	_dispatch_list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_dispatch_list.add_theme_constant_override("separation", 3)
-	sc.add_child(_dispatch_list)
-	vb.add_child(_make_button("取消", _close_dispatch_panel, 14))
+	var scroll := ScrollContainer.new()
+	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	box.add_child(scroll)
+
+	# 四周留内边距，免得顶行/左列卡在放大漂浮时被裁剪（与牌库同一处理）
+	var margin := MarginContainer.new()
+	margin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	margin.add_theme_constant_override("margin_top", 30)
+	margin.add_theme_constant_override("margin_bottom", 16)
+	margin.add_theme_constant_override("margin_left", 16)
+	margin.add_theme_constant_override("margin_right", 16)
+	scroll.add_child(margin)
+
+	dispatch_grid = HFlowContainer.new()
+	dispatch_grid.add_theme_constant_override("h_separation", 14)
+	dispatch_grid.add_theme_constant_override("v_separation", 14)
+	dispatch_grid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	margin.add_child(dispatch_grid)
+
+	var close := _make_button("取消", _close_dispatch_panel, 20)
+	close.custom_minimum_size = Vector2(0, 48)
+	box.add_child(close)
 
 
-func _fill_dispatch_list() -> void:
-	for c in _dispatch_list.get_children():
-		_dispatch_list.remove_child(c)
+## 铺当季可抽池的牌。排序与手牌/牌库共用同一个开关，所以三处顺序永远一致。
+func _fill_dispatch_grid() -> void:
+	for c in dispatch_grid.get_children():
+		dispatch_grid.remove_child(c)
 		c.queue_free()
+	for vp in _dispatch_viewports:
+		if is_instance_valid(vp):
+			vp.queue_free()
+	_dispatch_viewports.clear()
 	var pool: Array = GameState.season_pool()
-	pool.sort_custom(func(a, b): return int(a["cost"]) < int(b["cost"]))
+	pool.sort_custom(func(a, b): return _card_dict_less(a, b, _deck_sort_by_category))
+	var views: Array = []
 	for card in pool:
-		var cid: String = str(card["id"])
-		var cost: int = GameState.tier_cost(cid, GameState.DISPATCH_TIER)
-		var cat: String = str(CATEGORY_NAMES.get(str(card["category"]), ""))
-		var b := _make_button("%s　%s　%d 万" % [str(card["name"]), cat, cost],
-			_on_dispatch_pick.bind(cid), 13)
-		b.custom_minimum_size = Vector2(0, 30)
-		_dispatch_list.add_child(b)
+		var made := _make_card(card, GameState.DISPATCH_TIER)
+		var panel: PanelContainer = made["panel"]
+		var vp := SubViewport.new()
+		vp.size = Vector2(122, 165)
+		vp.transparent_bg = true
+		vp.render_target_update_mode = SubViewport.UPDATE_WHEN_VISIBLE
+		vp.add_child(panel)
+		dispatch_panel.add_child(vp)
+		_dispatch_viewports.append(vp)
+
+		var view := TextureRect.new()
+		view.texture = vp.get_texture()
+		view.custom_minimum_size = Vector2(122, 165)
+		view.stretch_mode = TextureRect.STRETCH_SCALE
+		view.mouse_filter = Control.MOUSE_FILTER_STOP
+		view.set_meta("card", card)
+		view.set_meta("panel", panel)
+		view.material = _make_gyro_material()
+		view.tooltip_text = "%s\n\n调度后按「有效投入」档结算：%s" % [
+			str(card["desc"]), _tier_effects_text(card, GameState.DISPATCH_TIER)]
+		view.scale = Vector2(0.3, 0.3)
+		view.modulate.a = 0.0
+		view.mouse_entered.connect(_on_viewer_card_hover.bind(view, card))
+		view.mouse_exited.connect(_on_viewer_card_unhover.bind(view))
+		view.gui_input.connect(_on_dispatch_card_click.bind(view, card))
+		dispatch_grid.add_child(view)
+		views.append(view)
+	# 等一帧布局完成后逐张发牌（与牌库同一节奏，只是牌少、间隔收紧）
+	await get_tree().process_frame
+	for i in views.size():
+		var p: Control = views[i]
+		var tw := p.create_tween()
+		tw.set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+		tw.tween_property(p, "scale", Vector2.ONE, 0.28).set_delay(i * 0.02)
+		tw.parallel().tween_property(p, "modulate:a", 1.0, 0.18).set_delay(i * 0.02)
 
 
-## 挑好要调度的牌：扣钱记账、面板关掉。效果**不在这里生效** ——
-## 到回合末由 _spawn_dispatched_cards() 与手牌一起结算（这样才是同一段算分动画）。
-func _on_dispatch_pick(card_id: String) -> void:
-	if GameState.dispatch_card(card_id):
+## 在调度面板里点一张牌 = 调度它（牌库那边点一下是看详情，这里直接买）。
+## 效果**不在这里生效** —— 到回合末由 _spawn_dispatched_cards() 与手牌一起结算，
+## 这样它才和常规出牌进同一段算分动画。
+func _on_dispatch_card_click(event: InputEvent, _view: Control, card: Dictionary) -> void:
+	if not (event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT):
+		return
+	if GameState.dispatch_card(str(card["id"])):
 		_close_dispatch_panel()
 		_update_hud()
 
