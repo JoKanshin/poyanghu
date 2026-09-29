@@ -5507,7 +5507,8 @@ func _spawn_dispatched_cards(played: Array) -> void:
 		var card: Dictionary = GameState.card_by_id(cid)
 		if card.is_empty():
 			continue
-		if not GameState.execute_action(cid, str(d["tier"])):
+		# free = true：调度费在买的时候就付过了，且不占行动位（见 execute_action 的注释）
+		if not GameState.execute_action(cid, str(d["tier"]), true):
 			continue
 		# ⚠ _make_card 返回的是 {panel, cost_label} 字典，不是 PanelContainer ——
 		#   手牌那边也是这么取的（见 _build_hand_panel）。

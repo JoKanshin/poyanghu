@@ -1884,16 +1884,29 @@ func can_execute(card_id: String, tier: String) -> bool:
 	return funds >= tier_cost(card_id, tier)
 
 
-## 执行一张行动卡（返回是否成功）
-func execute_action(card_id: String, tier: String) -> bool:
+## 执行一张行动卡（返回是否成功）。
+##
+## free = true 是**紧急调度**专用的路径：那张牌在调度时就已经付过调度费了，
+## 而且**不占行动位** —— 所以既不再扣这张卡自己的钱，也不受行动位上限拦阻。
+## 其余流程一字不改（即时效果、延迟入队、物种/植物/围垦加成、协同触发、
+## 算分流水账），所以它照样会出现在算分动画与结算里。
+##
+## ⚠ 踩过的坑：不给这条路径的话会有两个 bug ——
+##   ① 简单模式打满 4 张后，调度牌的 can_execute 直接返回 false（4 >= 4），
+##      整张牌被跳过：玩家付了 40 万什么都没拿到，算分动画里也少一张；
+##   ② 没被拦时（只打 3 张）会 **扣两次钱** —— 调度费 + 这张卡自己的档位价。
+func execute_action(card_id: String, tier: String, free: bool = false) -> bool:
 	var card := _find_card(card_id)
 	if card.is_empty():
 		return false
-	if not can_execute(card_id, tier):
-		return false
-	var cost := tier_cost(card_id, tier)
-	funds -= cost
-	total_spent += cost
+	if not free:
+		if not can_execute(card_id, tier):
+			return false
+		var cost := tier_cost(card_id, tier)
+		funds -= cost
+		total_spent += cost
+	# 行动位上限只在 free=false 时拦；但两种路径都要记进 used_action_ids ——
+	# 它同时是「本回合打过什么」的依据（自然演化的条件、协同触发都读它）。
 	used_action_ids.append(card_id)
 	# 全局累计（**跨回合不清零**）：结算报告的「转产与补偿覆盖率」要按整局口径算，
 	# 而 used_action_ids 每回合开始都会被清空，拿它统计等于只看最后一回合。
