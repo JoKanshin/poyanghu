@@ -24,9 +24,10 @@ const SEASON_TAGLINE := {
 # 解决「眼看着要崩、手上偏偏没有那张救命的牌」。定位是容错阀而不是主力：
 # 价格固定且偏高、一次只能调一张、**不占行动位**，但结算与常规出牌合并在同一段算分动画里播。
 # 每局首次可直接用，之后每用一次要空 DISPATCH_COOLDOWN_TURNS 个回合。
-const DISPATCH_COST := 40                # 固定价（万）——不问卡价，也不给选档位
+const DISPATCH_COST := 40                # **首次**使用的价格（万）
+const DISPATCH_PRICE_STEP := 10          # 本局每再用一次，价格 +10 万（40 → 50 → 60 …）
 const DISPATCH_COOLDOWN_TURNS := 3       # 两次使用之间要空出的回合数
-const DISPATCH_TIER := "effective"       # 一律按**有效投入**档结算：40 万买不到深度档的双倍效果
+const DISPATCH_TIER := "effective"       # 一律按**有效投入**档结算：调度费买不到深度档的双倍效果
 
 # 刷新手牌：抽得不满意，花小钱把整手重抽一遍。每回合限一次。
 const REFRESH_HAND_COST := 5             # （万）
@@ -1178,6 +1179,7 @@ func serialize() -> Dictionary:
 		# 紧急调度：待结算的调度牌与冷却回合都要带回来，否则中途读档会白丢那 40 万
 		"dispatched_cards": dispatched_cards.duplicate(true),
 		"dispatch_last_turn": dispatch_last_turn,
+		"dispatch_used_count": dispatch_used_count,
 		"knowledge_unlocked": knowledge_unlocked.duplicate(),
 		"pending_knowledge": pending_knowledge.duplicate(),
 		"log_messages": log_messages.duplicate(),
@@ -1213,6 +1215,7 @@ func load_state(d: Dictionary) -> void:
 	ever_played = d.get("ever_played", {})
 	dispatched_cards = d.get("dispatched_cards", [])
 	dispatch_last_turn = int(d.get("dispatch_last_turn", -99))
+	dispatch_used_count = int(d.get("dispatch_used_count", 0))
 	knowledge_unlocked = d.get("knowledge_unlocked", [])
 	pending_knowledge = d.get("pending_knowledge", [])
 	log_messages = d.get("log_messages", [])
@@ -1274,6 +1277,7 @@ func reset_game() -> void:
 	#   实测 bug：困难档第 1 回合用过，退回主菜单开简单档，紧急调度仍是灰的。
 	dispatched_cards = []
 	dispatch_last_turn = -99
+	dispatch_used_count = 0
 	is_failure = false
 	failure_reason = ""
 	failure_metric = ""
@@ -1742,6 +1746,14 @@ var dispatched_cards: Array = []
 var ever_played: Dictionary = {}
 ## 上一次用紧急调度的回合（-99 = 本局还没用过 → 首次可直接用）
 var dispatch_last_turn: int = -99
+## 本局已经用过几次（0 = 还没用过）。价格随它递增，reset_game() 要归零。
+var dispatch_used_count: int = 0
+
+
+## 本次调度要花多少钱：首次 DISPATCH_COST，之后**每用一次 +DISPATCH_PRICE_STEP**。
+## 递增是为了让它在同一局里越用越不划算 —— 它是容错阀，不该变成常规出牌手段。
+func dispatch_cost() -> int:
+	return DISPATCH_COST + DISPATCH_PRICE_STEP * dispatch_used_count
 
 
 ## 按 id 取卡（找不到返回空字典）。界面层要用它拿卡面数据（名字/类别/费用），
@@ -1762,7 +1774,7 @@ func spend(amount: int) -> bool:
 
 ## 现在能不能用紧急调度：钱够 + 本回合还没调过 + 过了冷却
 func can_dispatch() -> bool:
-	if funds < DISPATCH_COST:
+	if funds < dispatch_cost():
 		return false
 	if not dispatched_cards.is_empty():
 		return false          # 一回合只能调度一张
@@ -1784,8 +1796,9 @@ func dispatch_card(card_id: String) -> bool:
 		return false
 	if _find_card(card_id).is_empty():
 		return false
-	if not spend(DISPATCH_COST):
+	if not spend(dispatch_cost()):
 		return false
+	dispatch_used_count += 1     # 记在前头：下一次的报价立刻变贵
 	dispatch_last_turn = turn
 	dispatched_cards.append({"card_id": card_id, "tier": DISPATCH_TIER})
 	return true

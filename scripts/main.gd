@@ -85,6 +85,7 @@ var dispatch_btn: Button          # 紧急调度：花 40 万点名一张当季�
 var refresh_btn: Button           # 刷新手牌：花 5 万重抽整手，每回合限一次
 var dispatch_panel: Control       # 紧急调度的选牌面板（与牌库同款的全屏卡牌网格）
 var dispatch_grid: HFlowContainer
+var dispatch_hint: Label          # 面板顶部说明（含当前调度费，逐次递增所以要重写）
 var _dispatch_viewports: Array = []   # 调度面板卡牌的 SubViewport（重建时清理）
 var _refresh_used_turn: int = -1  # 本回合是否已刷过手牌（-1 = 没刷过）
 var _season_dial_index: int = -1  # 指针当前停在第几季，避免 _update_hud 每帧重触发动画
@@ -5241,11 +5242,12 @@ func _refresh_action_buttons() -> void:
 		elif cd > 0:
 			dispatch_btn.text = "紧急调度 · 冷却 %d 回合" % cd
 			dispatch_btn.disabled = true
-		elif GameState.funds < GameState.DISPATCH_COST:
-			dispatch_btn.text = "紧急调度 · %d 万（资金不足）" % GameState.DISPATCH_COST
+		elif GameState.funds < GameState.dispatch_cost():
+			dispatch_btn.text = "紧急调度 · %d 万（资金不足）" % GameState.dispatch_cost()
 			dispatch_btn.disabled = true
 		else:
-			dispatch_btn.text = "紧急调度 · %d 万" % GameState.DISPATCH_COST
+			# 价格是**递增**的：本局每用过一次 +10 万，所以这里必须每次重算
+			dispatch_btn.text = "紧急调度 · %d 万" % GameState.dispatch_cost()
 			dispatch_btn.disabled = false
 	if refresh_btn != null:
 		if _refresh_used_turn == GameState.turn:
@@ -5324,7 +5326,19 @@ func _open_dispatch_panel() -> void:
 		_build_dispatch_panel()
 	dispatch_panel.visible = true
 	_deck_gyro_view = null          # 悬停态是从牌库那边借来的，开面板前先清干净
+	if dispatch_hint != null:
+		dispatch_hint.text = _dispatch_hint_text()
 	_fill_dispatch_grid()
+
+
+## 调度面板顶部那句说明。**价格逐次递增**，所以每次开面板都要按当前价重写。
+func _dispatch_hint_text() -> String:
+	var used: int = GameState.dispatch_used_count
+	var price: String = "本次调度费 %d 万" % GameState.dispatch_cost()
+	if used > 0:
+		price += "（本局已用过 %d 次，每再用一次 +%d 万）" % [used, GameState.DISPATCH_PRICE_STEP]
+	return "%s·一律按「有效投入」档结算·卡面数字是它的定价不是调度费·不占行动位、回合末与手牌一起算分·每用一次后要空 %d 个回合" % [
+		price, GameState.DISPATCH_COOLDOWN_TURNS]
 
 
 func _close_dispatch_panel() -> void:
@@ -5369,13 +5383,13 @@ func _build_dispatch_panel() -> void:
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	box.add_child(title)
 
-	# ⚠ 卡面写的是这张牌自己的定价，不是调度费（调度费固定 DISPATCH_COST）——
+	# ⚠ 卡面写的是这张牌自己的定价，不是调度费（调度费是 DISPATCH_COST 起、逐次递增）——
 	#   不写清楚的话，玩家会以为「卡面 42 万」就是要付的钱。
-	var hint := _make_label("花 %d 万，一律按「有效投入」档结算·卡面数字是它的定价，不是调度费·不占行动位、回合末与手牌一起算分·本局首次可用，之后每用一次空 %d 个回合" % [GameState.DISPATCH_COST, GameState.DISPATCH_COOLDOWN_TURNS],
-		12, Color(0.86, 0.88, 0.90))
-	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	box.add_child(hint)
+	# 价格每次用都会变，所以这句文案在 _open_dispatch_panel() 里按当前价重写。
+	dispatch_hint = _make_label("", 12, Color(0.86, 0.88, 0.90))
+	dispatch_hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	dispatch_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	box.add_child(dispatch_hint)
 
 	var scroll := ScrollContainer.new()
 	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
