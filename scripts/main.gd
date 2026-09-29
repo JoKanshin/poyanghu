@@ -18,6 +18,44 @@ const CATEGORY_COLORS := {
 const SEASONS := ["春", "夏", "秋", "冬"]
 const CATEGORY_ORDER := ["ecology", "social", "manage"]
 
+## 季节指针：左上角的小表盘，指针随回合在四季之间转 90°（春在 12 点、顺时针转）。
+## 全工程唯一的自绘控件（_draw）—— 它纯是指示器，不接受任何输入。
+class SeasonDial extends Control:
+	const RAD := 20.0
+	var _angle: float = -PI * 0.5    # 指针角度（弧度）：-90° = 12 点钟方向 = 春
+	## 盘内不写字 —— 面板只有 204px 宽，季节名放在盘右边的 Label 里（见 _build_ui）。
+	## 四个刻度点就是春/夏/秋/冬：12 点、3 点、6 点、9 点。
+
+	func _init() -> void:
+		custom_minimum_size = Vector2(RAD * 2.0 + 6.0, RAD * 2.0 + 6.0)
+		mouse_filter = Control.MOUSE_FILTER_IGNORE
+
+	## 转到第 index 季（0 春 / 1 夏 / 2 秋 / 3 冬）。animate=false 直接落位（读档/重开用）。
+	func turn_to(index: int, animate: bool = true) -> void:
+		var target: float = -PI * 0.5 + float(index) * PI * 0.5
+		if not animate or is_equal_approx(_angle, target):
+			_angle = target
+			queue_redraw()
+			return
+		var tw := create_tween()
+		tw.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+		tw.tween_method(_set_angle, _angle, target, 0.45)
+
+	func _set_angle(a: float) -> void:
+		_angle = a
+		queue_redraw()
+
+	func _draw() -> void:
+		var c: Vector2 = size * 0.5
+		draw_circle(c, RAD, Color(0.09, 0.13, 0.11, 0.88))
+		draw_arc(c, RAD, 0.0, TAU, 48, Color(0.42, 0.50, 0.45), 1.5, true)
+		for i in 4:
+			var a: float = -PI * 0.5 + float(i) * PI * 0.5
+			draw_circle(c + Vector2(cos(a), sin(a)) * (RAD - 4.0), 1.5, Color(0.55, 0.63, 0.57))
+		draw_line(c, c + Vector2(cos(_angle), sin(_angle)) * (RAD - 2.0),
+			Color(1.0, 0.86, 0.42), 2.0, true)
+		draw_circle(c, 2.5, Color(1.0, 0.86, 0.42))
+
 ## 天赋树系统暂时关闭（2026-09-28 需求）：主菜单不再有「技能树」按钮，
 ## 天赋改为**每局开局随机附赠 0~3 条词条**（见 talents.gd 的 roll_for_run）。
 ## 恢复天赋树：把这里改回 true，并把 talents.gd 的 get_bonus 改回读 unlocked。
@@ -41,6 +79,14 @@ var turn_label: Label
 var talents_row: VBoxContainer
 var _talents_sig: String = ""      # 已画出的词条签名，内容没变就不重建节点
 var season_label: Label
+var season_tagline: Label
+var season_dial: SeasonDial
+var dispatch_btn: Button          # 紧急调度：花 40 万点名一张当季牌
+var refresh_btn: Button           # 刷新手牌：花 5 万重抽整手，每回合限一次
+var dispatch_panel: Control       # 紧急调度的选牌面板（全屏遮罩 + 可滚动列表）
+var _dispatch_list: VBoxContainer
+var _refresh_used_turn: int = -1  # 本回合是否已刷过手牌（-1 = 没刷过）
+var _season_dial_index: int = -1  # 指针当前停在第几季，避免 _update_hud 每帧重触发动画
 var funds_label: Label
 var spent_label: Label
 var research_label: Label
@@ -194,7 +240,10 @@ var _ui_slide_tweens: Array = []       # 牌库开合时收放主界面的 tween
 var _ui_slide_origin: Dictionary = {}  # Control -> [l, t, r, b] 初始 offset
 var deck_sort_btn: Button             # 排序切换按钮（互旋箭头）
 var hand_sort_btn: Button             # 出牌阶段的同一个排序按钮（与牌库共用模式与冷却）
-var _deck_sort_by_category: bool = true  # true=按类别，false=按费用；默认按类别
+## true=按类别，false=按费用。
+## 2026-09-29 起默认**按费用**：玩测反馈「找牌时先看掏不掏得起」，
+## 按费用排更省事；想按类别排，界面上那个切换按钮一点就换（牌库与手牌共用这一个开关）。
+var _deck_sort_by_category: bool = false
 ## 手牌「抬起」的高度（选中/悬停时沿径向外移的距离）。
 ## _update_card_hover 每帧用它，手牌排序的飞行落点也要用同一个值 ——
 ## 写死两处早晚会漂移，抬起高度一变排序落点就不对了。
@@ -1634,7 +1683,9 @@ func _build_ui() -> void:
 	left_panel.offset_left = 6
 	left_panel.offset_right = 210
 	left_panel.offset_top = 6
-	left_panel.offset_bottom = 190
+	# 190 → 240：季节行从一行 Label 变成「指针表盘 + 两行文字」，行高多出约 34px；
+	# 再留一点余量给「本局天赋」最多 3 条词条的情况。
+	left_panel.offset_bottom = 240
 	_panel_style(left_panel, Color(0.20, 0.14, 0.09, 0.60))
 	canvas.add_child(left_panel)
 
@@ -1647,8 +1698,23 @@ func _build_ui() -> void:
 
 	turn_label = _make_label("第 1 / 16 回合", 17, Color(1, 1, 1))
 	lv.add_child(turn_label)
+	# 季节行 = [指针表盘] + [第 X 年 · 春] / [季节旁白]
+	var season_row := HBoxContainer.new()
+	season_row.add_theme_constant_override("separation", 6)
+	season_dial = SeasonDial.new()
+	season_dial.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	season_row.add_child(season_dial)
+	var season_text := VBoxContainer.new()
+	season_text.add_theme_constant_override("separation", 2)
+	season_text.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	season_text.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	season_label = _make_label("第 1 年 · 春", 14, Color(0.82, 0.86, 0.9))
-	lv.add_child(season_label)
+	season_text.add_child(season_label)
+	season_tagline = _make_label("", 12, Color(0.68, 0.78, 0.72))
+	season_tagline.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	season_text.add_child(season_tagline)
+	season_row.add_child(season_text)
+	lv.add_child(season_row)
 
 	var sep1 := HSeparator.new()
 	lv.add_child(sep1)
@@ -1664,7 +1730,9 @@ func _build_ui() -> void:
 	var funds_row := HBoxContainer.new()
 	funds_row.add_theme_constant_override("separation", 6)
 	funds_row.add_child(_make_icon(_icon_grid_for("coin"), Color(0.95, 0.78, 0.25), 18))
-	funds_label = _make_label("80 万", 17, Color(1, 0.95, 0.6))
+	# ⚠ 必须写 24：_snap_px() 只认 12 的倍数，写 17 / 18 都会被吸附回 12px，
+	#   改完看不出一丁点变大（原来的 17 就是这么被吃掉的）。
+	funds_label = _make_label("80 万", 24, Color(1, 0.95, 0.6))
 	funds_label.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	funds_row.add_child(funds_label)
 	lv.add_child(funds_row)
@@ -1774,9 +1842,9 @@ func _build_ui() -> void:
 	bottom_right.anchor_bottom = 1.0
 	bottom_right.offset_left = -180
 	bottom_right.offset_right = -14
-	# 高度要放得下 4 项（已选 / 行动提示 / 排序按钮 / 结束回合）。
+	# 高度要放得下 6 项（已选 / 行动提示 / 排序按钮 / 紧急调度 / 刷新手牌 / 结束回合）。
 	# ⚠ 容器装不下时 Godot 会保 offset_top 而向下长，底部按钮会被顶出屏幕。
-	bottom_right.offset_top = -160
+	bottom_right.offset_top = -256
 	bottom_right.offset_bottom = -14
 	bottom_right.add_theme_constant_override("separation", 4)
 	bottom_right.visible = false
@@ -1802,6 +1870,17 @@ func _build_ui() -> void:
 	hand_sort_btn = _make_button("按类别排序", _toggle_hand_sort, 14)
 	hand_sort_btn.custom_minimum_size = Vector2(166, 40)
 	bottom_right.add_child(hand_sort_btn)
+
+	# 两个「花钱换牌」的容错阀（都在结束回合之上）：
+	#   紧急调度 = 花 40 万从当季池点名一张牌，不占行动位，回合末与手牌一起结算
+	#   刷新手牌 = 花 5 万把整手重抽一遍，每回合限一次
+	dispatch_btn = _make_button("紧急调度 · 40 万", _open_dispatch_panel, 14)
+	dispatch_btn.custom_minimum_size = Vector2(166, 40)
+	bottom_right.add_child(dispatch_btn)
+
+	refresh_btn = _make_button("刷新手牌 · 5 万", _on_refresh_hand, 14)
+	refresh_btn.custom_minimum_size = Vector2(166, 40)
+	bottom_right.add_child(refresh_btn)
 
 	end_turn_btn = _make_button("结束本回合 ▶", _finish_turn, 20)
 	end_turn_btn.custom_minimum_size = Vector2(166, 48)
@@ -4857,7 +4936,9 @@ func _build_metric_tip(parent: Node) -> void:
 	metric_tip_body.fit_content = true
 	metric_tip_body.scroll_active = false
 	metric_tip_body.custom_minimum_size = Vector2(METRIC_TIP_W - 26, 0)
-	metric_tip_body.add_theme_font_size_override("normal_font_size", 13)
+	# 全工程最后一处绕过 _snap_px 的字号（写死 13 → 像素字体 12px，会被缩放糊掉）。
+	# 统一走 _snap_px 后落回 12px，与其它面板一致。
+	metric_tip_body.add_theme_font_size_override("normal_font_size", _snap_px(13))
 	metric_tip_body.add_theme_color_override("default_color", Color(0.90, 0.90, 0.88))
 	vb.add_child(metric_tip_body)
 
@@ -5047,8 +5128,16 @@ func _update_hud() -> void:
 	var t: int = GameState.turn
 	turn_label.text = "第 %d / %d 回合" % [t, GameState.TOTAL_TURNS]
 	var year: int = int((t - 1) / 4) + 1
-	var season: String = SEASONS[(t - 1) % 4]
-	season_label.text = "第 %d 年 · %s" % [year, season]
+	# 季节从 GameState 取（那里是唯一推导处），名字与旁白也一并取，
+	# 免得界面自己再维护一份 %4 映射、跟机制层对不上。
+	var season: String = GameState.current_season()
+	season_label.text = "第 %d 年 · %s" % [year, GameState.SEASON_NAMES.get(season, "")]
+	season_tagline.text = str(GameState.SEASON_TAGLINE.get(season, ""))
+	var season_index: int = GameState.SEASONS.find(season)
+	if season_index >= 0 and season_index != _season_dial_index:
+		_season_dial_index = season_index
+		if season_dial != null:
+			season_dial.turn_to(season_index, t > 1)
 	spent_label.text = "已消耗：%d 万" % GameState.total_spent
 	funds_label.text = "%d 万" % GameState.funds
 	research_label.text = "科研点：%d" % GameState.research_points
@@ -5060,6 +5149,7 @@ func _update_hud() -> void:
 	_update_selected_label()
 	_refresh_warn_bar()
 	_refresh_run_talents()      # 左上「本局天赋」常驻行（内容没变时直接跳过）
+	_refresh_action_buttons()   # 紧急调度 / 刷新手牌 的可用态
 
 
 # ==================== 事件 / 结算 / 知识卡 / 报告 ====================
@@ -5111,12 +5201,231 @@ func _refresh_run_talents() -> void:
 func _enter_allocate() -> void:
 	_current_phase = "allocate"
 	_slide_side_panels(false)  # 新回合开始，侧边栏弹回
-	current_hand = GameState.draw_cards(7 + int(Talents.get_bonus("cards")))
+	# 季节首回合保底：保证每年开局手上有当季专属卡（见 GameState._ensure_one_season_card）
+	current_hand = GameState.draw_cards(7 + int(Talents.get_bonus("cards")), GameState.is_season_opener())
 	play_deal_anim = true
 	_build_hand_panel()
 	hand_panel.visible = true
 	bottom_right.visible = true
 	tier_lever.visible = true
+	# 新回合：刷新按钮复原（上回合碎裂掉的碎片早已掉出屏幕，这里把本体恢复出来）
+	_refresh_used_turn = -1
+	if refresh_btn != null:
+		refresh_btn.modulate.a = 1.0
+	_close_dispatch_panel()
+	_update_hud()
+
+
+# ==================== 紧急调度 / 刷新手牌 ====================
+
+## 刷新两个「花钱换牌」按钮的可用态与文案。
+## 由 _update_hud() 频繁调用 —— 只改文本与 disabled，**绝不重建节点**。
+func _refresh_action_buttons() -> void:
+	if dispatch_btn != null:
+		var cd: int = GameState.dispatch_cooldown_left()
+		if not GameState.dispatched_cards.is_empty():
+			dispatch_btn.text = "已调度 · 待结算"
+			dispatch_btn.disabled = true
+		elif cd > 0:
+			dispatch_btn.text = "紧急调度 · 冷却 %d 回合" % cd
+			dispatch_btn.disabled = true
+		elif GameState.funds < GameState.DISPATCH_COST:
+			dispatch_btn.text = "紧急调度 · %d 万（资金不足）" % GameState.DISPATCH_COST
+			dispatch_btn.disabled = true
+		else:
+			dispatch_btn.text = "紧急调度 · %d 万" % GameState.DISPATCH_COST
+			dispatch_btn.disabled = false
+	if refresh_btn != null:
+		if _refresh_used_turn == GameState.turn:
+			refresh_btn.text = "本回合已刷新"
+			refresh_btn.disabled = true
+		elif GameState.funds < GameState.REFRESH_HAND_COST:
+			refresh_btn.text = "刷新手牌 · %d 万（资金不足）" % GameState.REFRESH_HAND_COST
+			refresh_btn.disabled = true
+		else:
+			refresh_btn.text = "刷新手牌 · %d 万" % GameState.REFRESH_HAND_COST
+			refresh_btn.disabled = false
+
+
+## 刷新手牌：花 5 万把整手重抽一遍（当季卡池）。每回合限一次。
+## 用掉后按钮碎裂掉出屏幕，下回合 _enter_allocate() 复原。
+func _on_refresh_hand() -> void:
+	if _current_phase != "allocate" or _score_animating or _sort_animating:
+		return
+	if _refresh_used_turn == GameState.turn:
+		return
+	if not GameState.spend(GameState.REFRESH_HAND_COST):
+		return
+	_refresh_used_turn = GameState.turn
+	current_hand = GameState.draw_cards(7 + int(Talents.get_bonus("cards")))
+	play_deal_anim = true
+	_build_hand_panel()
+	_play_refresh_break_animation()
+	_update_hud()
+
+
+## UI 根：_build_ui() 里那个 CanvasLayer（名字 "UICanvas"）。
+## 碎片、全屏遮罩这类「要盖住所有面板」的节点都往它上面加 ——
+## ⚠ 注意 canvas 是 _build_ui 的**局部变量**，别的方法里取不到，必须按名字找。
+func _ui_canvas() -> CanvasLayer:
+	return get_node_or_null("UICanvas") as CanvasLayer
+
+
+## 「刷新手牌」用掉后的碎裂演出：按钮本体先隐去（**保留占位**，否则结束回合按钮会往上跳、
+## 造成误点），同时在原位炸出几块碎片、旋转着往下掉出屏幕。
+func _play_refresh_break_animation() -> void:
+	var cv := _ui_canvas()
+	if cv == null:
+		return
+	var rect: Rect2 = refresh_btn.get_global_rect()
+	var rng := RandomNumberGenerator.new()
+	rng.randomize()
+	for i in 9:
+		var shard := ColorRect.new()
+		shard.color = Color(0.60, 0.42, 0.23) if i % 2 == 0 else Color(0.80, 0.61, 0.34)
+		shard.size = Vector2(rng.randf_range(9.0, 24.0), rng.randf_range(5.0, 13.0))
+		shard.position = rect.position + Vector2(
+			rng.randf() * maxf(1.0, rect.size.x - shard.size.x),
+			rng.randf() * maxf(1.0, rect.size.y - shard.size.y))
+		shard.rotation = rng.randf_range(-0.5, 0.5)
+		shard.pivot_offset = shard.size * 0.5
+		shard.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		cv.add_child(shard)
+		var tw := shard.create_tween()
+		tw.set_parallel(true)
+		tw.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+		var land := Vector2(shard.position.x + rng.randf_range(-46.0, 46.0), 780.0)
+		tw.tween_property(shard, "position", land, rng.randf_range(0.55, 0.95)).set_delay(rng.randf_range(0.0, 0.14))
+		tw.tween_property(shard, "rotation", shard.rotation + rng.randf_range(-3.2, 3.2), 0.9)
+		tw.tween_property(shard, "modulate:a", 0.0, 0.55).set_delay(0.4)
+		shard.create_tween().tween_callback(shard.queue_free).set_delay(1.4)
+	refresh_btn.modulate.a = 0.0
+
+
+## 打开紧急调度的选牌面板（列出当季可抽池里每一张牌，按费用排序）
+func _open_dispatch_panel() -> void:
+	if _current_phase != "allocate" or _score_animating or _sort_animating:
+		return
+	if not GameState.can_dispatch():
+		return
+	if dispatch_panel == null:
+		_build_dispatch_panel()
+	_fill_dispatch_list()
+	dispatch_panel.visible = true
+
+
+func _close_dispatch_panel() -> void:
+	if dispatch_panel != null:
+		dispatch_panel.visible = false
+
+
+func _build_dispatch_panel() -> void:
+	dispatch_panel = Control.new()
+	dispatch_panel.set_anchors_preset(Control.PRESET_FULL_RECT)
+	dispatch_panel.visible = false
+	var cv := _ui_canvas()
+	if cv == null:
+		return
+	cv.add_child(dispatch_panel)
+
+	var dim := ColorRect.new()
+	dim.color = Color(0, 0, 0, 0.55)
+	dim.set_anchors_preset(Control.PRESET_FULL_RECT)
+	dim.mouse_filter = Control.MOUSE_FILTER_STOP   # 挡掉底下的手牌点击
+	dispatch_panel.add_child(dim)
+
+	var box := PanelContainer.new()
+	box.anchor_left = 0.5
+	box.anchor_right = 0.5
+	box.anchor_top = 0.5
+	box.anchor_bottom = 0.5
+	box.offset_left = -300
+	box.offset_right = 300
+	box.offset_top = -215
+	box.offset_bottom = 215
+	_panel_style(box, Color(0.18, 0.13, 0.09, 0.98))
+	dispatch_panel.add_child(box)
+
+	var vb := VBoxContainer.new()
+	vb.add_theme_constant_override("separation", 6)
+	box.add_child(vb)
+	var title := _make_label("紧急调度 —— 从当季可抽池里点名一张牌", 18, Color(1, 0.88, 0.55))
+	vb.add_child(title)
+	var l1 := _make_label("花 %d 万，一律按「有效投入」档结算；不占行动位，回合末与手牌一起算分。" % GameState.DISPATCH_COST,
+		12, Color(0.86, 0.88, 0.90))
+	l1.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	vb.add_child(l1)
+	var l2 := _make_label("本局首次可直接用，之后每用一次要空 %d 个回合。" % GameState.DISPATCH_COOLDOWN_TURNS,
+		12, Color(0.70, 0.74, 0.78))
+	vb.add_child(l2)
+
+	var sc := ScrollContainer.new()
+	sc.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	sc.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	vb.add_child(sc)
+	_dispatch_list = VBoxContainer.new()
+	_dispatch_list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_dispatch_list.add_theme_constant_override("separation", 3)
+	sc.add_child(_dispatch_list)
+	vb.add_child(_make_button("取消", _close_dispatch_panel, 14))
+
+
+func _fill_dispatch_list() -> void:
+	for c in _dispatch_list.get_children():
+		_dispatch_list.remove_child(c)
+		c.queue_free()
+	var pool: Array = GameState.season_pool()
+	pool.sort_custom(func(a, b): return int(a["cost"]) < int(b["cost"]))
+	for card in pool:
+		var cid: String = str(card["id"])
+		var cost: int = GameState.tier_cost(cid, GameState.DISPATCH_TIER)
+		var cat: String = str(CATEGORY_NAMES.get(str(card["category"]), ""))
+		var b := _make_button("%s　%s　%d 万" % [str(card["name"]), cat, cost],
+			_on_dispatch_pick.bind(cid), 13)
+		b.custom_minimum_size = Vector2(0, 30)
+		_dispatch_list.add_child(b)
+
+
+## 挑好要调度的牌：扣钱记账、面板关掉。效果**不在这里生效** ——
+## 到回合末由 _spawn_dispatched_cards() 与手牌一起结算（这样才是同一段算分动画）。
+func _on_dispatch_pick(card_id: String) -> void:
+	if GameState.dispatch_card(card_id):
+		_close_dispatch_panel()
+		_update_hud()
+
+
+## 把本回合紧急调度买下的牌做成**真的卡面板**挂进手牌区、执行，并把下标塞进 played。
+## 这么做的好处：甩牌 / 逐张弹分 / 未选中的牌被收走 —— 三个环节全都自动带上它，
+## 不必另写一套并行演出，也就不会出现「调度牌的效果进了账、画面上却没有」。
+## ⚠ 必须在 _score_animating = true 之后调用，否则这些牌 emit 的 metrics_changed
+##   会把指标条先刷到中途值。
+func _spawn_dispatched_cards(played: Array) -> void:
+	if GameState.dispatched_cards.is_empty():
+		return
+	for d in GameState.dispatched_cards:
+		var cid: String = str(d["card_id"])
+		var card: Dictionary = GameState.card_by_id(cid)
+		if card.is_empty():
+			continue
+		if not GameState.execute_action(cid, str(d["tier"])):
+			continue
+		# ⚠ _make_card 返回的是 {panel, cost_label} 字典，不是 PanelContainer ——
+		#   手牌那边也是这么取的（见 _build_hand_panel）。
+		var made: Dictionary = _make_card(card, str(d["tier"]))
+		var panel: PanelContainer = made["panel"]
+		# 起点放在手牌区中间偏下：紧接着会被甩牌动画拉去屏幕中央，
+		# 视觉上就是「它从手里一起飞出去」。**不要**调 _layout_fan ——
+		# 那会把整手牌重新排一遍，白白多一段动画。
+		panel.position = Vector2(card_box.size.x * 0.5 - 61.0, card_box.size.y - 168.0)
+		panel.mouse_filter = Control.MOUSE_FILTER_IGNORE   # 调度牌不接受点击（也不该被取消）
+		card_box.add_child(panel)
+		card_infos.append({
+			"panel": panel, "card_id": cid, "cost_label": made["cost_label"],
+			"base_pos": panel.position, "theta": 0.0, "radial": Vector2(0.0, -1.0),
+			"selected": true, "shaking": false, "hovered": false,
+			"tier": str(d["tier"]), "flying": true, "dispatched": true,
+		})
+		played.append(card_infos.size() - 1)
 
 
 func _build_hand_panel() -> void:
@@ -5808,6 +6117,10 @@ func _finish_turn() -> void:
 				failed.append(info["card_id"])
 			if GameState.game_over:
 				break   # 已经判负，剩下的牌不再执行
+
+	# 紧急调度买下的牌：不占行动位，所以不进上面那个循环；
+	# 但**要和手牌一起进同一段算分动画**（这是这一手牌的一部分），见 _spawn_dispatched_cards。
+	_spawn_dispatched_cards(played)
 
 	# 成就判定放在判负早退**之前**：玩家确实打出了三张同类别，
 	# 哪怕这一手同时把自己打崩了，成就也该照给。

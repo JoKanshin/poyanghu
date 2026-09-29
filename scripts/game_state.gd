@@ -4,6 +4,33 @@ extends Node
 
 # ==================== 常量 ====================
 const TOTAL_TURNS := 16          # 一局 16 回合 = 4 年 × 4 季
+
+# ==================== 季节 ====================
+# 季节由回合号推导：第 1~4 回合 = 春/夏/秋/冬，第 5 回合又是春（第 2 年）。
+# ⚠ 全工程唯一的推导处 —— 界面上的季节 Label 也调 current_season()，别各写一套 %4。
+# 卡池分季的依据是鄱阳湖的水文节律：春涨水、夏高水、秋落水、冬枯水。
+const SEASONS := ["spring", "summer", "autumn", "winter"]
+const SEASON_NAMES := {"spring": "春", "summer": "夏", "autumn": "秋", "winter": "冬"}
+# 每季一句旁白：抽牌界面顶部用，把季节分类变成沉浸式科普
+const SEASON_TAGLINE := {
+	"spring": "五河来水，鱼群启程回家",
+	"summer": "高水漫滩，以守为攻",
+	"autumn": "水落洲出，黄金筹备季",
+	"winter": "碟形湖登场，人鸟面对面",
+}
+
+# ==================== 紧急调度 / 刷新手牌 ====================
+# 紧急调度：花固定一笔钱，直接从**当季卡池**里点名一张牌当场使用 ——
+# 解决「眼看着要崩、手上偏偏没有那张救命的牌」。定位是容错阀而不是主力：
+# 价格固定且偏高、一次只能调一张、**不占行动位**，但结算与常规出牌合并在同一段算分动画里播。
+# 每局首次可直接用，之后每用一次要空 DISPATCH_COOLDOWN_TURNS 个回合。
+const DISPATCH_COST := 40                # 固定价（万）——不问卡价，也不给选档位
+const DISPATCH_COOLDOWN_TURNS := 3       # 两次使用之间要空出的回合数
+const DISPATCH_TIER := "effective"       # 一律按**有效投入**档结算：40 万买不到深度档的双倍效果
+
+# 刷新手牌：抽得不满意，花小钱把整手重抽一遍。每回合限一次。
+const REFRESH_HAND_COST := 5             # （万）
+
 const BASE_FUNDING := 100        # 每回合基础拨款（万）
 const OPERATION_COST := 20       # 固定运营支出（万）
 const MAX_CARRY := 60            # 结转上限（万）
@@ -214,25 +241,27 @@ const ACTION_SETTLEMENT_DELTA := {
 const ACTION_CARDS := [
 	{
 		"id": "water_control", "name": "碟形湖控水", "category": "ecology",
+		"season": "winter",
 		"tags": ["补水调度"],
 		"desc": "调节湖区水位，改善沉水植物块茎发育。",
 		"cost": 39,
 		"tiers": {
-			"basic":     {"effects": [{"metric": "water_level", "delta": 6, "delay": 1}]},
-			"effective": {"effects": [{"metric": "water_level", "delta": 8, "delay": 0}, {"metric": "vegetation", "delta": 4, "delay": 2}]},
-			"deep":      {"effects": [{"metric": "water_level", "delta": 18, "delay": 0}, {"metric": "vegetation", "delta": 11, "delay": 2}, {"metric": "community", "delta": -4, "delay": 0}]},
+			"basic":     {"effects": [{"metric": "water_level", "delta": 6, "delay": 1} , {"metric": "community", "delta": -1, "delay": 0}]},
+			"effective": {"effects": [{"metric": "water_level", "delta": 8, "delay": 0}, {"metric": "vegetation", "delta": 4, "delay": 2} , {"metric": "community", "delta": -2, "delay": 0}]},
+			"deep":      {"effects": [{"metric": "water_level", "delta": 18, "delay": 0}, {"metric": "vegetation", "delta": 8, "delay": 0}, {"metric": "community", "delta": -4, "delay": 0}]},
 		},
 		"side_note": {"deep": "深度控水可能淹没下游农田，社区信任 -4"},
 	},
 	{
 		"id": "veg_restore", "name": "植被补种", "category": "ecology",
+		"season": "spring",
 		"tags": ["生态修复", "物种防控"],
 		"desc": "补种苦草等沉水植物，扩大草洲覆盖。",
 		"cost": 30,
 		"tiers": {
-			"basic":     {"effects": [{"metric": "vegetation", "delta": 6, "delay": 2}]},
-			"effective": {"effects": [{"metric": "vegetation", "delta": 8, "delay": 2}, {"metric": "birds", "delta": 5, "delay": 3}]},
-			"deep":      {"effects": [{"metric": "vegetation", "delta": 17, "delay": 3}, {"metric": "birds", "delta": 13, "delay": 3}]},
+			"basic":     {"effects": [{"metric": "vegetation", "delta": 6, "delay": 2} , {"metric": "community", "delta": -1, "delay": 0}]},
+			"effective": {"effects": [{"metric": "vegetation", "delta": 8, "delay": 2}, {"metric": "birds", "delta": 5, "delay": 3} , {"metric": "community", "delta": -2, "delay": 0}]},
+			"deep":      {"effects": [{"metric": "vegetation", "delta": 9, "delay": 0}, {"metric": "birds", "delta": 7, "delay": 0} , {"metric": "community", "delta": -4, "delay": 0}]},
 		},
 		"side_note": {"effective": "效果延迟 2~3 回合后显现"},
 	},
@@ -242,12 +271,13 @@ const ACTION_CARDS := [
 		# 「植被眼看要跌破红线、这回合必须拉回来」那类救火场景。
 		# 全场原本只有「禁牧禁渔」给即时植被，而它要拿社区信任换（+9 配 -4）。
 		"id": "submerged_planting", "name": "沉水植物移栽", "category": "ecology",
+		"season": "spring",
 		"tags": ["生态修复"],
 		"desc": "移栽成株苦草、黑藻，快速重建水下草场 —— 当回合见效，但成株与固定成本高。",
 		"cost": 40,
 		"tiers": {
-			"basic":     {"effects": [{"metric": "vegetation", "delta": 6, "delay": 1}]},
-			"effective": {"effects": [{"metric": "vegetation", "delta": 11, "delay": 0}]},
+			"basic":     {"effects": [{"metric": "vegetation", "delta": 6, "delay": 1} , {"metric": "community", "delta": -1, "delay": 0}]},
+			"effective": {"effects": [{"metric": "vegetation", "delta": 11, "delay": 0} , {"metric": "community", "delta": -2, "delay": 0}]},
 			"deep":      {"effects": [{"metric": "vegetation", "delta": 25, "delay": 0}, {"metric": "community", "delta": -3, "delay": 0}]},
 		},
 		"side_note": {"deep": "大规模移栽要占用湖区作业面，社区信任 -3"},
@@ -257,18 +287,20 @@ const ACTION_CARDS := [
 		# 这张是**养冬芽/种子库**（便宜、要等 2~3 回合、总量更大且不伤社区）。
 		# 一救火一长投，玩家按「这波撑不撑得住」自己选，而不是只有一条路。
 		"id": "seed_bank", "name": "草种库保育", "category": "ecology",
+		"season": "spring",
 		"tags": ["生态修复"],
 		"desc": "保育苦草、黑藻的冬芽与种子库，为后续萌发留足种源 —— 便宜，但要等 2~3 回合才见效。",
 		"cost": 33,
 		"tiers": {
-			"basic":     {"effects": [{"metric": "vegetation", "delta": 8, "delay": 3}]},
-			"effective": {"effects": [{"metric": "vegetation", "delta": 13, "delay": 2}]},
-			"deep":      {"effects": [{"metric": "vegetation", "delta": 36, "delay": 3}, {"metric": "community", "delta": -2, "delay": 1}]},
+			"basic":     {"effects": [{"metric": "vegetation", "delta": 8, "delay": 3} , {"metric": "community", "delta": -1, "delay": 0}]},
+			"effective": {"effects": [{"metric": "vegetation", "delta": 13, "delay": 2} , {"metric": "community", "delta": -1, "delay": 0}]},
+			"deep":      {"effects": [{"metric": "vegetation", "delta": 20, "delay": 0}, {"metric": "community", "delta": -2, "delay": 0}]},
 		},
 		"side_note": {"effective": "效果延迟 2~3 回合后显现"},
 	},
 	{
 		"id": "water_monitor", "name": "水质监测与病害防治", "category": "ecology",
+		"season": "all",
 		"tags": ["水体治理", "病害防控"],
 		"desc": "监测总磷总氮，提前发现并防治病害风险。",
 		"cost": 22,
@@ -281,30 +313,33 @@ const ACTION_CARDS := [
 	},
 	{
 		"id": "invasive_clear", "name": "外来物种清除", "category": "ecology",
+		"season": "summer",
 		"tags": ["物种防控"],
 		"desc": "清除福寿螺、凤眼莲等外来入侵物种。",
 		"cost": 31,
 		"tiers": {
-			"basic":     {"effects": [{"metric": "vegetation", "delta": 2, "delay": 0}, {"metric": "fish", "delta": 2, "delay": 0}]},
-			"effective": {"effects": [{"metric": "vegetation", "delta": 5, "delay": 1}, {"metric": "fish", "delta": 5, "delay": 1}]},
-			"deep":      {"effects": [{"metric": "vegetation", "delta": 11, "delay": 1}, {"metric": "fish", "delta": 12, "delay": 1}, {"metric": "water_quality", "delta": -3, "delay": 1}]},
+			"basic":     {"effects": [{"metric": "vegetation", "delta": 2, "delay": 0}, {"metric": "fish", "delta": 2, "delay": 0} , {"metric": "community", "delta": -1, "delay": 0}]},
+			"effective": {"effects": [{"metric": "vegetation", "delta": 5, "delay": 1}, {"metric": "fish", "delta": 5, "delay": 1} , {"metric": "community", "delta": -2, "delay": 0}]},
+			"deep":      {"effects": [{"metric": "vegetation", "delta": 9, "delay": 0}, {"metric": "fish", "delta": 10, "delay": 0}, {"metric": "water_quality", "delta": -3, "delay": 0} , {"metric": "community", "delta": -4, "delay": 0}]},
 		},
 		"side_note": {"deep": "快速化学清除有副作用，水质 -3"},
 	},
 	{
 		"id": "bird_canteen", "name": "候鸟食堂营建", "category": "ecology",
+		"season": "autumn",
 		"tags": ["栖息地营造"],
 		"desc": "在堤外农田预留食物地块，减少人鸟冲突。",
 		"cost": 19,
 		"tiers": {
-			"basic":     {"effects": [{"metric": "birds", "delta": 3, "delay": 1}]},
-			"effective": {"effects": [{"metric": "birds", "delta": 6, "delay": 1}]},
-			"deep":      {"effects": [{"metric": "birds", "delta": 15, "delay": 1}, {"metric": "community", "delta": -3, "delay": 1}]},
+			"basic":     {"effects": [{"metric": "birds", "delta": 3, "delay": 1} , {"metric": "community", "delta": -1, "delay": 0}]},
+			"effective": {"effects": [{"metric": "birds", "delta": 6, "delay": 1} , {"metric": "community", "delta": -2, "delay": 0}]},
+			"deep":      {"effects": [{"metric": "birds", "delta": 13, "delay": 0}, {"metric": "community", "delta": -3, "delay": 0}]},
 		},
 		"side_note": {"deep": "未与农户充分协商，社区信任 -3"},
 	},
 	{
 		"id": "rescue", "name": "应急救护", "category": "ecology",
+		"season": "all",
 		"tags": ["应急救护"],
 		"desc": "救护搁浅或受伤个体，建立响应机制。",
 		"cost": 11,
@@ -317,6 +352,7 @@ const ACTION_CARDS := [
 	},
 	{
 		"id": "community_comp", "name": "社区补偿", "category": "social",
+		"season": "all",
 		"tags": ["社区补偿"],
 		"desc": "补偿农户候鸟致害损失，缓解人鸟冲突。",
 		"cost": 29,
@@ -329,30 +365,33 @@ const ACTION_CARDS := [
 	},
 	{
 		"id": "industry_switch", "name": "转产投资", "category": "social",
+		"season": "all",
 		"tags": ["产业转产"],
 		"desc": "扶持退捕渔民转产，形成替代生计。",
 		"cost": 28,
 		"tiers": {
 			"basic":     {"effects": [{"metric": "community", "delta": 7, "delay": 3}]},
 			"effective": {"effects": [{"metric": "community", "delta": 8, "delay": 2}, {"metric": "fish", "delta": 3, "delay": 2}]},
-			"deep":      {"effects": [{"metric": "community", "delta": 16, "delay": 2}, {"metric": "fish", "delta": 6, "delay": 2}]},
+			"deep":      {"effects": [{"metric": "community", "delta": 11, "delay": 0}, {"metric": "fish", "delta": 4, "delay": 0}]},
 		},
 		"side_note": {"effective": "见效慢，2~3 回合后显现"},
 	},
 	{
 		"id": "guard_team", "name": "社区共管与护鸟队", "category": "social",
+		"season": "all",
 		"tags": ["公众参与"],
 		"desc": "建立护鸟员队伍，形成社区巡护网络。",
 		"cost": 25,
 		"tiers": {
 			"basic":     {"effects": [{"metric": "community", "delta": 4, "delay": 1}]},
 			"effective": {"effects": [{"metric": "community", "delta": 5, "delay": 1}, {"metric": "fish", "delta": 3, "delay": 1}]},
-			"deep":      {"effects": [{"metric": "community", "delta": 10, "delay": 1}, {"metric": "fish", "delta": 6, "delay": 1}]},
+			"deep":      {"effects": [{"metric": "community", "delta": 8, "delay": 0}, {"metric": "fish", "delta": 5, "delay": 0}]},
 		},
 		"side_note": {"effective": "与执法巡逻有协同加成"},
 	},
 	{
 		"id": "education", "name": "科普宣传与公众参与", "category": "social",
+		"season": "all",
 		"tags": ["公众参与"],
 		"desc": "提升村民与学生认知，形成公众监测网络。",
 		"cost": 18,
@@ -365,18 +404,20 @@ const ACTION_CARDS := [
 	},
 	{
 		"id": "patrol", "name": "执法巡逻", "category": "manage",
+		"season": "all",
 		"tags": ["执法巡护"],
 		"desc": "严查非法捕捞，直接决定鱼类恢复速度。",
 		"cost": 19,
 		"tiers": {
-			"basic":     {"effects": [{"metric": "fish", "delta": 3, "delay": 1}]},
-			"effective": {"effects": [{"metric": "fish", "delta": 6, "delay": 1}]},
-			"deep":      {"effects": [{"metric": "fish", "delta": 14, "delay": 1}, {"metric": "community", "delta": -2, "delay": 1}]},
+			"basic":     {"effects": [{"metric": "fish", "delta": 3, "delay": 1} , {"metric": "community", "delta": -1, "delay": 0}]},
+			"effective": {"effects": [{"metric": "fish", "delta": 6, "delay": 1} , {"metric": "community", "delta": -1, "delay": 0}]},
+			"deep":      {"effects": [{"metric": "fish", "delta": 12, "delay": 0}, {"metric": "community", "delta": -2, "delay": 0}]},
 		},
 		"side_note": {"deep": "严格执法可能引发不满，社区信任 -2"},
 	},
 	{
 		"id": "research", "name": "生态监测与科研", "category": "manage",
+		"season": "all",
 		"tags": ["科研监测"],
 		"desc": "提高预报准确率，建立长期数据库。",
 		"cost": 30,
@@ -389,133 +430,144 @@ const ACTION_CARDS := [
 	},
 	{
 		"id": "water_replenish", "name": "生态补水（引江济湖）", "category": "ecology",
+		"season": "winter",
 		"tags": ["补水调度"],
 		"desc": "跨流域引水补充湖区水量，缓解枯水、恢复浅滩生境。",
 		"cost": 49,
 		"tiers": {
-			"basic":     {"effects": [{"metric": "water_level", "delta": 7, "delay": 0}]},
-			"effective": {"effects": [{"metric": "water_level", "delta": 11, "delay": 0}, {"metric": "vegetation", "delta": 3, "delay": 1}]},
-			"deep":      {"effects": [{"metric": "water_level", "delta": 24, "delay": 0}, {"metric": "vegetation", "delta": 7, "delay": 1}, {"metric": "community", "delta": -3, "delay": 0}]},
+			"basic":     {"effects": [{"metric": "water_level", "delta": 7, "delay": 0} , {"metric": "community", "delta": -1, "delay": 0}]},
+			"effective": {"effects": [{"metric": "water_level", "delta": 11, "delay": 0}, {"metric": "vegetation", "delta": 3, "delay": 1} , {"metric": "community", "delta": -2, "delay": 0}]},
+			"deep":      {"effects": [{"metric": "water_level", "delta": 24, "delay": 0}, {"metric": "vegetation", "delta": 6, "delay": 0}, {"metric": "community", "delta": -3, "delay": 0}]},
 		},
 		"side_note": {"deep": "引水挤占下游农业用水，社区信任 -3"},
 	},
 	{
 		"id": "water_storage", "name": "蓄水保水工程", "category": "ecology",
+		"season": "autumn",
 		"tags": ["补水调度"],
 		"desc": "在碟形湖与入江水道修建蓄水闸，汛期拦蓄、旱季保水，稳定湖区水位。",
 		"cost": 33,
 		"tiers": {
-			"basic":     {"effects": [{"metric": "water_level", "delta": 5, "delay": 1}]},
-			"effective": {"effects": [{"metric": "water_level", "delta": 9, "delay": 0}]},
+			"basic":     {"effects": [{"metric": "water_level", "delta": 5, "delay": 1} , {"metric": "community", "delta": -1, "delay": 0}]},
+			"effective": {"effects": [{"metric": "water_level", "delta": 9, "delay": 0} , {"metric": "community", "delta": -2, "delay": 0}]},
 			"deep":      {"effects": [{"metric": "water_level", "delta": 21, "delay": 0}, {"metric": "community", "delta": -3, "delay": 0}]},
 		},
 		"side_note": {"deep": "拦蓄过多影响下游用水，社区信任 -3"},
 	},
 	{
 		"id": "water_schedule", "name": "闸坝联合调度", "category": "manage",
+		"season": "summer",
 		"tags": ["补水调度"],
 		"desc": "协调上游水库联合调度，保障湖区生态流量，缓解枯水并改善水体流动性。",
 		"cost": 33,
 		"tiers": {
-			"basic":     {"effects": [{"metric": "water_level", "delta": 5, "delay": 1}]},
-			"effective": {"effects": [{"metric": "water_level", "delta": 7, "delay": 0}, {"metric": "water_quality", "delta": 2, "delay": 0}]},
+			"basic":     {"effects": [{"metric": "water_level", "delta": 5, "delay": 1} , {"metric": "community", "delta": -1, "delay": 0}]},
+			"effective": {"effects": [{"metric": "water_level", "delta": 7, "delay": 0}, {"metric": "water_quality", "delta": 2, "delay": 0} , {"metric": "community", "delta": -1, "delay": 0}]},
 			"deep":      {"effects": [{"metric": "water_level", "delta": 15, "delay": 0}, {"metric": "water_quality", "delta": 5, "delay": 0}, {"metric": "community", "delta": -2, "delay": 0}]},
 		},
 		"side_note": {"deep": "调水涉及上下游利益，社区信任 -2"},
 	},
 	{
 		"id": "wetland_restore", "name": "退田还湿（湿地生态修复）", "category": "ecology",
+		"season": "autumn",
 		"tags": ["生态修复"],
 		"desc": "将环湖低产农田退还为湿地，重建自然水文节律。",
 		"cost": 31,
 		"tiers": {
-			"basic":     {"effects": [{"metric": "vegetation", "delta": 5, "delay": 1}]},
+			"basic":     {"effects": [{"metric": "vegetation", "delta": 5, "delay": 1} , {"metric": "community", "delta": -1, "delay": 0}]},
 			"effective": {"effects": [{"metric": "vegetation", "delta": 10, "delay": 2}, {"metric": "water_quality", "delta": 5, "delay": 2}, {"metric": "community", "delta": -2, "delay": 0}]},
-			"deep":      {"effects": [{"metric": "vegetation", "delta": 16, "delay": 2}, {"metric": "water_quality", "delta": 9, "delay": 2}, {"metric": "birds", "delta": 6, "delay": 3}, {"metric": "community", "delta": -4, "delay": 0}]},
+			"deep":      {"effects": [{"metric": "vegetation", "delta": 11, "delay": 0}, {"metric": "water_quality", "delta": 6, "delay": 0}, {"metric": "birds", "delta": 3, "delay": 0}, {"metric": "community", "delta": -4, "delay": 0}]},
 		},
 		"side_note": {"effective": "退田农户短期受损，社区信任 -2"},
 	},
 	{
 		"id": "floating_island", "name": "人工浮岛（生态浮床）", "category": "ecology",
+		"season": "spring",
 		"tags": ["水体治理"],
 		"desc": "布置人工浮岛与生态浮床，吸附氮磷、净化水体。",
 		"cost": 35,
 		"tiers": {
-			"basic":     {"effects": [{"metric": "water_quality", "delta": 5, "delay": 1}]},
-			"effective": {"effects": [{"metric": "water_quality", "delta": 7, "delay": 0}, {"metric": "vegetation", "delta": 3, "delay": 1}]},
-			"deep":      {"effects": [{"metric": "water_quality", "delta": 14, "delay": 0}, {"metric": "vegetation", "delta": 6, "delay": 1}]},
+			"basic":     {"effects": [{"metric": "water_quality", "delta": 5, "delay": 1} , {"metric": "community", "delta": -1, "delay": 0}]},
+			"effective": {"effects": [{"metric": "water_quality", "delta": 7, "delay": 0}, {"metric": "vegetation", "delta": 3, "delay": 1} , {"metric": "community", "delta": -2, "delay": 0}]},
+			"deep":      {"effects": [{"metric": "water_quality", "delta": 14, "delay": 0}, {"metric": "vegetation", "delta": 5, "delay": 0} , {"metric": "community", "delta": -4, "delay": 0}]},
 		},
 		"side_note": {},
 	},
 	{
 		"id": "dredge", "name": "底泥清淤疏浚", "category": "ecology",
+		"season": "winter",
 		"tags": ["水体治理"],
 		"desc": "疏浚淤积底泥，削减内源污染、恢复湖床通透性。",
 		"cost": 27,
 		"tiers": {
-			"basic":     {"effects": [{"metric": "water_quality", "delta": 5, "delay": 2}]},
-			"effective": {"effects": [{"metric": "water_quality", "delta": 7, "delay": 1}, {"metric": "fish", "delta": 2, "delay": 2}]},
-			"deep":      {"effects": [{"metric": "water_quality", "delta": 16, "delay": 1}, {"metric": "fish", "delta": 6, "delay": 2}, {"metric": "vegetation", "delta": -3, "delay": 0}]},
+			"basic":     {"effects": [{"metric": "water_quality", "delta": 5, "delay": 2} , {"metric": "community", "delta": -1, "delay": 0}]},
+			"effective": {"effects": [{"metric": "water_quality", "delta": 7, "delay": 1}, {"metric": "fish", "delta": 2, "delay": 2} , {"metric": "community", "delta": -2, "delay": 0}]},
+			"deep":      {"effects": [{"metric": "water_quality", "delta": 14, "delay": 0}, {"metric": "fish", "delta": 4, "delay": 0}, {"metric": "vegetation", "delta": -3, "delay": 0} , {"metric": "community", "delta": -4, "delay": 0}]},
 		},
 		"side_note": {"deep": "机械清淤扰动湖床，短期植被 -3"},
 	},
 	{
 		"id": "habitat_protect", "name": "越冬栖息地保护", "category": "ecology",
+		"season": "autumn",
 		"tags": ["栖息地营造"],
 		"desc": "划定并管护候鸟越冬栖息地，控制人为干扰与栖息地破碎化。",
 		"cost": 27,
 		"tiers": {
-			"basic":     {"effects": [{"metric": "birds", "delta": 4, "delay": 1}]},
-			"effective": {"effects": [{"metric": "birds", "delta": 7, "delay": 1}, {"metric": "vegetation", "delta": 2, "delay": 2}]},
-			"deep":      {"effects": [{"metric": "birds", "delta": 14, "delay": 1}, {"metric": "vegetation", "delta": 4, "delay": 2}]},
+			"basic":     {"effects": [{"metric": "birds", "delta": 4, "delay": 1} , {"metric": "community", "delta": -1, "delay": 0}]},
+			"effective": {"effects": [{"metric": "birds", "delta": 7, "delay": 1}, {"metric": "vegetation", "delta": 2, "delay": 2} , {"metric": "community", "delta": -2, "delay": 0}]},
+			"deep":      {"effects": [{"metric": "birds", "delta": 12, "delay": 0}, {"metric": "vegetation", "delta": 3, "delay": 0} , {"metric": "community", "delta": -4, "delay": 0}]},
 		},
 		"side_note": {},
 	},
 	{
 		"id": "ecotourism", "name": "生态旅游与观鸟经济", "category": "social",
+		"season": "winter",
 		"tags": ["产业转产"],
 		"desc": "发展观鸟旅游与生态体验，让保护产生社区收益。",
 		"cost": 31,
 		"tiers": {
 			"basic":     {"effects": [{"metric": "community", "delta": 5, "delay": 1}]},
 			"effective": {"effects": [{"metric": "community", "delta": 6, "delay": 0}, {"metric": "birds", "delta": 3, "delay": 1}]},
-			"deep":      {"effects": [{"metric": "community", "delta": 14, "delay": 1}, {"metric": "birds", "delta": 8, "delay": 1}, {"metric": "water_quality", "delta": -2, "delay": 1}]},
+			"deep":      {"effects": [{"metric": "community", "delta": 12, "delay": 0}, {"metric": "birds", "delta": 7, "delay": 0}, {"metric": "water_quality", "delta": -2, "delay": 0}]},
 		},
 		"side_note": {"deep": "游客激增带来环境压力，水质 -2"},
 	},
 	{
 		"id": "damage_insurance", "name": "野生动物致害保险", "category": "social",
+		"season": "autumn",
 		"tags": ["社区补偿"],
 		"desc": "建立候鸟致害补偿保险，农户损失及时赔付。",
 		"cost": 32,
 		"tiers": {
 			"basic":     {"effects": [{"metric": "community", "delta": 5, "delay": 1}]},
 			"effective": {"effects": [{"metric": "community", "delta": 7, "delay": 0}, {"metric": "birds", "delta": 2, "delay": 1}]},
-			"deep":      {"effects": [{"metric": "community", "delta": 14, "delay": 1}, {"metric": "birds", "delta": 6, "delay": 1}]},
+			"deep":      {"effects": [{"metric": "community", "delta": 12, "delay": 0}, {"metric": "birds", "delta": 5, "delay": 0}]},
 		},
 		"side_note": {"deep": "保险兜底后农户不再驱赶候鸟"},
 	},
 	{
 		"id": "eco_brand", "name": "生态产品认证与助销", "category": "social",
+		"season": "all",
 		"tags": ["产业转产"],
 		"desc": "认证湖区生态农产品并拓展销路，让绿色生产有利可图。",
 		"cost": 26,
 		"tiers": {
 			"basic":     {"effects": [{"metric": "community", "delta": 5, "delay": 2}]},
 			"effective": {"effects": [{"metric": "community", "delta": 6, "delay": 1}, {"metric": "water_quality", "delta": 3, "delay": 2}]},
-			"deep":      {"effects": [{"metric": "community", "delta": 10, "delay": 2}, {"metric": "water_quality", "delta": 7, "delay": 2}, {"metric": "vegetation", "delta": 3, "delay": 1}]},
+			"deep":      {"effects": [{"metric": "community", "delta": 7, "delay": 0}, {"metric": "water_quality", "delta": 5, "delay": 0}, {"metric": "vegetation", "delta": 3, "delay": 0}]},
 		},
 		"side_note": {"effective": "减少化肥农药投入，水质间接改善"},
 	},
 	{
 		"id": "fish_restock", "name": "增殖放流", "category": "manage",
+		"season": "spring",
 		"tags": ["增殖放流"],
 		"desc": "投放鱼苗，恢复鱼类资源量与江湖洄游通道。",
 		"cost": 26,
 		"tiers": {
-			"basic":     {"effects": [{"metric": "fish", "delta": 5, "delay": 2}]},
+			"basic":     {"effects": [{"metric": "fish", "delta": 5, "delay": 2} ]},
 			"effective": {"effects": [{"metric": "fish", "delta": 8, "delay": 2}, {"metric": "community", "delta": 2, "delay": 2}]},
-			"deep":      {"effects": [{"metric": "fish", "delta": 16, "delay": 2}, {"metric": "community", "delta": 4, "delay": 2}]},
+			"deep":      {"effects": [{"metric": "fish", "delta": 11, "delay": 0}, {"metric": "community", "delta": 3, "delay": 0}]},
 		},
 		"side_note": {"deep": "渔民共享放流收益，社区信任 +4"},
 	},
@@ -525,47 +577,51 @@ const ACTION_CARDS := [
 		# 补的是「鱼类眼看跌破红线、这回合必须拉回来」的救火位 ——
 		# 全场原本给即时鱼的只有执法巡逻与外来物种清除的 +2，杯水车薪。
 		"id": "spawning_ground", "name": "鱼类产卵场修复", "category": "manage",
+		"season": "spring",
 		"tags": ["生态修复"],
 		"desc": "修复四大家鱼产卵场与洄游通道：当回合就见鱼群回补，后续繁殖还会再涨一波。",
 		"cost": 43,
 		"tiers": {
-			"basic":     {"effects": [{"metric": "fish", "delta": 6, "delay": 0}]},
-			"effective": {"effects": [{"metric": "fish", "delta": 9, "delay": 0}, {"metric": "fish", "delta": 4, "delay": 2}]},
-			"deep":      {"effects": [{"metric": "fish", "delta": 19, "delay": 0}, {"metric": "fish", "delta": 11, "delay": 2}, {"metric": "community", "delta": -3, "delay": 0}]},
+			"basic":     {"effects": [{"metric": "fish", "delta": 6, "delay": 0} , {"metric": "community", "delta": -1, "delay": 0}]},
+			"effective": {"effects": [{"metric": "fish", "delta": 9, "delay": 0}, {"metric": "fish", "delta": 4, "delay": 2} , {"metric": "community", "delta": -2, "delay": 0}]},
+			"deep":      {"effects": [{"metric": "fish", "delta": 19, "delay": 0}, {"metric": "fish", "delta": 8, "delay": 0}, {"metric": "community", "delta": -3, "delay": 0}]},
 		},
 		"side_note": {"deep": "产卵场禁渔期影响短期捕捞，社区信任 -3"},
 	},
 	{
 		"id": "smart_patrol", "name": "智慧巡护（无人机遥感）", "category": "manage",
+		"season": "all",
 		"tags": ["执法巡护"],
 		"desc": "无人机与遥感全天候巡护，监测非法捕捞、火情与水质。",
 		"cost": 25,
 		"tiers": {
 			"basic":     {"effects": [{"metric": "fish", "delta": 4, "delay": 1}]},
 			"effective": {"effects": [{"metric": "fish", "delta": 6, "delay": 1}, {"metric": "water_quality", "delta": 2, "delay": 1}]},
-			"deep":      {"effects": [{"metric": "fish", "delta": 12, "delay": 1}, {"metric": "water_quality", "delta": 4, "delay": 1}]},
+			"deep":      {"effects": [{"metric": "fish", "delta": 10, "delay": 0}, {"metric": "water_quality", "delta": 3, "delay": 0}]},
 		},
 		"side_note": {},
 	},
 	{
 		"id": "wetland_law", "name": "湿地保护立法", "category": "manage",
+		"season": "all",
 		"tags": ["执法巡护"],
 		"desc": "推动地方湿地保护条例，划定禁渔区与生态红线。",
 		"cost": 33,
 		"tiers": {
-			"basic":     {"effects": [{"metric": "fish", "delta": 8, "delay": 3}]},
+			"basic":     {"effects": [{"metric": "fish", "delta": 8, "delay": 3} ]},
 			"effective": {"effects": [{"metric": "fish", "delta": 6, "delay": 2}, {"metric": "birds", "delta": 4, "delay": 2}, {"metric": "community", "delta": 3, "delay": 2}]},
-			"deep":      {"effects": [{"metric": "fish", "delta": 12, "delay": 2}, {"metric": "birds", "delta": 8, "delay": 2}, {"metric": "community", "delta": 6, "delay": 2}]},
+			"deep":      {"effects": [{"metric": "fish", "delta": 8, "delay": 0}, {"metric": "birds", "delta": 6, "delay": 0}, {"metric": "community", "delta": 4, "delay": 0}]},
 		},
 		"side_note": {"effective": "立法见效慢，2 回合后逐步显现"},
 	},
 	{
 		"id": "grazing_ban", "name": "封洲禁牧", "category": "manage",
+		"season": "autumn",
 		"tags": ["生态修复"],
 		"desc": "禁止湖洲过度放牧，保护洲滩草甸植被。",
 		"cost": 11,
 		"tiers": {
-			"basic":     {"effects": [{"metric": "vegetation", "delta": 2, "delay": 2}]},
+			"basic":     {"effects": [{"metric": "vegetation", "delta": 2, "delay": 2} , {"metric": "community", "delta": -1, "delay": 0}]},
 			"effective": {"effects": [{"metric": "vegetation", "delta": 5, "delay": 0}, {"metric": "community", "delta": -2, "delay": 0}]},
 			"deep":      {"effects": [{"metric": "vegetation", "delta": 10, "delay": 0}, {"metric": "community", "delta": -4, "delay": 0}]},
 		},
@@ -587,6 +643,7 @@ const ACTION_CARDS := [
 	# ---------- 社会（7 张）----------
 	{
 		"id": "water_comanage", "name": "社区水权共管", "category": "social",
+		"season": "all",
 		"tags": ["社区参与", "补水调度"],
 		"desc": "把灌溉与生态用水的分配权交给村民议事会，从抢水变成共管。",
 		"cost": 44,
@@ -599,6 +656,7 @@ const ACTION_CARDS := [
 	},
 	{
 		"id": "sewage_comanage", "name": "社区污水共治", "category": "social",
+		"season": "all",
 		"tags": ["水体治理", "社区参与"],
 		"desc": "村民自建自管小型污水设施，从源头削减入湖污染。",
 		"cost": 47,
@@ -611,6 +669,7 @@ const ACTION_CARDS := [
 	},
 	{
 		"id": "fish_market", "name": "社区渔市共营", "category": "social",
+		"season": "all",
 		"tags": ["社区参与", "增殖放流"],
 		"desc": "村集体统一经营渔获与品牌，收益按户分红，让护鱼的人有饭吃。",
 		"cost": 44,
@@ -623,6 +682,7 @@ const ACTION_CARDS := [
 	},
 	{
 		"id": "bird_friendly", "name": "候鸟友好社区", "category": "social",
+		"season": "all",
 		"tags": ["社区参与", "栖息地营造"],
 		"desc": "与社区共建候鸟友好型生产生活方式，减少人鸟冲突。",
 		"cost": 44,
@@ -635,37 +695,40 @@ const ACTION_CARDS := [
 	},
 	{
 		"id": "fisher_retrain", "name": "渔民转产培训", "category": "social",
+		"season": "all",
 		"tags": ["产业转型", "社区参与"],
 		"desc": "组织退捕渔民参加技能培训与就业对接，转产不离乡。",
 		"cost": 42,
 		"tiers": {
 			"basic":     {"effects": [{"metric": "community", "delta": 6, "delay": 0}]},
 			"effective": {"effects": [{"metric": "community", "delta": 9, "delay": 0}, {"metric": "fish", "delta": 3, "delay": 1}]},
-			"deep":      {"effects": [{"metric": "community", "delta": 18, "delay": 1}, {"metric": "fish", "delta": 8, "delay": 0}]},
+			"deep":      {"effects": [{"metric": "community", "delta": 15, "delay": 0}, {"metric": "fish", "delta": 8, "delay": 0}]},
 		},
 		"side_note": {"effective": "转产后下湖的人少了，鱼类压力随之下降"},
 	},
 	{
 		"id": "eco_jobs", "name": "生态管护公益岗", "category": "social",
+		"season": "all",
 		"tags": ["社区参与", "生态修复"],
 		"desc": "设护湿员、护鸟员等公益岗位，把生态保护变成村民的稳定收入。",
 		"cost": 41,
 		"tiers": {
 			"basic":     {"effects": [{"metric": "community", "delta": 4, "delay": 1}, {"metric": "vegetation", "delta": 2, "delay": 0}]},
 			"effective": {"effects": [{"metric": "community", "delta": 7, "delay": 0}, {"metric": "vegetation", "delta": 5, "delay": 1}]},
-			"deep":      {"effects": [{"metric": "community", "delta": 14, "delay": 0}, {"metric": "vegetation", "delta": 10, "delay": 1}]},
+			"deep":      {"effects": [{"metric": "community", "delta": 14, "delay": 0}, {"metric": "vegetation", "delta": 8, "delay": 0}]},
 		},
 		"side_note": {"effective": "护湿员日常巡护，草洲破坏随之减少"},
 	},
 	{
 		"id": "eco_resettle", "name": "生态搬迁安置", "category": "social",
+		"season": "all",
 		"tags": ["生态修复", "产业转型"],
 		"desc": "把圩区内的居民迁出并妥善安置，退出的土地交给湿地自然恢复。",
 		"cost": 42,
 		"tiers": {
 			"basic":     {"effects": [{"metric": "vegetation", "delta": 10, "delay": 2}, {"metric": "community", "delta": -2, "delay": 2}]},
 			"effective": {"effects": [{"metric": "vegetation", "delta": 12, "delay": 1}, {"metric": "water_quality", "delta": 5, "delay": 1}, {"metric": "community", "delta": -3, "delay": 0}]},
-			"deep":      {"effects": [{"metric": "vegetation", "delta": 22, "delay": 1}, {"metric": "water_quality", "delta": 11, "delay": 1}, {"metric": "community", "delta": -5, "delay": 0}]},
+			"deep":      {"effects": [{"metric": "vegetation", "delta": 19, "delay": 0}, {"metric": "water_quality", "delta": 9, "delay": 0}, {"metric": "community", "delta": -5, "delay": 0}]},
 		},
 		"side_note": {"deep": "搬迁触动既有生计，社区信任 -5"},
 	},
@@ -673,75 +736,107 @@ const ACTION_CARDS := [
 	# ---------- 管理（6 张）----------
 	{
 		"id": "sluice_fry", "name": "灌江纳苗", "category": "manage",
+		"season": "spring",
 		"tags": ["增殖放流", "水工调控"],
 		"desc": "汛期开闸引江，让长江鱼苗随水进入湖区 —— 老办法，但管用。",
 		"cost": 42,
 		"tiers": {
-			"basic":     {"effects": [{"metric": "fish", "delta": 6, "delay": 0}]},
-			"effective": {"effects": [{"metric": "fish", "delta": 9, "delay": 0}, {"metric": "water_level", "delta": 3, "delay": 1}]},
-			"deep":      {"effects": [{"metric": "fish", "delta": 18, "delay": 0}, {"metric": "water_level", "delta": 6, "delay": 1}]},
+			"basic":     {"effects": [{"metric": "fish", "delta": 6, "delay": 0} , {"metric": "community", "delta": -1, "delay": 0}]},
+			"effective": {"effects": [{"metric": "fish", "delta": 9, "delay": 0}, {"metric": "water_level", "delta": 3, "delay": 1} , {"metric": "community", "delta": -2, "delay": 0}]},
+			"deep":      {"effects": [{"metric": "fish", "delta": 18, "delay": 0}, {"metric": "water_level", "delta": 5, "delay": 0} , {"metric": "community", "delta": -4, "delay": 0}]},
 		},
 		"side_note": {"effective": "引江也会抬高水位，枯水期效果更明显"},
 	},
 	{
 		"id": "migration_corridor", "name": "迁徙廊道管理", "category": "manage",
+		"season": "autumn",
 		"tags": ["栖息地营造", "执法巡护"],
 		"desc": "维护候鸟停歇地的水位与人为干扰管控，保证迁徙通道畅通。",
 		"cost": 42,
 		"tiers": {
-			"basic":     {"effects": [{"metric": "birds", "delta": 6, "delay": 0}]},
-			"effective": {"effects": [{"metric": "birds", "delta": 9, "delay": 0}, {"metric": "vegetation", "delta": 3, "delay": 1}]},
-			"deep":      {"effects": [{"metric": "birds", "delta": 18, "delay": 0}, {"metric": "vegetation", "delta": 6, "delay": 1}]},
+			"basic":     {"effects": [{"metric": "birds", "delta": 6, "delay": 0} , {"metric": "community", "delta": -1, "delay": 0}]},
+			"effective": {"effects": [{"metric": "birds", "delta": 9, "delay": 0}, {"metric": "vegetation", "delta": 3, "delay": 1} , {"metric": "community", "delta": -2, "delay": 0}]},
+			"deep":      {"effects": [{"metric": "birds", "delta": 18, "delay": 0}, {"metric": "vegetation", "delta": 5, "delay": 0} , {"metric": "community", "delta": -4, "delay": 0}]},
 		},
 		"side_note": {"effective": "管控干扰的同时，停歇地草洲也得以休养"},
 	},
 	{
 		"id": "algae_response", "name": "水质应急除藻", "category": "manage",
+		"season": "summer",
 		"tags": ["水体治理"],
 		"desc": "蓝藻暴发时应急打捞与除藻，先把水质压住再谈长效治理。",
 		"cost": 40,
 		"tiers": {
-			"basic":     {"effects": [{"metric": "water_quality", "delta": 6, "delay": 1}]},
-			"effective": {"effects": [{"metric": "water_quality", "delta": 11, "delay": 0}]},
+			"basic":     {"effects": [{"metric": "water_quality", "delta": 6, "delay": 1} , {"metric": "community", "delta": -1, "delay": 0}]},
+			"effective": {"effects": [{"metric": "water_quality", "delta": 11, "delay": 0} , {"metric": "community", "delta": -1, "delay": 0}]},
 			"deep":      {"effects": [{"metric": "water_quality", "delta": 24, "delay": 0}, {"metric": "community", "delta": -2, "delay": 0}]},
 		},
 		"side_note": {"deep": "大规模打捞影响湖面作业，社区信任 -2"},
 	},
 	{
 		"id": "obstruction_clear", "name": "湖区清障执法", "category": "manage",
+		"season": "winter",
 		"tags": ["执法巡护", "生态修复"],
 		"desc": "清理湖区内违规围网、矮围与违建，让水草重新长回来。",
 		"cost": 42,
 		"tiers": {
-			"basic":     {"effects": [{"metric": "vegetation", "delta": 6, "delay": 0}]},
-			"effective": {"effects": [{"metric": "vegetation", "delta": 9, "delay": 0}, {"metric": "fish", "delta": 3, "delay": 1}]},
-			"deep":      {"effects": [{"metric": "vegetation", "delta": 18, "delay": 1}, {"metric": "fish", "delta": 8, "delay": 0}]},
+			"basic":     {"effects": [{"metric": "vegetation", "delta": 6, "delay": 0} , {"metric": "community", "delta": -1, "delay": 0}]},
+			"effective": {"effects": [{"metric": "vegetation", "delta": 9, "delay": 0}, {"metric": "fish", "delta": 3, "delay": 1} , {"metric": "community", "delta": -2, "delay": 0}]},
+			"deep":      {"effects": [{"metric": "vegetation", "delta": 15, "delay": 0}, {"metric": "fish", "delta": 8, "delay": 0} , {"metric": "community", "delta": -4, "delay": 0}]},
 		},
 		"side_note": {"deep": "拆除围网触及既得利益，执法阻力不小"},
 	},
 	{
 		"id": "lake_chief", "name": "湖长制考核", "category": "manage",
+		"season": "winter",
 		"tags": ["执法巡护", "社区参与"],
 		"desc": "把生态指标纳入湖区干部考核，压着各级真正去治。",
 		"cost": 41,
 		"tiers": {
 			"basic":     {"effects": [{"metric": "community", "delta": 6, "delay": 1}]},
 			"effective": {"effects": [{"metric": "community", "delta": 8, "delay": 0}, {"metric": "water_quality", "delta": 4, "delay": 1}]},
-			"deep":      {"effects": [{"metric": "community", "delta": 14, "delay": 1}, {"metric": "water_quality", "delta": 8, "delay": 1}, {"metric": "vegetation", "delta": 5, "delay": 1}]},
+			"deep":      {"effects": [{"metric": "community", "delta": 12, "delay": 0}, {"metric": "water_quality", "delta": 7, "delay": 0}, {"metric": "vegetation", "delta": 4, "delay": 0}]},
 		},
 		"side_note": {"effective": "考核压力层层传导，治理动作随之变快"},
 	},
 	{
 		"id": "fishway", "name": "水工程鱼道建设", "category": "manage",
+		"season": "winter",
 		"tags": ["栖息地营造", "增殖放流"],
 		"desc": "在闸坝上补建过鱼设施，恢复江湖洄游通道 —— 工程量大，见效要等。",
 		"cost": 44,
 		"tiers": {
-			"basic":     {"effects": [{"metric": "fish", "delta": 9, "delay": 2}]},
-			"effective": {"effects": [{"metric": "fish", "delta": 11, "delay": 1}, {"metric": "birds", "delta": 4, "delay": 2}]},
-			"deep":      {"effects": [{"metric": "fish", "delta": 20, "delay": 1}, {"metric": "birds", "delta": 10, "delay": 2}]},
+			"basic":     {"effects": [{"metric": "fish", "delta": 9, "delay": 2} , {"metric": "community", "delta": -1, "delay": 0}]},
+			"effective": {"effects": [{"metric": "fish", "delta": 11, "delay": 1}, {"metric": "birds", "delta": 4, "delay": 2} , {"metric": "community", "delta": -2, "delay": 0}]},
+			"deep":      {"effects": [{"metric": "fish", "delta": 17, "delay": 0}, {"metric": "birds", "delta": 7, "delay": 0} , {"metric": "community", "delta": -4, "delay": 0}]},
 		},
 		"side_note": {"effective": "洄游通道打通后，以鱼为食的候鸟也跟着回来"},
+	},
+	{
+		"id": "sand_mining", "name": "采砂监管", "category": "manage",
+		"season": "summer",
+		"tags": ["执法巡护", "水体治理"],
+		"desc": "汛期高水位下非法采砂最猖獗：搅动河床、悬浮物激增，沉水植物被连根冲走。集中巡江可护住水质与草场 —— 但触及砂石从业者的生计。",
+		"cost": 42,
+		"tiers": {
+			"basic":     {"effects": [{"metric": "water_quality", "delta": 6, "delay": 0}, {"metric": "vegetation", "delta": 1, "delay": 0}, {"metric": "community", "delta": -1, "delay": 0}]},
+			"effective": {"effects": [{"metric": "water_quality", "delta": 11, "delay": 0}, {"metric": "vegetation", "delta": 3, "delay": 0}, {"metric": "community", "delta": -2, "delay": 0}]},
+			"deep":      {"effects": [{"metric": "water_quality", "delta": 22, "delay": 0}, {"metric": "vegetation", "delta": 6, "delay": 0}, {"metric": "community", "delta": -4, "delay": 0}]},
+		},
+		"side_note": {"deep": "砂石行业转产安置不到位，社区信任 -4"},
+	},
+	{
+		"id": "nonpoint_intercept", "name": "汛期面源污染拦截", "category": "ecology",
+		"season": "summer",
+		"tags": ["水体治理", "生态修复"],
+		"desc": "夏季暴雨把农田化肥、畜禽粪污一股脑冲进湖里，是全年总磷总氮的最高峰。在入湖沟渠布设生态拦截带，把污染挡在湖外。",
+		"cost": 40,
+		"tiers": {
+			"basic":     {"effects": [{"metric": "water_quality", "delta": 5, "delay": 0}, {"metric": "fish", "delta": 2, "delay": 0}, {"metric": "community", "delta": -1, "delay": 0}]},
+			"effective": {"effects": [{"metric": "water_quality", "delta": 9, "delay": 0}, {"metric": "fish", "delta": 4, "delay": 0}, {"metric": "community", "delta": -2, "delay": 0}]},
+			"deep":      {"effects": [{"metric": "water_quality", "delta": 18, "delay": 0}, {"metric": "fish", "delta": 8, "delay": 0}, {"metric": "community", "delta": -4, "delay": 0}]},
+		},
+		"side_note": {"deep": "拦截带要占用沿岸农田与作业面，社区信任 -4"},
 	},
 ]
 
@@ -753,7 +848,7 @@ const KNOWLEDGE_CARDS := {
 		"ecology": "白鹤越冬食物的主要来源之一，通过块茎无性繁殖。",
 		"threat": "水体富营养化可能导致种群大面积腐烂死亡。",
 		"management": "补种前应先检测水质，控制总磷、总氮浓度。",
-		"condition": "turn == 1",
+		"condition": "vegetation < 62",
 	},
 	"bird_baihe": {
 		"name": "白鹤", "category": "鸟类", "trigger": "observation",
@@ -761,7 +856,7 @@ const KNOWLEDGE_CARDS := {
 		"ecology": "全身白羽、脸部裸区红色，取食苦草块茎。",
 		"threat": "沉水植被退化导致食物不足，转向农田觅食。",
 		"management": "保护碟形湖与草洲，营建候鸟食堂。",
-		"condition": "turn == 2",
+		"condition": "birds < 62",
 	},
 	"bird_xiaotiane": {
 		"name": "小天鹅", "category": "鸟类", "trigger": "observation",
@@ -769,7 +864,7 @@ const KNOWLEDGE_CARDS := {
 		"ecology": "浅水滤食者，靠碟形湖浅水区觅食沉水植物与底栖动物。",
 		"threat": "水位异常波动会让浅水觅食地消失，种群随之下滑。",
 		"management": "碟形湖控水应维持适宜浅水深度，保障小天鹅觅食地。",
-		"condition": "turn == 3",
+		"condition": "water_level < 58",
 	},
 	"bird_dongfang": {
 		"name": "东方白鹳", "category": "鸟类", "trigger": "observation",
@@ -777,7 +872,7 @@ const KNOWLEDGE_CARDS := {
 		"ecology": "迁徙季大量取食鱼类，是湿地健康指示物种。",
 		"threat": "鱼类资源下降与栖息地破碎化。",
 		"management": "禁渔与执法巡逻是恢复鱼类资源的关键。",
-		"condition": "turn == 4",
+		"condition": "fish < 62",
 	},
 	"mech_water_quality": {
 		"name": "水质与苦草", "category": "机制", "trigger": "decision",
@@ -855,12 +950,12 @@ const CRISES := [
 		"effects": [{"metric": "fish", "delta": -13}],
 	},
 	{
-		"id": "bird_conflict", "name": "候鸟大规模进田", "weight": 1.0, "cond": "community < 55",
+		"id": "bird_conflict", "name": "候鸟大规模进田", "weight": 1.0, "cond": "fish < 50 and community < 55",
 		"cooldown": 3,   # 社会摩擦：本来就不密（0.04/局），维持全局值
 		"needs": ["社区补偿", "栖息地营造"],
-		"warn": "【社区报告】农户反映白鹤开始向稻田聚集，若持续可能造成较大损失，请提前协商。",
-		"hit": "【危机爆发】数千只候鸟涌入农田取食莲藕、踩踏稻苗，农户损失严重，矛盾激化。",
-		"effects": [{"metric": "community", "delta": -14}, {"metric": "birds", "delta": 6}],
+		"warn": "【社区报告】湖里鱼不够吃，白鹤开始成群转向稻田觅食，农户损失在扩大 —— 建议提前协商补偿。",
+		"hit": "【危机爆发】数千只候鸟涌入农田取食莲藕、踩踏稻苗：农户损失严重、矛盾激化，而候鸟也因食物不足与人为驱赶出现伤亡。",
+		"effects": [{"metric": "community", "delta": -7}, {"metric": "birds", "delta": -6}],
 	},
 	{
 		"id": "flood", "name": "汛期洪水", "weight": 0.8, "cond": "water_level > 60",
@@ -1079,6 +1174,10 @@ func serialize() -> Dictionary:
 		"plant_pop": plant_pop.duplicate(),
 		"effects_queue": effects_queue.duplicate(true),
 		"used_action_ids": used_action_ids.duplicate(),
+		"ever_played": ever_played.duplicate(),
+		# 紧急调度：待结算的调度牌与冷却回合都要带回来，否则中途读档会白丢那 40 万
+		"dispatched_cards": dispatched_cards.duplicate(true),
+		"dispatch_last_turn": dispatch_last_turn,
 		"knowledge_unlocked": knowledge_unlocked.duplicate(),
 		"pending_knowledge": pending_knowledge.duplicate(),
 		"log_messages": log_messages.duplicate(),
@@ -1111,6 +1210,9 @@ func load_state(d: Dictionary) -> void:
 	plant_pop = _int_dict(d.get("plant_pop", {}))
 	effects_queue = d.get("effects_queue", [])
 	used_action_ids = d.get("used_action_ids", [])
+	ever_played = d.get("ever_played", {})
+	dispatched_cards = d.get("dispatched_cards", [])
+	dispatch_last_turn = int(d.get("dispatch_last_turn", -99))
 	knowledge_unlocked = d.get("knowledge_unlocked", [])
 	pending_knowledge = d.get("pending_knowledge", [])
 	log_messages = d.get("log_messages", [])
@@ -1166,6 +1268,7 @@ func reset_game() -> void:
 	warn_history = []
 	triggered_synergies = []
 	_fired_synergies = []
+	ever_played = {}
 	is_failure = false
 	failure_reason = ""
 	failure_metric = ""
@@ -1283,6 +1386,7 @@ func _metric_funding() -> int:
 func start_new_turn() -> void:
 	turn += 1
 	used_action_ids = []
+	clear_dispatch()          # 上一轮的调度牌已在回合末结算完，这里清空待办清单
 	log_messages = []
 
 	# 基础拨款随指标浮动：社区信任、候鸟种群决定能拉到多少社会/旅游资金。
@@ -1514,24 +1618,32 @@ func _parse_cond_simple(cond: String) -> Dictionary:
 
 
 ## 简易条件求值（复用知识卡的表达式风格）
+## 支持单个比较，也支持用 and 串起来的多个比较（**全部成立**才算通过）。
+## 复合条件是为「候鸟大规模进田」加的：它的触发前提是「湖里鱼不够吃 **且** 社区本就有怨气」，
+## 单独看社区低就报警会冤枉玩家（鱼还多的时候，候鸟不会大规模进田）。
+## 注意：单条件的老写法（如 "turn == 1"、"vegetation < 45"）走的是同一条路，行为与改动前一致。
 func _eval_condition_simple(cond: String) -> bool:
 	var m := RegEx.new()
 	m.compile("(\\w+)\\s*(<=|>=|<|>|==)\\s*(-?\\d+)")
-	var res := m.search(cond)
-	if res == null:
+	var all := m.search_all(cond)
+	if all.is_empty():
 		return false
-	var metric := res.get_string(1)
-	var op := res.get_string(2)
-	var val := int(res.get_string(3))
-	if not metrics.has(metric):
-		return false
-	var cur: int = metrics[metric]
-	match op:
-		"<": return cur < val
-		">": return cur > val
-		"<=": return cur <= val
-		">=": return cur >= val
-		"==": return cur == val
+	for res in all:
+		var metric := res.get_string(1)
+		if not metrics.has(metric):
+			return false          # 取不到的指标一律判不成立（老行为：单个取不到就 false）
+		var cur: int = metrics[metric]
+		var val := int(res.get_string(3))
+		var ok := false
+		match res.get_string(2):
+			"<": ok = cur < val
+			">": ok = cur > val
+			"<=": ok = cur <= val
+			">=": ok = cur >= val
+			"==": ok = cur == val
+		if not ok:
+			return false
+	return true
 	return false
 
 
@@ -1545,9 +1657,9 @@ func tier_cost(card_id: String, tier: String) -> int:
 ## 从卡池抽 n 张（不重复）。
 ## 抽 n 张行动卡：预警期对策卡权重 ×CRISIS_COUNTER_WEIGHT（**概率提高，但不是必出**）；
 ## 没有预警时全体等权，与旧行为完全一致。整手最后打乱，免得对策卡永远躺在最左边。
-func draw_cards(n: int) -> Array:
-	var total: int = mini(n, ACTION_CARDS.size())
-	var pool := ACTION_CARDS.duplicate()
+func draw_cards(n: int, guarantee_season: bool = false) -> Array:
+	var pool := season_pool()
+	var total: int = mini(n, pool.size())
 	var wanted := _crisis_counter_set()
 	var rescue := _rescue_metric_set()
 	var picked: Array = []
@@ -1557,8 +1669,126 @@ func draw_cards(n: int) -> Array:
 		picked.append(pool[idx])
 		pool.remove_at(idx)
 
+	if guarantee_season:
+		_ensure_one_season_card(picked)
 	picked.shuffle()
 	return picked
+
+
+# ==================== 季节卡池 ====================
+# 卡池分季的依据是鄱阳湖的水文节律（春涨水→鱼群洄游产卵、夏高水→防洪度汛、
+# 秋落水→洲滩露出好施工、冬枯水→碟形湖独立成湖），每张卡的 "season" 字段标它属于哪一季。
+# 抽牌池 = 当季专属卡 + 四季通用卡（"all"）。四季通用的是补偿、转产、共管、立法、监测这类
+# 现实里全年都在做的工作 —— 它们也是夏季（专属卡最少）的主要构成。
+
+## 当前季节（spring / summer / autumn / winter）
+func current_season() -> String:
+	return SEASONS[(turn - 1) % 4]
+
+
+## 本回合是不是「本季的第 1 回合」（一局只有 4 次：第 1 / 5 / 9 / 13 回合）
+func is_season_opener() -> bool:
+	return (turn - 1) % 4 == 0
+
+
+## 当季可抽的卡池 = 当季专属卡 + 四季通用卡
+func season_pool() -> Array:
+	var s := current_season()
+	var out: Array = []
+	for c in ACTION_CARDS:
+		var cs: String = str(c.get("season", "all"))
+		if cs == s or cs == "all":
+			out.append(c)
+	return out
+
+
+## 当季专属卡（不含四季通用）—— 保底与图鉴提示用
+func season_exclusive_cards() -> Array:
+	var s := current_season()
+	var out: Array = []
+	for c in ACTION_CARDS:
+		if str(c.get("season", "all")) == s:
+			out.append(c)
+	return out
+
+
+## 季节首回合保底：手牌里一张当季专属卡都没有时，把最后一张换成随机一张专属卡。
+## ⚠ 抽 7 张时春/秋/冬的自然命中率已 ~93%，这条实际主要在救夏季（专属卡本来就少）。
+##   留着它的意义是「每年开局先看季节主题」这个节奏记忆点，不是真的防干涸。
+func _ensure_one_season_card(picked: Array) -> void:
+	if picked.is_empty():
+		return
+	var s := current_season()
+	for c in picked:
+		if str(c.get("season", "all")) == s:
+			return
+	var exclusives := season_exclusive_cards()
+	if exclusives.is_empty():
+		return
+	picked[picked.size() - 1] = exclusives[_randi_range(0, exclusives.size() - 1)]
+
+
+# ==================== 紧急调度 / 刷新手牌 ====================
+
+## 本回合已调度、等着与手牌一起结算的牌：[{card_id, tier}]。
+## 不放进 current_hand —— 它不占行动位，也不该被玩家取消，到回合末直接进算分队列。
+var dispatched_cards: Array = []
+## 整局累计打过哪些牌（id → 次数）。**不随回合清零**，供结算报告按整局口径评语。
+var ever_played: Dictionary = {}
+## 上一次用紧急调度的回合（-99 = 本局还没用过 → 首次可直接用）
+var dispatch_last_turn: int = -99
+
+
+## 按 id 取卡（找不到返回空字典）。界面层要用它拿卡面数据（名字/类别/费用），
+## 所以这里给一个公开入口，不必从外面调私有的 _find_card。
+func card_by_id(id: String) -> Dictionary:
+	return _find_card(id)
+
+
+## 花一笔钱（返回是否成功）。局内消费统一走这里，保证 total_spent 记账不漏。
+func spend(amount: int) -> bool:
+	if funds < amount:
+		return false
+	funds -= amount
+	total_spent += amount
+	funds_changed.emit()
+	return true
+
+
+## 现在能不能用紧急调度：钱够 + 本回合还没调过 + 过了冷却
+func can_dispatch() -> bool:
+	if funds < DISPATCH_COST:
+		return false
+	if not dispatched_cards.is_empty():
+		return false          # 一回合只能调度一张
+	if dispatch_last_turn > 0 and turn < dispatch_last_turn + DISPATCH_COOLDOWN_TURNS + 1:
+		return false          # 中间要空满 DISPATCH_COOLDOWN_TURNS 个回合
+	return true
+
+
+## 还要等几个回合才能再用紧急调度（0 = 现在就能用）
+func dispatch_cooldown_left() -> int:
+	if dispatch_last_turn <= 0:
+		return 0
+	return maxi(0, dispatch_last_turn + DISPATCH_COOLDOWN_TURNS + 1 - turn)
+
+
+## 调度一张牌：扣钱、记账。一律按有效投入档（见 DISPATCH_TIER 注释）。
+func dispatch_card(card_id: String) -> bool:
+	if not can_dispatch():
+		return false
+	if _find_card(card_id).is_empty():
+		return false
+	if not spend(DISPATCH_COST):
+		return false
+	dispatch_last_turn = turn
+	dispatched_cards.append({"card_id": card_id, "tier": DISPATCH_TIER})
+	return true
+
+
+## 每回合开始清掉上一轮的调度记录（dispatch_last_turn 要留着，冷却靠它算）
+func clear_dispatch() -> void:
+	dispatched_cards = []
 
 
 ## 加权随机抽一张的下标。权重 = 1.0 ×（对策卡 ? ×3）×（救火卡 ? ×2.5）
@@ -1647,6 +1877,9 @@ func execute_action(card_id: String, tier: String) -> bool:
 	funds -= cost
 	total_spent += cost
 	used_action_ids.append(card_id)
+	# 全局累计（**跨回合不清零**）：结算报告的「转产与补偿覆盖率」要按整局口径算，
+	# 而 used_action_ids 每回合开始都会被清空，拿它统计等于只看最后一回合。
+	ever_played[card_id] = int(ever_played.get(card_id, 0)) + 1
 
 	var tier_data: Dictionary = card["tiers"][tier]
 	for e in tier_data["effects"]:
@@ -1739,18 +1972,38 @@ func natural_evolution_plan(roll_random: bool = true) -> Array:
 	var sim: Dictionary = metrics.duplicate()   # 推演副本：后一步的条件要看前几步之后的值（与原执行顺序一致）
 	var out: Array = []
 
-	# 1) 水位随机波动（枯水更常见，符合鄱阳湖现实）
-	# min 是「吃完难度负向倍率后，玩家真正会看到的最坏值」；
-	# 困难档再把它抬 HARD_ROUTINE_FLOOR_BONUS 点，减少暴毙（见常量注释）。
-	var wl_raw_lo: int = -5
+	# 1) 水位按**季节节律**变化 —— 贴鄱阳湖的水文现实：春涨水、夏高水、秋落水、冬枯水。
+	#    区间写的是**原始值**，负向部分照旧吃难度倍率（与其它条目同一口径）；
+	#    min 是「吃完倍率后玩家真正会看到的最坏值」，困难档再抬 HARD_ROUTINE_FLOOR_BONUS 点减少暴毙。
+	#    ⚠ 区间内的随机是保留的：节律决定「往哪个方向走」，具体走几步仍不确定，
+	#      否则每局的水位曲线会一模一样，肉鸽性就没了。
+	var season := current_season()
+	var wl_raw_lo: int = 1
+	var wl_raw_hi: int = 3
+	var wl_why: String = "春季涨水（五河来水，水位小幅回升）"
+	match season:
+		"summer":
+			wl_raw_lo = 2
+			wl_raw_hi = 5
+			wl_why = "夏季高水（长江汛期，水位大幅上涨、易漫滩）"
+		"autumn":
+			wl_raw_lo = -4
+			wl_raw_hi = -2
+			wl_why = "秋季落水（水位回落，洲滩渐次露出）"
+		"winter":
+			wl_raw_lo = -5
+			wl_raw_hi = -3
+			wl_why = "冬季枯水（全年最低，碟形湖脱离主湖）"
 	var wl_lo: int = _scaled_delta(wl_raw_lo)
-	var wl_hi: int = _scaled_delta(3)
-	if difficulty == Difficulty.HARD:
+	var wl_hi: int = _scaled_delta(wl_raw_hi)
+	# ⚠ 只有在「枯水季」（下限为负）才抬下限：这条本来是为了减少困难档的暴毙，
+	#   而春季/夏季是正区间，若不设守卫会把春季的最低下限从 +1 抬到 +2，白白窄化区间。
+	if difficulty == Difficulty.HARD and wl_lo < 0:
 		wl_lo += HARD_ROUTINE_FLOOR_BONUS
-	var wl: int = _randi_range(wl_raw_lo, 3) if roll_random else 0
+	var wl: int = _randi_range(wl_raw_lo, wl_raw_hi) if roll_random else 0
 	out.append({"metric": "water_level", "delta": wl,
 		"min": wl_lo, "max": wl_hi, "kind": "random",
-		"why": "水位随机波动（枯水更常见，最多涨 3）"})
+		"why": wl_why})
 	# 推演用的也按同一个下限夹一次，否则「小窗显示的范围」与「后几步的条件判断」
 	# 会以没抬过下限的值来推，跟实际结算对不上。
 	var wl_applied: int = clampi(_scaled_delta(wl), wl_lo, wl_hi)
@@ -2170,7 +2423,18 @@ func _eval_social() -> Dictionary:
 		notes.append("社区信任度高，护鸟队与志愿者形成合力。")
 	elif comm < 40:
 		notes.append("社区信任度低，人鸟矛盾激化。")
-	notes.append("转产与补偿覆盖率：%s" % ("高" if used_action_ids.size() >= 0 else "需评估"))
+	# 覆盖率 = 整局到底打过几张「转产 / 补偿」类的牌。
+	# ⚠ 修 bug：原句是 used_action_ids.size() >= 0 —— 恒为真，所以永远输出「高」，
+	#   「需评估」是死分支；而且 used_action_ids 只装**本回合**打过的牌，口径也不对。
+	var cover := 0
+	for cid in ["community_comp", "industry_switch", "fisher_retrain", "eco_resettle"]:
+		cover += int(ever_played.get(str(cid), 0))
+	if cover >= 3:
+		notes.append("转产与补偿覆盖到位（整局累计 %d 次）。" % cover)
+	elif cover > 0:
+		notes.append("转产与补偿有投入但不连续（整局累计 %d 次），建议补强。" % cover)
+	else:
+		notes.append("整局没做过转产与补偿，社区信任缺乏支撑。")
 	return {"score": float(comm), "grade": grade, "notes": notes}
 
 
