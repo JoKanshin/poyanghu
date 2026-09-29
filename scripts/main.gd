@@ -118,6 +118,7 @@ var tier_lever: PanelContainer
 var lever_track: Control
 var lever_handle: Control
 var _lever_slide_tween: Tween = null   # 手柄滑动动画（连续点档位时要掐掉上一条）
+var lever_cd_label: Label              # 「出牌档位」右边的冷却倒计时
 var lever_slot_btns: Array = []
 var lever_state_label: Label
 var play_tier: String = "effective"           # 拉杆当前档位（新的一局复位成有效档）
@@ -254,6 +255,10 @@ const CARD_RAISE := 26.0
 var _sort_animating: bool = false
 var _sort_cooldown_ms: int = -6000   # 上次排序的时间戳；初始值只要足够久远即可（开局就能排序）
 const SORT_COOLDOWN_MS := 3000       # 两次切换排序方式的最低间隔（毫秒），冷却期间按钮禁用并显示倒计时
+# 出牌档位的冷却：切一次档后锁 2 秒，期间拉杆不吃输入、并在「出牌档位」旁边显示倒计时。
+# 初始值取足够久远 → 开局就是可用的。与排序那套（3 秒）同源，都是防连点。
+var _lever_cooldown_ms: int = -6000
+const LEVER_COOLDOWN_MS := 2000
 var _deck_viewports: Array = []       # 牌库卡牌的 SubViewport（重建时清理）
 var _deck_gyro_view: Control = null   # 当前鼠标悬停的牌库卡牌（只对它做陀螺仪）
 
@@ -1140,6 +1145,7 @@ func _process(delta: float) -> void:
 	_update_card_hover(delta)
 	_process_deck_gyro(delta)
 	_update_sort_cooldown()
+	_update_lever_cooldown()
 	# 容器尺寸变化时重排扇形（居中）
 	# ⚠ 算分动画期间必须跳过：_layout_fan() 会把牌瞬间抓回扇形原位**并覆写 base_pos**，
 	#   飞出去排开的牌会被一把拽回来。（正常情况下这个尺寸判据是稳定的，
@@ -5224,6 +5230,8 @@ func _enter_allocate() -> void:
 	tier_lever.visible = true
 	# 新回合：刷新按钮复原（上回合碎裂掉的碎片早已掉出屏幕，这里把本体恢复出来）
 	_refresh_used_turn = -1
+	# 档位冷却也一起归零：不然上一回合末尾刚拨过拉杆，新回合一开始就点不动。
+	_lever_cooldown_ms = -6000
 	if refresh_btn != null:
 		refresh_btn.modulate.a = 1.0
 	_close_dispatch_panel()
@@ -5662,9 +5670,19 @@ func _build_tier_lever(holder: Node) -> void:
 	lvb.add_theme_constant_override("separation", 2)
 	tier_lever.add_child(lvb)
 
+	# 标题行 = [出牌档位] + [冷却倒计时]。倒计时放标题**右边**、不另起一行 ——
+	# 否则面板高度会随冷却有无而变化，把整条拉杆顶来顶去。
+	var title_row := HBoxContainer.new()
+	title_row.add_theme_constant_override("separation", 8)
+	title_row.alignment = BoxContainer.ALIGNMENT_CENTER
+	lvb.add_child(title_row)
+
 	var title := _make_label("出牌档位", 12, Color(0.86, 0.80, 0.68))
-	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	lvb.add_child(title)
+	title_row.add_child(title)
+
+	lever_cd_label = _make_label("", 12, Color(1.0, 0.60, 0.40))
+	lever_cd_label.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	title_row.add_child(lever_cd_label)
 
 	lever_track = Control.new()
 	# 高度要同时容得下「手柄」（上半）+「基础/有效/深度」小字（下半），
@@ -5811,15 +5829,37 @@ func _place_lever_handle(animate: bool) -> void:
 	_lever_slide_tween.tween_property(lever_handle, "position", target_pos, 0.24)
 
 
-## 切档：更新手柄姿态、刻度/标签高亮、状态文字，并刷新手牌上还没被选中的牌
+## 切档：更新手柄姿态、刻度/标签高亮、状态文字，并刷新手牌上还没被选中的牌。
+## 冷却期间**拉杆锁死**、直接吞掉输入；点当前档不算切档，也不会重置冷却。
 func _set_play_tier(tier: String, animate: bool = true) -> void:
 	if not GameState.TIER_COST_MULT.has(tier):
 		return
-	var changed: bool = tier != play_tier
+	if Time.get_ticks_msec() - _lever_cooldown_ms < LEVER_COOLDOWN_MS:
+		return                                   # 冷却中：锁死
+	if tier == play_tier:
+		return                                   # 点的是当前档：不做任何事
 	play_tier = tier
-	_refresh_lever_visuals(animate and changed)
-	if changed:
-		_refresh_hand_display()
+	_lever_cooldown_ms = Time.get_ticks_msec()
+	_refresh_lever_visuals(animate)
+	_refresh_hand_display()
+
+
+## 出牌档位的冷却倒计时：冷却时拉杆变暗（看着就知道点不动），
+## 并在「出牌档位」右边显示还剩几秒。由 _process 每帧调用 ——
+## 所以只改文本与 modulate，绝不重建节点（与排序冷却同一套写法）。
+func _update_lever_cooldown() -> void:
+	if lever_cd_label == null:
+		return
+	var remaining := LEVER_COOLDOWN_MS - (Time.get_ticks_msec() - _lever_cooldown_ms)
+	var locked: bool = remaining > 0
+	if locked:
+		lever_cd_label.text = "冷却 %.1f 秒" % (float(remaining) / 1000.0)
+	elif lever_cd_label.text != "":
+		lever_cd_label.text = ""
+	if lever_track != null:
+		var want: float = 0.55 if locked else 1.0
+		if not is_equal_approx(lever_track.modulate.a, want):
+			lever_track.modulate.a = want
 
 
 func _refresh_lever_visuals(animate: bool) -> void:
