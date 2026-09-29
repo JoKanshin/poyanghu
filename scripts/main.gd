@@ -5335,6 +5335,10 @@ func _open_dispatch_panel() -> void:
 		_build_dispatch_panel()
 	dispatch_panel.visible = true
 	_deck_gyro_view = null          # 悬停态是从牌库那边借来的，开面板前先清干净
+	# 与牌库同一个做法：把其余 HUD 面板整体收出屏幕，让选牌这一屏是全屏的。
+	# _slide_main_ui 的控件清单里本来就有 left/right_panel / event_label / hand_panel /
+	# bottom_right / deck_root / tier_lever，所以不用另配一套。
+	_slide_main_ui(true)
 	if dispatch_hint != null:
 		dispatch_hint.text = _dispatch_hint_text()
 	_fill_dispatch_grid()
@@ -5351,9 +5355,13 @@ func _dispatch_hint_text() -> String:
 
 
 func _close_dispatch_panel() -> void:
-	if dispatch_panel != null:
-		dispatch_panel.visible = false
+	# 本来就没开 → 直接返回：_enter_allocate() 每回合都会调一次这里，
+	# 不设这个守卫的话会白白推一轮「滑回原位」的动画（虽然视觉上没差，但白建 7 条 tween）。
+	if dispatch_panel == null or not dispatch_panel.visible:
+		return
+	dispatch_panel.visible = false
 	_deck_gyro_view = null          # 别把悬停引用留在已隐藏的卡上
+	_slide_main_ui(false)
 
 
 ## 请卡面板 —— **直接照搬牌库查看器的 UI 与交互**：同一套
