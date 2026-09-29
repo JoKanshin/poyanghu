@@ -255,10 +255,10 @@ const CARD_RAISE := 26.0
 var _sort_animating: bool = false
 var _sort_cooldown_ms: int = -6000   # 上次排序的时间戳；初始值只要足够久远即可（开局就能排序）
 const SORT_COOLDOWN_MS := 3000       # 两次切换排序方式的最低间隔（毫秒），冷却期间按钮禁用并显示倒计时
-# 出牌档位的冷却：切一次档后锁 2 秒，期间拉杆不吃输入、并在「出牌档位」旁边显示倒计时。
+# 出牌档位的冷却：切一次档后锁 1 秒，期间拉杆不吃输入、并在「出牌档位」旁边显示倒计时。
 # 初始值取足够久远 → 开局就是可用的。与排序那套（3 秒）同源，都是防连点。
 var _lever_cooldown_ms: int = -6000
-const LEVER_COOLDOWN_MS := 2000
+const LEVER_COOLDOWN_MS := 1000
 var _deck_viewports: Array = []       # 牌库卡牌的 SubViewport（重建时清理）
 var _deck_gyro_view: Control = null   # 当前鼠标悬停的牌库卡牌（只对它做陀螺仪）
 
