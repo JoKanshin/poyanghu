@@ -117,6 +117,7 @@ var play_deal_anim: bool = false              # 下次布局时播放发牌入�
 var tier_lever: PanelContainer
 var lever_track: Control
 var lever_handle: Control
+var _lever_slide_tween: Tween = null   # 手柄滑动动画（连续点档位时要掐掉上一条）
 var lever_slot_btns: Array = []
 var lever_state_label: Label
 var play_tier: String = "effective"           # 拉杆当前档位（新的一局复位成有效档）
@@ -5757,14 +5758,19 @@ func _build_tier_lever(holder: Node) -> void:
 
 
 ## 点在轨上的哪个位置 → 吸附到最近的一格（按住拖动时也走这里，所以能"拖着拨"）
+## ⚠ 点击与拖动的动画策略**不同**：
+##   点击 = 手柄**滑过去**（0.24s 缓入缓出，看得出"拉杆被拨动"）；
+##   拖动 = 手柄**跟手**，不能播动画 —— 否则手柄会一直慢半拍地追鼠标，手感是坏的。
 func _on_lever_input(event: InputEvent) -> void:
 	if _current_phase != "allocate" or _paused or GameState.game_over:
 		return
 	var pressed := false
 	var pos := Vector2.ZERO
+	var is_click := false
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
 		pressed = event.pressed
 		pos = event.position
+		is_click = true
 	elif event is InputEventMouseMotion and (event.button_mask & MOUSE_BUTTON_MASK_LEFT) != 0:
 		pressed = true
 		pos = event.position
@@ -5772,7 +5778,7 @@ func _on_lever_input(event: InputEvent) -> void:
 		return
 	var w: float = maxf(1.0, lever_track.size.x)
 	var idx := clampi(int(floor(pos.x / (w / 3.0))), 0, LEVER_TIERS.size() - 1)
-	_set_play_tier(LEVER_TIERS[idx], false)
+	_set_play_tier(LEVER_TIERS[idx], is_click)
 
 
 ## 手柄按当前档位归位（尺寸变化时立刻归位，不播动画）
@@ -5791,12 +5797,18 @@ func _place_lever_handle(animate: bool) -> void:
 	# 手柄**始终竖直**，只左右平移。之前让它跟着倾斜 ±29°，实测在基础/深度档看着别扭：
 	# 圆头跟着转、还会离开它对应的刻度。竖直滑动读起来干净，位置同样一眼可辨。
 	lever_handle.rotation = 0.0
+	# 先掐掉上一次的滑动动画：连续点两格时，两条 tween 会抢同一个 position，
+	# 结果互相拉扯、手柄在半路抖一下才到位。
+	if _lever_slide_tween != null and _lever_slide_tween.is_valid():
+		_lever_slide_tween.kill()
+		_lever_slide_tween = null
 	if not animate:
 		lever_handle.position = target_pos
 		return
-	var tw := lever_handle.create_tween()
-	tw.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
-	tw.tween_property(lever_handle, "position", target_pos, 0.16)
+	# 0.24s + 缓入缓出：太短（0.16）看着还是"跳"，太长会拖住操作节奏
+	_lever_slide_tween = lever_handle.create_tween()
+	_lever_slide_tween.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_IN_OUT)
+	_lever_slide_tween.tween_property(lever_handle, "position", target_pos, 0.24)
 
 
 ## 切档：更新手柄姿态、刻度/标签高亮、状态文字，并刷新手牌上还没被选中的牌
