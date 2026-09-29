@@ -5513,6 +5513,11 @@ func _spawn_dispatched_cards(played: Array) -> void:
 		#   手牌那边也是这么取的（见 _build_hand_panel）。
 		var made: Dictionary = _make_card(card, str(d["tier"]))
 		var panel: PanelContainer = made["panel"]
+		# ⚠ 必须与手牌用**同一个 pivot**（牌底中点）：甩牌的落点是
+		#   slot - panel.pivot_offset，手牌的 pivot 是 (61,165)（_layout_fan 设的）。
+		#   这里若留着默认的 (0,0)，调度牌就会比同排的牌右下各偏 61/165px ——
+		#   看着像"另起了一行"。踩过一次。
+		panel.pivot_offset = Vector2(61.0, 165.0)
 		# 起点放在手牌区中间偏下：紧接着会被甩牌动画拉去屏幕中央，
 		# 视觉上就是「它从手里一起飞出去」。**不要**调 _layout_fan ——
 		# 那会把整手牌重新排一遍，白白多一段动画。
@@ -6426,6 +6431,15 @@ func _play_score_animation(ledger: Array, before_all: Dictionary, played: Array,
 		metric_bars[metric]["val"].text = str(int(before_all.get(metric, 0)))
 
 	var n_played: int = played.size()
+	# 落点间距：默认 FLY_SPACING（牌宽 122 + 10 的余量）。简单模式一回合最多可能出现
+	# **5 张**（4 个行动位 + 1 张紧急调度），此时整行 4×132 + 122 = 650px，1280 宽下放得下；
+	# 但仍按可用宽度收一道口子 —— 以后若放宽行动位、或窗口比例变化，不至于把牌挤出屏幕。
+	# 行本身是**居中**排的（下面 slot 用 k - (n-1)/2 算），所以收紧后左右余量仍然相等。
+	var spacing: float = FLY_SPACING
+	if n_played > 1:
+		var row_limit: float = vp.x * 0.86 - 122.0
+		if float(n_played - 1) * FLY_SPACING > row_limit:
+			spacing = maxf(96.0, row_limit / float(n_played - 1))
 	var slot_y: float = vp.y * 0.42
 	for k in n_played:
 		var info: Dictionary = card_infos[played[k]]
@@ -6435,7 +6449,7 @@ func _play_score_animation(ledger: Array, before_all: Dictionary, played: Array,
 		info["flying"] = true          # 让 _update_card_hover 让出控制权（照抄 shaking 的既有模式）
 		panel.z_index = 5              # 保证甩出去的牌画在最上层
 		panel.scale = Vector2.ONE
-		var slot := Vector2(vp.x * 0.5 + (float(k) - float(n_played - 1) * 0.5) * FLY_SPACING, slot_y)
+		var slot := Vector2(vp.x * 0.5 + (float(k) - float(n_played - 1) * 0.5) * spacing, slot_y)
 		var target: Vector2 = _screen_to_card_box(slot) - panel.pivot_offset
 		var d: float = k * FLY_LAG * ds
 		var tw := panel.create_tween()
