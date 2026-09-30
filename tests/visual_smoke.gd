@@ -40,6 +40,28 @@ func _ready() -> void:
 	await close_popups()
 	await settle(1.0)
 	check(game.card_infos.size() > 0, "Starting a run must deal cards")
+	check(game.wetland.house_sites.size() >= 12, "Village should spread around the lake")
+	for site in game.wetland.house_sites:
+		check(game.wetland._is_land(site) and game.wetland._near_water(site), "Cottage must be on near-shore land")
+		check(site.distance_to(game.wetland.CREEPER_ANCHOR) > 0.11, "Cottage covers Creeper clearing")
+	var original_settlement: float = GameState.settlement
+	GameState.settlement = 100.0
+	GameState.metrics_changed.emit()
+	await settle(0.25)
+	check(game.wetland.house_target_count == game.wetland.house_sites.size(), "Expansion must target every cottage")
+	check(game.wetland.house_progress[-1] > 0.0, "Expansion must animate construction")
+	GameState.settlement = 0.0
+	GameState.metrics_changed.emit()
+	await settle(0.25)
+	check(game.wetland.house_progress[0] < 1.0, "Wetland recovery must animate cottage removal")
+	GameState.settlement = original_settlement
+	GameState.metrics_changed.emit()
+	var flying_bird: Dictionary = game.wetland.bird_agents[0]
+	flying_bird["state"] = 3
+	flying_bird["pos"] = Vector2(0.42, 0.50)
+	flying_bird["target"] = Vector2(0.35, 0.50)
+	game.wetland._process_birds(0.05)
+	check(absf(absf(float(flying_bird["angle"])) - PI) < 0.01, "Flying bird must face its destination")
 	for info in game.card_infos:
 		check(info.panel.size.is_equal_approx(Vector2(122, 165)), "Card footprint changed: " + str(info.panel.size))
 	check(game.end_turn_btn.get_global_rect().end.y <= get_viewport().get_visible_rect().size.y, "End turn button exceeds viewport")

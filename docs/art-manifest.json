@@ -1,7 +1,28 @@
 {
-  "generator": "Built-in image_gen",
+  "generator": "Built-in image_gen (original zip art); geographic raster export (current terrain)",
   "date": "2026-09-30",
   "assets": [
+    {
+      "path": "assets/art/poyang-terrain-base.png",
+      "generator": "tools/build_poyang_terrain.py",
+      "source": "docs/geography/poyang-hydrography.geojson",
+      "source_description": "PML / ESA CCI maximum-water-extent Poyang shoreline; OpenStreetMap Yangtze and Gan distributary centerlines",
+      "size": [
+        1024,
+        1024
+      ],
+      "north_up": true,
+      "palette": [
+        "#176783",
+        "#63AFCB",
+        "#D8C68D",
+        "#829666"
+      ],
+      "terrain_only": true,
+      "license": "Lake geometry and derived map: GPL-3.0-only; OSM waterways: ODbL-1.0 with contributor attribution",
+      "request": "Actual Poyang Lake outline with Yangtze and Gan River at their geographic positions; high-water style. Flat 2D overhead pixel terrain only, no props, characters or text.",
+      "notes": "A published maximum-water-extent reference, not a single dated flood survey; shallow/deep bands and river widths are artistic gameplay layers, not measured bathymetry."
+    },
     {
       "path": "assets/art/poyang-wetland.png",
       "prompt": "Use case: stylized-concept. Asset type: original production background for a Chinese Poyang Lake ecology card game. Create a beautiful meticulously crafted 16-bit pixel art wetland world, top-down oblique perspective like cozy farming RPG landscape art. Wide 1536x1024 composition. A large irregular turquoise lake occupies the middle 65 percent with lots of calm open water, cream sand banks, winding narrow inlets, small reed islands, lily pads, rich layered grass in sage and olive, detailed leafy trees framing upper corners, tiny Jiangxi whitewashed gray tile roof cottages on upper right shore, a wooden jetty, winding dirt trails. Distant blue mountain silhouette only at very top. Warm afternoon sun, beautiful restrained jade, teal, straw gold palette. Crisp square pixel clusters, no smooth painted gradients, no 3D render. Main lake open center intended for live game wildlife sprites. The lower 20 percent should be dark grassy foreground framing the lake, behind cards. No UI, no text, no labels, no border, no logos, no watermarks. Original scenery, do not copy any existing game map."
@@ -19,11 +40,30 @@
       "path": "assets/art/wetland-birds.png",
       "transparent_background": true,
       "prompt": "Use case: scientific-educational. Asset type: transparent bird sprite atlas for a Poyang Lake ecology game. Canvas 1536x1024 with EXACT 3 columns x 2 rows, each tile exactly 512x512. Six isolated sprites centered within their own tile with 60 pixels padding; no grid lines or text. Crisp handcrafted 16-bit pixel art, side/three-quarter game view, consistent light, jade and warm cream colors, no backgrounds, preserve FULLY TRANSPARENT alpha. TOP LEFT: Siberian crane, white body black folded flight feathers red face, long red legs. TOP MIDDLE: Oriental stork, white body black folded wings, long straight black bill, long red legs, no red cap. TOP RIGHT: small white tundra swan, curved neck, short black bill with yellow base, floating pose. BOTTOM LEFT: white-naped crane, mostly gray body, white stripe down back of neck, red skin around eyes, long pink legs. BOTTOM MIDDLE: greater white-fronted goose, gray-brown body, white forehead, orange bill and feet, standing. BOTTOM RIGHT: a cluster of round green lotus leaves with one pink lotus flower, seen above. Sprite silhouettes must be biologically recognizable for school education. No water surface, no floor, no shadows outside sprites, no matte, no logos, no lettering. Original game sprites."
+    },
+    {
+      "path": "assets/art/bird-actions.png",
+      "generator": "tools/build_ecology_sprites.py",
+      "size": [288, 160],
+      "layout": "Five species rows by nine 32x32 frames: stand, two walk, two peck, three fly, perch",
+      "original_pixel_art": true
+    },
+    {
+      "path": "assets/art/floating-island.png",
+      "generator": "tools/build_ecology_sprites.py",
+      "size": [48, 48],
+      "original_pixel_art": true
+    },
+    {
+      "path": "assets/art/shore-tree.png",
+      "generator": "tools/build_ecology_sprites.py",
+      "size": [40, 44],
+      "original_pixel_art": true
     }
   ],
   "references": [
     "https://www.playbalatro.com/press-kit",
     "https://www.stardewvalley.net/media/"
   ],
-  "notes": "Original generated art. Reference games are used for visual direction only; their assets are not included. guardian-card-back.svg is original code-native UI art."
+  "notes": "Original generated art. Reference games are used for visual direction only; their assets are not included. guardian-card-back.svg is original code-native UI art. Current terrain uses published geographic coordinates instead of generated lake geometry; see TERRAIN_MAP.md for sources and license."
 }

@@ -4,11 +4,15 @@
 
 本分支基于 `8b0807f` 重做视觉表现，保留原有数值、难度、卡牌效果和存档格式。
 
-![湿地守护界面](docs/screenshots/gameplay.png)
+地图按公开鄱阳湖水域轮廓绘制，长江连接北端湖口，赣江主流及支汊从西南方向进入湖区。底图为 1024×1024 的正交俯视四种纯色地形；对局中默认放大显示湖区。候鸟、植物和村落独立绘制，随生态状态变化。
+
+![鄱阳湖地形底图](assets/art/poyang-terrain-base.png)
 
 ![主菜单](docs/screenshots/menu.png)
 
 ![行动图鉴](docs/screenshots/deck.png)
+
+[地形来源、地理范围与导出说明](docs/TERRAIN_MAP.md)
 
 ## 运行
 

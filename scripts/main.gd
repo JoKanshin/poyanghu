@@ -360,6 +360,7 @@ func _ready() -> void:
 	_build_ui()
 	GameState.metrics_changed.connect(_update_hud)
 	GameState.metrics_changed.connect(_update_3d)
+	GameState.metrics_changed.connect(_sync_settlement_visual)
 	GameState.funds_changed.connect(_update_hud)
 	GameState.event_triggered.connect(_on_event)
 	GameState.crisis_warned.connect(_on_crisis_warn)
@@ -861,6 +862,8 @@ func _build_creeper_easter_egg(parent: Node3D) -> void:
 func _roll_creeper_visibility() -> void:
 	if creeper_mesh != null:
 		creeper_mesh.visible = randf() < CREEPER_CHANCE
+	if wetland != null:
+		wetland.call("roll_creeper_visibility")
 
 
 ## 远景树：低多边形锥形树（随机高矮胖瘦）
@@ -1653,6 +1656,13 @@ func _update_3d() -> void:
 	# Keep the existing signal and score-animation boundary; presentation is read-only.
 	if not _score_animating and wetland:
 		wetland.sync_state()
+
+
+func _sync_settlement_visual() -> void:
+	# House construction or retreat starts as soon as a played card changes
+	# settlement, even while the score reveal keeps other scenery frozen.
+	if wetland:
+		wetland.sync_settlement_targets()
 
 
 # ==================== UI ====================
