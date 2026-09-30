@@ -1,4 +1,8 @@
 extends Node
+
+const VisualTheme = preload("res://scripts/visual_theme.gd")
+const PixelWetland = preload("res://scripts/pixel_wetland.gd")
+var wetland: Control
 ## 《拯救鄱阳湖》主场景：2.5D 沙盘 + 四区 UI。逻辑在 GameState 单例。
 
 const METRIC_COLORS := {
@@ -130,6 +134,7 @@ var popup_title: Label
 var popup_body: RichTextLabel
 var popup_button: Button
 var _popup_continue: Callable = Callable()
+var _popup_reveal: Tween
 var _current_event: String = ""
 
 # 主菜单
@@ -351,8 +356,7 @@ func _ready() -> void:
 	_setup_sfx()
 	_setup_pixel_font()
 	_setup_camera()
-	_build_3d()
-	_build_pixelate_layer()
+	_build_wetland()
 	_build_ui()
 	GameState.metrics_changed.connect(_update_hud)
 	GameState.metrics_changed.connect(_update_3d)
@@ -1140,9 +1144,8 @@ func _process(delta: float) -> void:
 		_intro_elapsed += delta
 		if _intro_elapsed >= INTRO_SLIDE_SEC:
 			_advance_intro()
-	_process_birds(delta)
-	_process_plants_sway()
-	_process_boats(delta)
+	if wetland:
+		wetland.set_process(not _paused)
 	_update_card_hover(delta)
 	_process_deck_gyro(delta)
 	_update_sort_cooldown()
@@ -1635,47 +1638,21 @@ func _plant_zone_point(kind: String, rng: RandomNumberGenerator) -> Vector3:
 			return Vector3(rng.randf_range(-8.0, 6.4), 0.05, rng.randf_range(5.0, 7.4))
 
 
+func _build_wetland() -> void:
+	var layer := CanvasLayer.new()
+	layer.name = "WetlandLayer"
+	layer.layer = -5
+	add_child(layer)
+	wetland = PixelWetland.new()
+	wetland.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	layer.add_child(wetland)
+	get_node("../Ground").hide()
+
+
 func _update_3d() -> void:
-	# 算分动画期间冻结沙盘：3D 的变化留到动画收尾统一放出来，观感更聚焦
-	if _score_animating:
-		return
-	var m: Dictionary = GameState.metrics
-	var wscale := lerpf(0.55, 1.35, float(m["water_level"]) / 100.0)
-	lake_mesh.scale = Vector3(wscale, 1.0, wscale)
-	lake_color = Color(0.58, 0.74 + 0.12 * (float(m["water_level"]) / 100.0), 0.88, 0.88)
-	lake_mat.set_shader_parameter("water_color", lake_color)
-
-	for i in grass_nodes.size():
-		var v := float(m["vegetation"]) / 100.0
-		grass_mats[i].albedo_color = Color(0.72 - 0.20 * v, 0.66 + 0.12 * v, 0.55 - 0.05 * v)
-		grass_nodes[i].visible = m["vegetation"] > (10 + i * 8)
-
-	var nfish := int(m["fish"] / 12.0)
-	for i in fish_nodes.size():
-		fish_nodes[i].visible = i < nfish
-
-	# 人工浮岛：数量随 floating_islands 状态
-	for i in island_nodes.size():
-		island_nodes[i].visible = i < GameState.floating_islands
-
-	# 物种个体数量随物种种群增减
-	_update_species_views()
-
-	# 植物数量随植被指标增减
-	_update_plant_views()
-
-	# 环湖房子：settlement 决定数量（退田还湿减少、围湖造田增多），拆除处变芦苇
-	var active := clampi(roundi(GameState.settlement / 100.0 * 7.0), 0, 7)
-	# 社区信任：暖色亮灯的房子数量随信任度变化
-	var lit := roundi(float(m["community"]) / 100.0 * active)
-	for i in house_slots.size():
-		var slot: Dictionary = house_slots[i]
-		var is_house: bool = i < active
-		slot["house"].visible = is_house
-		slot["reeds"].visible = not is_house
-		if is_house:
-			# 社区信任：亮灯的暖色 / 熄灭的暗色（贴图用 modulate 调明暗）
-			slot["sprite"].modulate = Color(1.0, 1.0, 1.0) if i < lit else Color(0.55, 0.53, 0.48)
+	# Keep the existing signal and score-animation boundary; presentation is read-only.
+	if not _score_animating and wetland:
+		wetland.sync_state()
 
 
 # ==================== UI ====================
@@ -1683,6 +1660,16 @@ func _build_ui() -> void:
 	var canvas := CanvasLayer.new()
 	canvas.name = "UICanvas"
 	add_child(canvas)
+	var scrim := ColorRect.new()
+	scrim.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	scrim.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var shader := Shader.new()
+	shader.code = "shader_type canvas_item; void fragment(){ float a = smoothstep(0.57, 1.0, UV.y) * 0.83 + (1.0-smoothstep(0.0, 0.16, UV.y))*0.40; COLOR = vec4(0.025, 0.09, 0.10, a); }"
+	var material := ShaderMaterial.new()
+	material.shader = shader
+	scrim.material = material
+	canvas.add_child(scrim)
+
 
 	# --- 左侧：时间 / 金钱 / 事件（收窄为竖条，把沙盘让出来）---
 	left_panel = PanelContainer.new()
@@ -1690,9 +1677,9 @@ func _build_ui() -> void:
 	left_panel.anchor_top = 0.0
 	left_panel.anchor_right = 0.0
 	left_panel.anchor_bottom = 0.0
-	left_panel.offset_left = 6
-	left_panel.offset_right = 210
-	left_panel.offset_top = 6
+	left_panel.offset_left = 18
+	left_panel.offset_right = 222
+	left_panel.offset_top = 18
 	# 190 → 240：季节行从一行 Label 变成「指针表盘 + 两行文字」，行高多出约 34px；
 	# 再留一点余量给「本局天赋」最多 3 条词条的情况。
 	left_panel.offset_bottom = 240
@@ -1703,7 +1690,7 @@ func _build_ui() -> void:
 	lv.add_theme_constant_override("separation", 10)
 	left_panel.add_child(lv)
 
-	var title := _make_label("拯救鄱阳湖", 20, Color(1, 0.9, 0.55))
+	var title := _make_label("湿地守护站", 20, VisualTheme.GOLD)
 	lv.add_child(title)
 
 	turn_label = _make_label("第 1 / 16 回合", 17, Color(1, 1, 1))
@@ -1771,9 +1758,9 @@ func _build_ui() -> void:
 	right_panel.anchor_top = 0.0
 	right_panel.anchor_right = 1.0
 	right_panel.anchor_bottom = 0.0
-	right_panel.offset_left = -190
-	right_panel.offset_right = -6
-	right_panel.offset_top = 6
+	right_panel.offset_left = -210
+	right_panel.offset_right = -18
+	right_panel.offset_top = 18
 	right_panel.offset_bottom = 266
 	_panel_style(right_panel, Color(0.20, 0.14, 0.09, 0.60))
 	canvas.add_child(right_panel)
@@ -1795,7 +1782,7 @@ func _build_ui() -> void:
 	var rv := VBoxContainer.new()
 	rv.add_theme_constant_override("separation", 10)
 	right_panel.add_child(rv)
-	var r_title := _make_label("生态指标", 16, Color(0.85, 0.92, 1))
+	var r_title := _make_label("生态监测", 24, VisualTheme.MINT)
 	rv.add_child(r_title)
 	for metric in GameState.METRIC_NAMES:
 		rv.add_child(_make_metric_row(metric))
@@ -1808,10 +1795,10 @@ func _build_ui() -> void:
 	event_label.anchor_left = 0.0
 	event_label.anchor_top = 0.0
 	event_label.anchor_right = 1.0
-	event_label.offset_left = 220
-	event_label.offset_right = -220
-	event_label.offset_top = 4
-	event_label.offset_bottom = 30
+	event_label.offset_left = 240
+	event_label.offset_right = -230
+	event_label.offset_top = 25
+	event_label.offset_bottom = 53
 	event_label.add_theme_color_override("font_outline_color", Color(0.05, 0.08, 0.06, 0.8))
 	event_label.add_theme_constant_override("outline_size", 5)
 	canvas.add_child(event_label)
@@ -1850,11 +1837,11 @@ func _build_ui() -> void:
 	bottom_right.anchor_top = 1.0
 	bottom_right.anchor_right = 1.0
 	bottom_right.anchor_bottom = 1.0
-	bottom_right.offset_left = -180
-	bottom_right.offset_right = -14
+	bottom_right.offset_left = -210
+	bottom_right.offset_right = -18
 	# 高度要放得下 6 项（已选 / 行动提示 / 排序按钮 / 紧急调度 / 刷新手牌 / 结束回合）。
 	# ⚠ 容器装不下时 Godot 会保 offset_top 而向下长，底部按钮会被顶出屏幕。
-	bottom_right.offset_top = -256
+	bottom_right.offset_top = -276
 	bottom_right.offset_bottom = -14
 	bottom_right.add_theme_constant_override("separation", 4)
 	bottom_right.visible = false
@@ -1862,6 +1849,8 @@ func _build_ui() -> void:
 
 	selected_label = _make_label("已选：0/3", 14, Color(1, 0.9, 0.5))
 	selected_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	selected_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	selected_label.custom_minimum_size.y = 30
 	selected_label.add_theme_color_override("font_outline_color", Color(0.05, 0.08, 0.06, 0.8))
 	selected_label.add_theme_constant_override("outline_size", 4)
 	bottom_right.add_child(selected_label)
@@ -1892,7 +1881,8 @@ func _build_ui() -> void:
 	refresh_btn.custom_minimum_size = Vector2(166, 40)
 	bottom_right.add_child(refresh_btn)
 
-	end_turn_btn = _make_button("结束本回合 ▶", _finish_turn, 20)
+	end_turn_btn = _make_button("执行行动 ▶", _finish_turn, 20)
+	VisualTheme.style_button(end_turn_btn, false, true)
 	end_turn_btn.custom_minimum_size = Vector2(166, 48)
 	bottom_right.add_child(end_turn_btn)
 
@@ -1907,7 +1897,7 @@ func _build_ui() -> void:
 	canvas.add_child(popup_root)
 
 	dim = ColorRect.new()
-	dim.color = Color(0, 0, 0, 0.10)
+	dim.color = Color(0.015, 0.055, 0.065, 0.72)
 	dim.set_anchors_preset(Control.PRESET_FULL_RECT)
 	dim.mouse_filter = Control.MOUSE_FILTER_STOP
 	popup_root.add_child(dim)
@@ -1999,21 +1989,44 @@ func _build_menu() -> void:
 
 	# 很淡的压暗：镜头拉远后沙盘全景仍然看得见，开始页不遮景
 	var bg := ColorRect.new()
-	bg.color = Color(0.04, 0.06, 0.05, 0.34)
+	bg.color = Color.WHITE
+	var shade := Shader.new()
+	shade.code = "shader_type canvas_item; void fragment(){ float a = mix(0.84, 0.06, smoothstep(0.0, 0.72, UV.x)); COLOR = vec4(0.025, 0.095, 0.105, a); }"
+	var shade_mat := ShaderMaterial.new()
+	shade_mat.shader = shade
+	bg.material = shade_mat
 	bg.set_anchors_preset(Control.PRESET_FULL_RECT)
 	menu_root.add_child(bg)
 
 	# --- 右上角：标题 ---
 	var title := _make_label("保卫鄱阳湖", 48, Color(1, 0.9, 0.55))
-	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
 	title.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	title.anchor_left = 1.0
-	title.anchor_right = 1.0
-	title.offset_left = -640.0
-	title.offset_right = -56.0
-	title.offset_top = 32.0
-	title.offset_bottom = 116.0
+	title.anchor_left = 0.0
+	title.anchor_right = 0.0
+	title.offset_left = 64.0
+	title.offset_right = 620.0
+	title.offset_top = 64.0
+	title.offset_bottom = 140.0
+	title.add_theme_color_override("font_shadow_color", Color("0b242a"))
+	title.add_theme_constant_override("shadow_offset_y", 5)
 	menu_root.add_child(title)
+	var eyebrow := _make_label("P O Y A N G   /   W E T L A N D S", 12, VisualTheme.MINT)
+	eyebrow.position = Vector2(68, 44)
+	menu_root.add_child(eyebrow)
+	var subtitle := _make_label("一湖清水，万物共生。", 24, VisualTheme.PAPER)
+	subtitle.position = Vector2(68, 150)
+	menu_root.add_child(subtitle)
+	var description := _make_label("生态保护 · 卡牌策略 · 四季之旅", 12, VisualTheme.MINT)
+	description.position = Vector2(68, 194)
+	menu_root.add_child(description)
+	var footer := _make_label("守护每一片芦苇，等待每一次归来。", 12, VisualTheme.PAPER)
+	footer.anchor_top = 1.0
+	footer.anchor_bottom = 1.0
+	footer.offset_left = 68
+	footer.offset_top = -40
+	footer.offset_bottom = -20
+	menu_root.add_child(footer)
 
 	# --- 居中容器：留给技能树（天赋树）面板 ---
 	var center := CenterContainer.new()
@@ -2026,20 +2039,21 @@ func _build_menu() -> void:
 	menu_col.anchor_right = 0.0
 	menu_col.anchor_top = 1.0
 	menu_col.anchor_bottom = 1.0
-	menu_col.offset_left = 72.0
-	menu_col.offset_right = 404.0
+	menu_col.offset_left = 68.0
+	menu_col.offset_right = 372.0
 	# ⚠ 这里给的高度必须**大于内容的实际高度**。VBoxContainer 的最小高度会把
 	#   Control 撑大，一旦内容比这个矩形高，Godot 会保留 offset_top 而**向下长**，
 	#   底部那一项就被顶出屏幕（「退出」曾经半截在屏幕外就是这么来的）。
 	#   锚底 + ALIGNMENT_END ⇒ 内容的底边 = offset_bottom，所以想整体上移就把它调小。
 	menu_col.offset_top = -520.0
-	menu_col.offset_bottom = -100.0
+	menu_col.offset_bottom = -82.0
 	menu_col.alignment = BoxContainer.ALIGNMENT_END
 	menu_col.add_theme_constant_override("separation", 8)
 	menu_root.add_child(menu_col)
 
 	# 一级：新游戏 / 继续游戏
-	menu_start_btn = _make_button("新游戏", _on_title_start, 26)
+	menu_start_btn = _make_button("开启守护之旅  ▶", _on_title_start, 26)
+	VisualTheme.style_button(menu_start_btn, false, true)
 	menu_start_btn.custom_minimum_size = Vector2(0, 54)
 	menu_col.add_child(menu_start_btn)
 
@@ -2093,7 +2107,8 @@ func _build_menu() -> void:
 	menu_hint = _make_label("", 12, Color(1, 0.6, 0.5))
 	menu_col.add_child(menu_hint)
 
-	menu_seed_start_btn = _make_button("开始游戏", _on_start_pressed, 22)
+	menu_seed_start_btn = _make_button("出发，鄱阳湖  ▶", _on_start_pressed, 22)
+	VisualTheme.style_button(menu_seed_start_btn, false, true)
 	menu_seed_start_btn.custom_minimum_size = Vector2(0, 50)
 	menu_seed_start_btn.visible = false
 	menu_col.add_child(menu_seed_start_btn)
@@ -3298,6 +3313,7 @@ func _toggle_pause() -> void:
 
 func _pause_game() -> void:
 	_paused = true
+	if wetland: wetland.set_process(false)
 	pause_hint.text = ""
 	pause_settings_panel.visible = false
 	pause_panel.visible = true
@@ -3306,6 +3322,7 @@ func _pause_game() -> void:
 
 func _resume_game() -> void:
 	_paused = false
+	if wetland: wetland.set_process(true)
 	pause_root.visible = false
 
 
@@ -3934,27 +3951,7 @@ func _make_warn_row(e: Dictionary) -> Control:
 # ==================== 牌库（牌堆）UI ====================
 ## 生成主题像素牌背（湖水蓝 + 波浪横纹）
 func _make_card_back_texture() -> Texture2D:
-	var grid := """################
-#XXXXXXXXXXXXXX#
-#XXooooooooooXX#
-#XXXXXXXXXXXXXX#
-#XXooooooooooXX#
-#XXXXXXXXXXXXXX#
-#XXooooooooooXX#
-#XXXXXXXXXXXXXX#
-#XXooooooooooXX#
-#XXXXXXXXXXXXXX#
-#XXooooooooooXX#
-#XXXXXXXXXXXXXX#
-#XXooooooooooXX#
-#XXXXXXXXXXXXXX#
-#XXooooooooooXX#
-#XXXXXXXXXXXXXX#
-#XXooooooooooXX#
-#XXXXXXXXXXXXXX#
-################"""
-	var main_c := Color(0.30, 0.52, 0.72)
-	return _pixel_icon(grid, main_c, main_c.darkened(0.45), main_c.lightened(0.35))
+	return preload("res://assets/art/guardian-card-back.svg")
 
 
 ## 牌堆：生态指标框下方，叠放三张牌背；悬停黄框+孔雀开屏，点击查看牌库
@@ -3966,10 +3963,10 @@ func _build_deck_ui(canvas: CanvasLayer) -> void:
 	deck_root.anchor_top = 0.0
 	deck_root.anchor_right = 1.0
 	deck_root.anchor_bottom = 0.0
-	deck_root.offset_left = -190
-	deck_root.offset_right = -6
-	deck_root.offset_top = 276
-	deck_root.offset_bottom = 392
+	deck_root.offset_left = -210
+	deck_root.offset_right = -18
+	deck_root.offset_top = 327
+	deck_root.offset_bottom = 431
 	deck_root.mouse_filter = Control.MOUSE_FILTER_STOP
 	canvas.add_child(deck_root)
 
@@ -3982,7 +3979,7 @@ func _build_deck_ui(canvas: CanvasLayer) -> void:
 	deck_root.add_child(deck_border)
 
 	# 叠放的三张牌背
-	var stack_positions := [Vector2(58, 18), Vector2(60, 15), Vector2(62, 12)]
+	var stack_positions := [Vector2(12, 4), Vector2(15, 2), Vector2(18, 0)]
 	for i in 3:
 		var back := TextureRect.new()
 		back.texture = card_back_tex
@@ -4001,6 +3998,11 @@ func _build_deck_ui(canvas: CanvasLayer) -> void:
 	deck_root.mouse_entered.connect(_on_deck_mouse_entered)
 	deck_root.mouse_exited.connect(_on_deck_mouse_exited)
 	deck_root.gui_input.connect(_on_deck_gui_input)
+	deck_root.tooltip_text = "查看全部行动卡 · 点击打开牌库"
+	var caption := _make_label("行动图鉴\n点击查看", 12, VisualTheme.PAPER)
+	caption.position = Vector2(100, 35)
+	caption.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	deck_root.add_child(caption)
 
 
 func _on_deck_mouse_entered() -> void:
@@ -4023,9 +4025,9 @@ func _on_deck_mouse_exited() -> void:
 
 ## 孔雀开屏：悬停时三张牌背扇形展开，移开后收回
 func _fan_deck(out: bool) -> void:
-	var fan_positions := [Vector2(34, 26), Vector2(60, 8), Vector2(86, 26)]
+	var fan_positions := [Vector2(-1, 8), Vector2(20, 0), Vector2(41, 8)]
 	var fan_rotations := [-0.26, 0.0, 0.26]
-	var stack_positions := [Vector2(58, 18), Vector2(60, 15), Vector2(62, 12)]
+	var stack_positions := [Vector2(12, 4), Vector2(15, 2), Vector2(18, 0)]
 	for i in deck_backs.size():
 		var back: TextureRect = deck_backs[i]
 		var pos: Vector2 = fan_positions[i] if out else stack_positions[i]
@@ -4634,24 +4636,12 @@ func _on_viewer_card_click(event: InputEvent, view: Control, card: Dictionary) -
 
 func _apply_yellow_frame(view: Control) -> void:
 	var panel: PanelContainer = view.get_meta("panel")
-	var sb := StyleBoxFlat.new()
-	sb.bg_color = Color(0.30, 0.22, 0.14, 0.98)
-	sb.border_color = Color(1.0, 0.85, 0.3)
-	sb.set_border_width_all(3)
-	sb.corner_radius_top_left = 4
-	sb.corner_radius_top_right = 4
-	sb.corner_radius_bottom_left = 4
-	sb.corner_radius_bottom_right = 4
-	sb.content_margin_left = 12
-	sb.content_margin_right = 12
-	sb.content_margin_top = 10
-	sb.content_margin_bottom = 10
-	panel.add_theme_stylebox_override("panel", sb)
+	panel.add_theme_stylebox_override("panel", VisualTheme.card_style(true))
 
 
 func _remove_yellow_frame(view: Control) -> void:
 	var panel: PanelContainer = view.get_meta("panel")
-	_panel_style(panel, Color(0.30, 0.22, 0.14, 0.98))
+	panel.add_theme_stylebox_override("panel", VisualTheme.card_style())
 
 
 ## 卡牌详情：左大牌 + 右介绍框（打字机）；大牌从被点击处平移放大投射到左侧展示位
@@ -4835,10 +4825,10 @@ func _on_run_talents_done() -> void:
 func _play_hud_enter() -> void:
 	if left_panel == null or right_panel == null:
 		return
-	const L_HOME_L := 6.0        # 左面板常驻位置
-	const L_HOME_R := 210.0
-	const R_HOME_L := -190.0     # 右面板常驻位置（锚在屏幕右缘，负值向左）
-	const R_HOME_R := -6.0
+	const L_HOME_L := 18.0        # 左面板常驻位置
+	const L_HOME_R := 222.0
+	const R_HOME_L := -210.0     # 右面板常驻位置（锚在屏幕右缘，负值向左）
+	const R_HOME_R := -18.0
 	const GAP := 12.0            # 屏幕外的额外间隙
 	const DUR := 0.55            # 滑入时长（秒）
 	const LAG := 0.08            # 右侧延后出发
@@ -4888,7 +4878,8 @@ func _make_metric_row(metric: String) -> VBoxContainer:
 	bar.max_value = 100
 	bar.value = 0
 	bar.show_percentage = false
-	bar.modulate = METRIC_COLORS[metric]
+	bar.add_theme_stylebox_override("background", VisualTheme.box(Color("0b252e"), Color("42615b"), 0))
+	bar.add_theme_stylebox_override("fill", VisualTheme.box(METRIC_COLORS[metric], METRIC_COLORS[metric].lightened(0.2), 0))
 	bar.set_anchors_preset(Control.PRESET_FULL_RECT)
 	bar.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	wrap.add_child(bar)
@@ -5901,29 +5892,42 @@ func _make_card(card: Dictionary, tier: String = "") -> Dictionary:
 	panel.custom_minimum_size = Vector2(122, 165)
 	panel.size = Vector2(122, 165)
 	panel.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
-	_panel_style(panel, Color(0.30, 0.22, 0.14, 0.98))
+	panel.add_theme_stylebox_override("panel", VisualTheme.card_style())
 	panel.gui_input.connect(_on_card_gui_input.bind(panel))
 
 	var vb := VBoxContainer.new()
 	vb.add_theme_constant_override("separation", 3)
-	vb.alignment = BoxContainer.ALIGNMENT_CENTER
+	vb.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	panel.add_child(vb)
-
-	var name_l := _make_label(card["name"], 15, Color(1, 1, 1))
-	name_l.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	name_l.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	vb.add_child(name_l)
-
 	var cat: String = card["category"]
-	var cat_l := _make_label(CATEGORY_NAMES[cat], 11, CATEGORY_COLORS[cat])
+	var cat_l := _make_label("◆ " + CATEGORY_NAMES[cat] + "行动", 12, VisualTheme.INK)
 	cat_l.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	vb.add_child(cat_l)
-
-	var cost_l := _make_label("%d 万" % card["cost"], 16, Color(1, 0.9, 0.55))
+	var art := TextureRect.new()
+	art.texture = VisualTheme.illustration(card)
+	art.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+	art.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	art.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
+	art.custom_minimum_size = Vector2(0, 58)
+	art.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	vb.add_child(art)
+	var stripe := ColorRect.new()
+	stripe.color = CATEGORY_COLORS[cat].darkened(0.16)
+	stripe.custom_minimum_size.y = 3
+	stripe.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	vb.add_child(stripe)
+	var name_l := _make_label(card["name"], 12, VisualTheme.INK)
+	name_l.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	name_l.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	name_l.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	name_l.custom_minimum_size.y = 28
+	name_l.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	vb.add_child(name_l)
+	var cost_l := _make_label("", 12, Color("6f542a"))
 	cost_l.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	vb.add_child(cost_l)
+	_ignore_mouse(vb)
 
-	# 卡面只保留 名称 / 类别 / 价格 三行 —— **加成一律不进卡面**，留在悬停提示里。
 	var use_tier: String = tier if tier != "" else play_tier
 	if not card["tiers"].has(use_tier):
 		use_tier = "effective"
@@ -5931,7 +5935,6 @@ func _make_card(card: Dictionary, tier: String = "") -> Dictionary:
 	cost_l.text = "%d 万" % cost
 	panel.tooltip_text = "%s\n\n%s（%d 万）：%s" % [card["desc"], GameState.TIER_NAMES[use_tier],
 		cost, _tier_effects_text(card, use_tier)]
-
 	return {"panel": panel, "cost_label": cost_l}
 
 
@@ -5986,7 +5989,7 @@ func _update_card_face(info: Dictionary) -> void:
 	cost_l.text = "%s%d 万" % [tag, cost]
 	# 锁定的牌用更亮的金色，一眼看出「这张是按哪个档锁住的」
 	cost_l.add_theme_color_override("font_color",
-		Color(1.0, 0.94, 0.66) if locked else Color(1, 0.9, 0.55))
+		Color("956523") if locked else Color("6f542a"))
 	info["panel"].tooltip_text = "%s\n\n%s（%d 万）：%s" % [
 		card["desc"], GameState.TIER_NAMES[tier], cost, _tier_effects_text(card, tier)]
 
@@ -6037,7 +6040,7 @@ func _toggle_card(panel: PanelContainer) -> void:
 		info["tier"] = play_tier         # ★ 选中的那一刻把档位锁定在这张牌上
 		_apply_gold_frame(panel)
 		_update_card_face(info)
-		_update_selected_label()
+	_update_selected_label()
 
 
 ## 已选卡牌的总花费（万）
@@ -6154,6 +6157,11 @@ func _update_card_hover(delta: float) -> void:
 		panel.position = panel.position.lerp(target, 1.0 - exp(-12.0 * delta))
 		var s: float = 1.06 if hovering else 1.0
 		panel.scale = panel.scale.lerp(Vector2(s, s), 1.0 - exp(-14.0 * delta))
+		var tilt: float = info["theta"]
+		if hovering:
+			var pointer_x := mouse_global.x - panel.get_global_rect().get_center().x
+			tilt = tilt * 0.65 + clampf(pointer_x * 0.0006, -0.045, 0.045)
+		panel.rotation = lerp_angle(panel.rotation, tilt, 1.0 - exp(-15.0 * delta))
 	_update_card_stack()
 
 
@@ -6218,28 +6226,25 @@ func _point_in_card(panel: PanelContainer, base_pos: Vector2, mouse_global: Vect
 
 ## 金色闪光框（选中标记，呼吸发光）
 func _apply_gold_frame(panel: PanelContainer) -> void:
-	var sb := StyleBoxFlat.new()
-	sb.bg_color = Color(0.30, 0.22, 0.14, 0.98)
-	sb.border_color = Color(1.0, 0.85, 0.30)
-	sb.set_border_width_all(3)
-	sb.corner_radius_top_left = 4
-	sb.corner_radius_top_right = 4
-	sb.corner_radius_bottom_left = 4
-	sb.corner_radius_bottom_right = 4
-	sb.content_margin_left = 12
-	sb.content_margin_right = 12
-	sb.content_margin_top = 10
-	sb.content_margin_bottom = 10
+	_stop_card_glow(panel)
+	var sb := VisualTheme.card_style(true)
 	panel.add_theme_stylebox_override("panel", sb)
 	var tw := panel.create_tween().set_loops()
+	panel.set_meta("selection_glow", tw)
 	tw.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
-	tw.tween_property(sb, "border_color", Color(1.0, 0.95, 0.55), 0.7)
-	tw.tween_property(sb, "border_color", Color(0.95, 0.72, 0.18), 0.7)
+	tw.tween_property(sb, "border_color", Color("fff3b0"), 0.8)
+	tw.tween_property(sb, "border_color", VisualTheme.GOLD, 0.8)
 
 
-## 取消选中：恢复普通边框
+func _stop_card_glow(panel: PanelContainer) -> void:
+	var tw: Tween = panel.get_meta("selection_glow") if panel.has_meta("selection_glow") else null
+	if tw and tw.is_valid(): tw.kill()
+	if panel.has_meta("selection_glow"): panel.remove_meta("selection_glow")
+
+
 func _remove_gold_frame(panel: PanelContainer) -> void:
-	_panel_style(panel, Color(0.30, 0.22, 0.14, 0.98))
+	_stop_card_glow(panel)
+	panel.add_theme_stylebox_override("panel", VisualTheme.card_style())
 
 
 func _finish_turn() -> void:
@@ -6908,6 +6913,7 @@ func _restart() -> void:
 
 # ==================== 通用弹窗 ====================
 func _show_popup(title: String, body: String, button_text: String, on_continue: Callable) -> void:
+	if _popup_reveal and _popup_reveal.is_valid(): _popup_reveal.kill()
 	popup_title.text = title
 	popup_body.text = body
 	popup_button.text = button_text
@@ -6930,13 +6936,15 @@ func _show_popup(title: String, body: String, button_text: String, on_continue: 
 	var total := popup_body.get_total_character_count()
 	var reveal_time: float = clampf(total * 0.016, 0.3, 2.5)
 	var tw3 := popup_body.create_tween()
+	_popup_reveal = tw3
 	tw3.set_trans(Tween.TRANS_LINEAR)
 	tw3.tween_property(popup_body, "visible_characters", total, reveal_time).set_delay(0.1)
 
 
 func _on_popup_button() -> void:
 	# 若正文还在逐字打字中，第一次点击先把文字补全（避免误关）
-	if popup_body.visible_characters < popup_body.get_total_character_count():
+	if popup_body.visible_characters >= 0 and popup_body.visible_characters < popup_body.get_total_character_count():
+		if _popup_reveal and _popup_reveal.is_valid(): _popup_reveal.kill()
 		popup_body.visible_characters = -1
 		return
 	popup_root.visible = false
@@ -6959,60 +6967,26 @@ func _make_label(text: String, size: int, color: Color) -> Label:
 func _make_button(text: String, cb: Callable, size: int, danger: bool = false) -> Button:
 	var b := Button.new()
 	b.text = text
+	b.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
 	b.add_theme_font_size_override("font_size", _snap_px(size))
-	if danger:
-		b.add_theme_color_override("font_color", Color(1.0, 0.86, 0.82))
-		b.add_theme_color_override("font_hover_color", Color(1.0, 0.95, 0.91))
-		b.add_theme_color_override("font_pressed_color", Color(0.92, 0.74, 0.70))
-		b.add_theme_color_override("font_disabled_color", Color(0.62, 0.48, 0.46))
-		b.add_theme_stylebox_override("normal", _wood_button(Color(0.52, 0.16, 0.14), Color(0.30, 0.07, 0.06)))
-		b.add_theme_stylebox_override("hover", _wood_button(Color(0.68, 0.22, 0.18), Color(0.40, 0.10, 0.08)))
-		b.add_theme_stylebox_override("pressed", _wood_button(Color(0.36, 0.10, 0.09), Color(0.20, 0.05, 0.04)))
-		b.add_theme_stylebox_override("disabled", _wood_button(Color(0.30, 0.18, 0.17), Color(0.20, 0.12, 0.11)))
-	else:
-		b.add_theme_color_override("font_color", Color(0.96, 0.90, 0.76))
-		b.add_theme_color_override("font_hover_color", Color(1.0, 0.95, 0.82))
-		b.add_theme_color_override("font_pressed_color", Color(0.90, 0.82, 0.66))
-		b.add_theme_color_override("font_disabled_color", Color(0.55, 0.50, 0.42))
-		b.add_theme_stylebox_override("normal", _wood_button(Color(0.42, 0.30, 0.18), Color(0.24, 0.16, 0.09)))
-		b.add_theme_stylebox_override("hover", _wood_button(Color(0.52, 0.38, 0.23), Color(0.30, 0.20, 0.11)))
-		b.add_theme_stylebox_override("pressed", _wood_button(Color(0.28, 0.19, 0.11), Color(0.16, 0.10, 0.05)))
-		b.add_theme_stylebox_override("disabled", _wood_button(Color(0.26, 0.22, 0.17), Color(0.18, 0.15, 0.11)))
+	VisualTheme.style_button(b, danger)
+	b.mouse_entered.connect(func(): VisualTheme.button_feedback(b, true))
+	b.mouse_exited.connect(func(): VisualTheme.button_feedback(b, false))
+	b.focus_entered.connect(func(): VisualTheme.button_feedback(b, true))
+	b.focus_exited.connect(func(): VisualTheme.button_feedback(b, false))
 	b.pressed.connect(cb)
 	return b
 
 
-## 星露谷风木按钮（硬边角、木色、细边框）
 func _wood_button(bg: Color, border: Color) -> StyleBoxFlat:
-	var sb := StyleBoxFlat.new()
-	sb.bg_color = bg
-	sb.border_color = border
-	sb.set_border_width_all(2)
-	sb.corner_radius_top_left = 3
-	sb.corner_radius_top_right = 3
-	sb.corner_radius_bottom_left = 3
-	sb.corner_radius_bottom_right = 3
-	sb.content_margin_left = 8
-	sb.content_margin_right = 8
-	sb.content_margin_top = 5
-	sb.content_margin_bottom = 5
-	return sb
+	return VisualTheme.box(bg, border, 7)
 
 
 func _panel_style(p: PanelContainer, color: Color) -> void:
-	var sb := StyleBoxFlat.new()
-	sb.bg_color = color
-	sb.border_color = Color(0.45, 0.32, 0.18, 1.0)  # 中木棕边框
-	sb.set_border_width_all(3)
-	sb.corner_radius_top_left = 4
-	sb.corner_radius_top_right = 4
-	sb.corner_radius_bottom_left = 4
-	sb.corner_radius_bottom_right = 4
-	sb.content_margin_left = 12
-	sb.content_margin_right = 12
-	sb.content_margin_top = 10
-	sb.content_margin_bottom = 10
-	p.add_theme_stylebox_override("panel", sb)
+	# An opaque lake-green surface keeps small Chinese text legible over the map.
+	var bg := Color("503333") if color.r > color.g * 1.8 else VisualTheme.PANEL
+	bg.a = 0.97 if color.a < 0.9 else 0.99
+	p.add_theme_stylebox_override("panel", VisualTheme.box(bg, VisualTheme.EDGE))
 
 
 ## 左侧/右侧信息面板滑出屏幕（结算后）或滑回（下一回合开始）
@@ -7037,10 +7011,10 @@ func _slide_side_panels(out: bool) -> void:
 		tw.tween_property(right_panel, "offset_left", GAP, 0.35)
 		tw.tween_property(right_panel, "offset_right", rw + GAP, 0.35)
 	else:
-		tw.tween_property(left_panel, "offset_left", 6, 0.35)
-		tw.tween_property(left_panel, "offset_right", 210, 0.35)
-		tw.tween_property(right_panel, "offset_left", -190, 0.35)
-		tw.tween_property(right_panel, "offset_right", -6, 0.35)
+		tw.tween_property(left_panel, "offset_left", 18, 0.35)
+		tw.tween_property(left_panel, "offset_right", 222, 0.35)
+		tw.tween_property(right_panel, "offset_left", -210, 0.35)
+		tw.tween_property(right_panel, "offset_right", -18, 0.35)
 
 
 # ==================== 像素图标 ====================
@@ -7183,6 +7157,16 @@ func _setup_pixel_font() -> void:
 	zh.antialiasing = TextServer.FONT_ANTIALIASING_NONE
 	zh.subpixel_positioning = TextServer.SUBPIXEL_POSITIONING_DISABLED
 	ThemeDB.fallback_font = zh
+	var theme := Theme.new()
+	theme.default_font = zh
+	theme.default_font_size = 12
+	theme.set_stylebox("panel", "TooltipPanel", VisualTheme.box(VisualTheme.INK, VisualTheme.GOLD))
+	theme.set_color("font_color", "TooltipLabel", VisualTheme.PAPER)
+	theme.set_font_size("font_size", "TooltipLabel", 12)
+	for state in ["normal", "focus", "read_only"]:
+		theme.set_stylebox(state, "LineEdit", VisualTheme.box(VisualTheme.INK, VisualTheme.EDGE, 8))
+	theme.set_color("font_color", "LineEdit", VisualTheme.PAPER)
+	get_tree().root.theme = theme
 
 
 ## 把字号吸附到像素字体的原生尺寸（12px 的整数倍），避免缩放发虚

@@ -1,0 +1,29 @@
+{
+  "generator": "Built-in image_gen",
+  "date": "2026-09-30",
+  "assets": [
+    {
+      "path": "assets/art/poyang-wetland.png",
+      "prompt": "Use case: stylized-concept. Asset type: original production background for a Chinese Poyang Lake ecology card game. Create a beautiful meticulously crafted 16-bit pixel art wetland world, top-down oblique perspective like cozy farming RPG landscape art. Wide 1536x1024 composition. A large irregular turquoise lake occupies the middle 65 percent with lots of calm open water, cream sand banks, winding narrow inlets, small reed islands, lily pads, rich layered grass in sage and olive, detailed leafy trees framing upper corners, tiny Jiangxi whitewashed gray tile roof cottages on upper right shore, a wooden jetty, winding dirt trails. Distant blue mountain silhouette only at very top. Warm afternoon sun, beautiful restrained jade, teal, straw gold palette. Crisp square pixel clusters, no smooth painted gradients, no 3D render. Main lake open center intended for live game wildlife sprites. The lower 20 percent should be dark grassy foreground framing the lake, behind cards. No UI, no text, no labels, no border, no logos, no watermarks. Original scenery, do not copy any existing game map."
+    },
+    {
+      "path": "assets/art/conservation-cards.png",
+      "prompt": "Use case: stylized-concept. Asset type: production illustration atlas for an original Poyang Lake ecology card game. A perfectly regular 3 columns by 2 rows grid, six equally sized square art panels, edge to edge no gutters, overall 1536x1024. Each tile a beautifully composed crisp 16-bit pixel art miniature in a coordinated jade teal cream golden ochre palette, dark teal outlines, warm light, rich square pixel clusters. Top left: elegant white Siberian crane with red face and black wing tips among reeds in shallow teal water. Top center: friendly small fishing village with white walls slate roofs orange lanterns and a wooden boat. Top right: ranger's open field notebook with magnifying glass and green leaf on a wooden desk. Bottom left: lotus leaves and pink lotus flowers growing above turquoise lake with golden fish visible. Bottom center: two friendly young wetland volunteers wearing straw hats planting reeds together on shore. Bottom right: wooden observation tower, binoculars and distant white birds above the lake. Keep subject recognizable at tiny card size. Each panel is its own self-contained landscape illustration with a clearly centered subject, no text, no lettering, no UI, no border, no logo. Original art."
+    },
+    {
+      "path": "assets/art/wetland-sprites.png",
+      "transparent_background": true,
+      "prompt": "Use case: stylized-concept. Asset type: transparent sprite atlas for an original cozy 16-bit Chinese wetland ecology game. Exactly eight individual sprites laid out in a precise 4 columns x 2 rows grid on a fully transparent canvas 1536x1024. Each grid cell 384x512, one sprite centered in the cell with generous transparent padding (sprite fits central 70% of cell). All sprites top-down three-quarter farming RPG perspective, crisp low resolution square pixel clusters, limited jade teal straw cream palette, NO ground background or scenery. Row 1 left to right: white Siberian crane standing with slim long neck red face black wing tips and thin reddish legs; gray wild goose standing with white forehead orange beak; green headed wild duck; golden freshwater fish seen from overhead. Row 2 left to right: clump of 10 golden reed stalks with green leaves; small rectangular wooden floating ecological raft with lush green plants on top; single small white Jiangxi village cottage with dark gray tiled sloped roof and warm yellow window; small wooden fishing boat with straw canopy. High craft pixel sprites not photorealistic, no antialiased painterly edges, exact regular 4x2 atlas, transparent background, no text no labels no grids no frames no watermark. Original designs."
+    },
+    {
+      "path": "assets/art/wetland-birds.png",
+      "transparent_background": true,
+      "prompt": "Use case: scientific-educational. Asset type: transparent bird sprite atlas for a Poyang Lake ecology game. Canvas 1536x1024 with EXACT 3 columns x 2 rows, each tile exactly 512x512. Six isolated sprites centered within their own tile with 60 pixels padding; no grid lines or text. Crisp handcrafted 16-bit pixel art, side/three-quarter game view, consistent light, jade and warm cream colors, no backgrounds, preserve FULLY TRANSPARENT alpha. TOP LEFT: Siberian crane, white body black folded flight feathers red face, long red legs. TOP MIDDLE: Oriental stork, white body black folded wings, long straight black bill, long red legs, no red cap. TOP RIGHT: small white tundra swan, curved neck, short black bill with yellow base, floating pose. BOTTOM LEFT: white-naped crane, mostly gray body, white stripe down back of neck, red skin around eyes, long pink legs. BOTTOM MIDDLE: greater white-fronted goose, gray-brown body, white forehead, orange bill and feet, standing. BOTTOM RIGHT: a cluster of round green lotus leaves with one pink lotus flower, seen above. Sprite silhouettes must be biologically recognizable for school education. No water surface, no floor, no shadows outside sprites, no matte, no logos, no lettering. Original game sprites."
+    }
+  ],
+  "references": [
+    "https://www.playbalatro.com/press-kit",
+    "https://www.stardewvalley.net/media/"
+  ],
+  "notes": "Original generated art. Reference games are used for visual direction only; their assets are not included. guardian-card-back.svg is original code-native UI art."
+}
