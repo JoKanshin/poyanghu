@@ -1,18 +1,12 @@
 extends Node
-## 天赋系统单例：本地存档 + 每局随机词条
-##
-## 2026-09-28 大改（见 版本更新0.0.8.md）：**天赋树暂时关闭**。
-## 不再靠攒点数线性点亮，改成「每局开局随种子随机附赠 0~3 条词条」。
-## 词条按等级分三类，按难度取用：
-##   等级 1（基础 8 条）→ 简单模式
-##   等级 2（扩展 7 条）→ 普通模式
-##   等级 3（强化 15 条）→ 困难模式
-## 同一局内：不重复抽同一条，也不会同时出现「同一个加成键」的两条
-##（例如 资金周转 与 资金周转 II 都是 interest，同局最多出现一条）。
-## 树状解锁的旧数据（points / unlocked）与相关函数全部保留 —— 恢复时把 main.gd 的
-## TALENT_TREE_ENABLED 改回 true 即可继续用，老进度不丢。
+## Seeded random talents + a much smaller permanent, branching study tree.
+## Permanent allocations are captured at run start; menu changes affect new runs.
 
 const SAVE_PATH := "user://talents.json"
+const TreeData := preload("res://scripts/talent_tree_data.gd")
+const TREE := TreeData.NODES
+const GROUPS := TreeData.GROUPS
+const CLEAR_REWARDS := [1, 2, 3, 0]
 
 ## 词条等级 → 难度（下标 = GameState.Difficulty 枚举值：0 简单 / 1 普通 / 2 困难 / 3 噩梦）
 ## 噩梦档取困难档同一池（等级 3）：它是"照搬早期困难档"的挑战模式，
@@ -57,9 +51,15 @@ const TALENTS := [
 	{"id": "first_action2",    "tier": 3, "name": "运筹帷幄 II", "desc": "首回合行动位 +1",       "bonus": {"key": "first_turn_actions", "value": 1}},
 ]
 
-var points: int = 0            # 天赋树（暂关）用的点数，保留不丢
-var unlocked: Array = []       # 天赋树（暂关）已点亮的词条，保留不丢
-## 本局随机到的词条 id。每局 reset_game 时重掷；**get_bonus 只看这个列表**。
+var points: int = 0            # Legacy linear progress retained as a backup.
+var unlocked: Array = []
+var inspiration := 0
+var tree_ranks: Dictionary = {}
+var nightmare_mastery := false
+var claimed_runs: Dictionary = {}
+var run_tree_ranks: Dictionary = {}
+var run_tree_mastery := false
+## Current run's seeded random entries; the original pool and RNG are unchanged.
 var granted: Array = []
 
 
@@ -75,11 +75,15 @@ func _load() -> void:
 		return
 	var data = JSON.parse_string(f.get_as_text())
 	if data is Dictionary:
-		points = int(data.get("points", 0))
-		unlocked = []
-		for id in data.get("unlocked", []):
-			if _find_talent(id) != -1:
-				unlocked.append(id)
+		load_profile(data)
+
+func load_profile(data: Dictionary) -> void:
+	points = maxi(0, int(data.get("points", 0)))
+	unlocked = data.get("unlocked", []).duplicate()
+	inspiration = maxi(0, int(data.get("inspiration", 0)))
+	nightmare_mastery = bool(data.get("nightmare_mastery", false))
+	tree_ranks = sanitize_tree(data.get("tree_ranks", {}), nightmare_mastery)
+	claimed_runs = data.get("claimed_runs", {}).duplicate()
 
 
 ## 清空天赋：点数与已解锁全部归零，并立即落盘。
@@ -89,17 +93,28 @@ func reset_all() -> void:
 	points = 0
 	unlocked = []
 	granted = []
+	inspiration = 0
+	tree_ranks = {}
+	nightmare_mastery = false
+	claimed_runs = {}
+	run_tree_ranks = {}
+	run_tree_mastery = false
 	save()
 
 
-func save() -> void:
+func save() -> bool:
 	# 确保存档目录存在（Godot 通常会自建，这里兜底防数据丢失）
 	DirAccess.make_dir_recursive_absolute(OS.get_user_data_dir())
 	var f := FileAccess.open(SAVE_PATH, FileAccess.WRITE)
 	if f == null:
-		return
-	f.store_string(JSON.stringify({"points": points, "unlocked": unlocked}))
+		return false
+	f.store_string(JSON.stringify({"version": 2, "points": points, "unlocked": unlocked,
+		"inspiration": inspiration, "tree_ranks": tree_ranks, "nightmare_mastery": nightmare_mastery,
+		"claimed_runs": claimed_runs}))
+	f.flush()
+	var ok := f.get_error() == OK
 	f.close()  # 显式落盘，避免关闭游戏时未写入
+	return ok
 
 
 # ==================== 本局随机词条（0.0.8 的新天赋系统）====================
@@ -111,6 +126,8 @@ func save() -> void:
 ##   否则掷词条会平移后面所有随机（危机、抽卡、开局指标），
 ##   同一个种子跑出来的对局会和历史记录对不上，反事实对照全废。
 func roll_for_run(for_seed: int, difficulty: int) -> Array:
+	run_tree_ranks = sanitize_tree(tree_ranks, nightmare_mastery)
+	run_tree_mastery = nightmare_mastery
 	var rng := RandomNumberGenerator.new()
 	rng.seed = hash("talent:v1:%d:%d" % [for_seed, difficulty])
 	var tier: int = TIER_FOR_DIFFICULTY[clampi(difficulty, 0, TIER_FOR_DIFFICULTY.size() - 1)]
@@ -156,54 +173,161 @@ func entry(id: String) -> Dictionary:
 	return TALENTS[i]
 
 
-## 本局词条中指定 key 的加成之和
-## ⚠ 只认本局随机到的 granted，**不再认 unlocked**：
-##   天赋树暂关期间若还让旧解锁生效，老存档会带着满树加成开局，
-##   把随机词条的设计整个盖掉。
+## Random entries and the permanent allocation captured at this run's start.
 func get_bonus(key: String) -> float:
 	var sum := 0.0
 	for id in granted:
 		var idx := _find_talent(id)
 		if idx != -1 and TALENTS[idx]["bonus"]["key"] == key:
 			sum += TALENTS[idx]["bonus"]["value"]
-	return sum
+	return sum + tree_bonus(key, run_tree_ranks)
 
 
-# ==================== 天赋树（暂时关闭，代码保留待恢复）====================
+# ==================== Branching permanent study ====================
 
-func has(id: String) -> bool:
-	return id in unlocked
+func tree_entry(id: String) -> Dictionary:
+	for node in TREE:
+		if node.id == id: return node
+	return {}
 
+func rank_of(id: String, ranks: Dictionary) -> int:
+	return 1 if id == "origin" else int(ranks.get(id, 0))
 
-## 下一个待点亮的词条 id；全点亮返回 ""
-func next_talent_id() -> String:
-	if unlocked.size() >= TALENTS.size():
-		return ""
-	return TALENTS[unlocked.size()]["id"]
+func tree_rank(id: String) -> int:
+	return int(tree_entry(id).get("max_rank", 0)) if nightmare_mastery else rank_of(id, tree_ranks)
 
+func group_used(group: String, ranks: Dictionary) -> int:
+	var count := 0
+	for node in TREE:
+		if node.group == group: count += rank_of(node.id, ranks)
+	return count
 
-## 点亮下一个词条所需的点数：前 15 条 1 点，第 16 条起 2 点
-func next_cost() -> int:
-	return 2 if unlocked.size() >= 15 else 1
+func parents_met(node: Dictionary, ranks: Dictionary) -> bool:
+	if node.parents.is_empty(): return true
+	var count := 0
+	for id in node.parents:
+		if rank_of(id, ranks) > 0: count += 1
+	return count > 0 if node.get("mode", "all") == "any" else count == node.parents.size()
 
+func sanitize_tree(raw: Dictionary, full: bool = false) -> Dictionary:
+	var result := {}
+	for node in TREE:
+		if node.id == "origin": continue
+		var rank := int(node.max_rank) if full else clampi(int(raw.get(node.id, 0)), 0, int(node.max_rank))
+		if not full:
+			if not parents_met(node, result): continue
+			if GROUPS.has(node.group): rank = mini(rank, maxi(0, int(GROUPS[node.group].cap) - group_used(node.group, result)))
+		if rank > 0: result[node.id] = rank
+	return result
 
-## 点亮下一个词条（线性）—— 天赋树恢复后才有入口
-func unlock_next() -> bool:
-	var nid := next_talent_id()
-	var cost := next_cost()
-	if nid == "" or points < cost:
-		return false
-	unlocked.append(nid)
-	points -= cost
-	save()
-	return true
+func upgrade_status(id: String) -> Dictionary:
+	var node := tree_entry(id)
+	if node.is_empty(): return {"ok": false, "reason": "未知节点"}
+	if nightmare_mastery: return {"ok": false, "reason": "噩梦通关奖励：全树已满级"}
+	if tree_rank(id) >= int(node.max_rank): return {"ok": false, "reason": "已满级"}
+	if not parents_met(node, tree_ranks):
+		var names: Array[String] = []
+		for parent in node.parents: names.append(str(tree_entry(parent).name))
+		return {"ok": false, "reason": ("任选一个前置：" if node.get("mode", "all") == "any" else "需要全部前置：") + "、".join(names)}
+	if GROUPS.has(node.group):
+		var group: Dictionary = GROUPS[node.group]
+		if group_used(node.group, tree_ranks) >= int(group.cap):
+			return {"ok": false, "reason": "%s已达 %d 级上限，可重置分配" % [group.name, group.cap]}
+	if inspiration < int(node.cost): return {"ok": false, "reason": "需要 %d 灵感，通关后可获得" % node.cost}
+	return {"ok": true, "reason": "可研修"}
 
+func unlock(id: String) -> bool:
+	if not upgrade_status(id).ok: return false
+	var before := tree_ranks.duplicate()
+	var cost: int = tree_entry(id).cost
+	tree_ranks[id] = tree_rank(id) + 1
+	inspiration -= cost
+	if save(): return true
+	tree_ranks = before
+	inspiration += cost
+	return false
 
-func award(n: int) -> void:
-	if n <= 0:
-		return
-	points += n
-	save()
+func allocated_cost() -> int:
+	var total := 0
+	for node in TREE: total += int(node.cost) * int(tree_ranks.get(node.id, 0))
+	return total
+
+func respec() -> bool:
+	if nightmare_mastery: return false
+	var refund := allocated_cost()
+	var before := tree_ranks.duplicate()
+	tree_ranks = {}
+	inspiration += refund
+	if save(): return true
+	tree_ranks = before
+	inspiration -= refund
+	return false
+
+func tree_bonus(key: String, ranks: Dictionary) -> float:
+	var total := 0.0
+	for node in TREE: total += float(node.bonus.get(key, 0)) * int(ranks.get(node.id, 0))
+	return total
+
+func set_run_tree(ranks: Dictionary, mastery: bool = false) -> void:
+	run_tree_mastery = mastery
+	run_tree_ranks = sanitize_tree(ranks, mastery)
+
+func run_tree_count() -> int:
+	return run_tree_ranks.size()
+
+func run_tree_summary() -> String:
+	var lines: Array[String] = []
+	for node in TREE:
+		var rank := int(run_tree_ranks.get(node.id, 0))
+		if rank > 0: lines.append("%s %d/%d · %s" % [node.name, rank, node.max_rank, node.desc])
+	return "\n".join(lines)
+
+func run_tree_effect_summary() -> String:
+	var starts: Array[String] = []
+	for pair in [["start_water", "水位"], ["start_quality", "水质"], ["start_veg", "植被"], ["start_fish", "鱼类"], ["start_birds", "候鸟"], ["start_community", "社区"]]:
+		var value := int(tree_bonus(pair[0], run_tree_ranks))
+		if value > 0: starts.append("%s +%d" % [pair[1], value])
+	var economy: Array[String] = []
+	for pair in [["funding", "拨款"], ["operation", "运营成本"], ["carry", "结转上限"]]:
+		var value := int(tree_bonus(pair[0], run_tree_ranks))
+		if value != 0: economy.append("%s %s%d万" % [pair[1], "+" if value > 0 else "", value])
+	var rates: Array[String] = []
+	for pair in [["card_cost", "卡牌成本"], ["crisis_chance", "危机概率"]]:
+		var value := int(round(tree_bonus(pair[0], run_tree_ranks) * 100))
+		if value != 0: rates.append("%s %d%%" % [pair[1], value])
+	var lines: Array[String] = []
+	if not starts.is_empty(): lines.append("开局：" + " · ".join(starts))
+	if not economy.is_empty(): lines.append("每回合：" + " · ".join(economy))
+	if not rates.is_empty(): lines.append(" · ".join(rates))
+	return "\n".join(lines)
+
+## Every victorious run earns inspiration, including early wins. Reopening is safe.
+func claim_victory_report(report: Dictionary) -> Dictionary:
+	var result := {"amount": 0, "mastery": false, "duplicate": false, "save_error": false}
+	var run_id := str(report.get("run_id", ""))
+	var mode := int(report.get("difficulty", -1))
+	if run_id.is_empty() or mode < 0 or mode > 3 or not bool(report.get("victory", false)) or bool(report.get("is_failure", false)): return result
+	if claimed_runs.has(run_id):
+		result.duplicate = true
+		return result
+	var previous_ranks := tree_ranks.duplicate()
+	var previous_mastery := nightmare_mastery
+	var amount: int = CLEAR_REWARDS[mode]
+	if mode == 3:
+		nightmare_mastery = true
+		tree_ranks = sanitize_tree({}, true)
+	inspiration += amount
+	claimed_runs[run_id] = mode
+	if not save():
+		inspiration -= amount
+		tree_ranks = previous_ranks
+		nightmare_mastery = previous_mastery
+		claimed_runs.erase(run_id)
+		result.save_error = true
+		return result
+	result.amount = amount
+	result.mastery = mode == 3
+	return result
 
 
 func _find_talent(id: String) -> int:
