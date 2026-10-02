@@ -87,6 +87,13 @@ func _ready() -> void:
 	check(game.card_infos.size() > 0, "Starting a run must deal cards")
 	check(is_equal_approx(game.wetland.camera_zoom_factor, game.wetland.GAME_CAMERA_ZOOM), "Game camera zoom must settle at its closer scale")
 	check(not get_viewport().get_visible_rect().intersects(creeper_screen_rect()), "Entire Creeper must be beyond the gameplay viewport")
+	await RenderingServer.frame_post_draw
+	var terrain_frame: Image = game.wetland.terrain_viewport.get_texture().get_image()
+	# These mapped-water points used to be covered by sand from the added river banks.
+	for junction in [Vector2(0.4184458, 0.1112966), Vector2(0.326131, 0.4793997), Vector2(0.3412264, 0.4328778)]:
+		var pixel: Vector2 = game.wetland.map_camera.unproject_position(game.wetland._ground_position(junction) + Vector3(0, 0.01, 0)).round()
+		var color := terrain_frame.get_pixel(int(pixel.x), int(pixel.y))
+		check(color.b > color.g and color.g > color.r, "River/lake junction must render water blue instead of a sand divider")
 	var wildlife: Control = game.wetland.get_node("Wildlife")
 	var habitat := Vector2(0.4, 0.6)
 	var screen_anchor: Vector2 = wildlife.get_transform() * game.wetland._wildlife_point(habitat)
@@ -181,6 +188,12 @@ func _ready() -> void:
 	await capture("07-pause")
 	game._on_pause_settings()
 	await settle(0.3)
+	game.pause_score_speed_slider.value = 300.0
+	check(is_equal_approx(game.score_speed, 3.0) and is_equal_approx(game.score_speed_slider.value, 300.0), "Both settings panels must support and synchronize 300% settlement speed")
+	game.score_speed = 1.0
+	game._load_audio_settings()
+	game._sync_score_speed_ui()
+	check(is_equal_approx(game.score_speed, 3.0), "300% settlement speed must survive settings reload")
 	await capture("08-settings")
 	game._on_pause_settings_back()
 	game._resume_game()
@@ -188,7 +201,6 @@ func _ready() -> void:
 	game._set_play_tier("basic", false)
 	game._toggle_card(game.card_infos[0].panel)
 	var turn_before: int = GameState.turn
-	game.score_speed = 1.5
 	game._finish_turn()
 	await settle(1.0)
 	await capture("09-scoring")

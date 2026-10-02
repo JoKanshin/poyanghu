@@ -86,6 +86,7 @@ var creeper_mesh: MeshInstance3D
 var camera_zoom_factor := GAME_CAMERA_ZOOM
 var camera_tween: Tween
 var water_material: ShaderMaterial
+var river_bank_material: ShaderMaterial
 var reduced_motion := false
 var terrain_image: Image
 var visual_rng := RandomNumberGenerator.new()
@@ -194,6 +195,7 @@ func _build_terrain_viewport() -> void:
 	material.albedo_texture = LANDSCAPE
 	ground.material_override = material
 	world.add_child(ground)
+	river_bank_material = _make_river_bank_material()
 	_build_river_mesh(world, yangtze_route, 0.017)
 	_build_river_mesh(world, gan_route, 0.010)
 	map_camera = Camera3D.new()
@@ -537,6 +539,33 @@ func _in_river_corridor(uv: Vector2, radius: float) -> bool:
 			if uv.distance_squared_to(closest) < radius * radius: return true
 	return false
 
+func _make_river_bank_material() -> ShaderMaterial:
+	var shader := Shader.new()
+	shader.code = """shader_type spatial;
+render_mode unshaded, cull_disabled;
+uniform sampler2D terrain_texture : source_color, filter_nearest, repeat_disable;
+uniform float ground_size = 100.0;
+uniform vec4 bank_color : source_color;
+varying vec2 terrain_uv;
+void vertex() {
+ terrain_uv = VERTEX.xz / ground_size + vec2(0.5);
+}
+void fragment() {
+ vec3 color = bank_color.rgb;
+ if (all(greaterThanEqual(terrain_uv, vec2(0.0))) && all(lessThanEqual(terrain_uv, vec2(1.0)))) {
+  vec3 underlying = texture(terrain_texture, terrain_uv).rgb;
+  // River banks crossing the lake or another mapped channel remain water.
+  if (underlying.b > underlying.g && underlying.g > underlying.r) color = underlying;
+ }
+ ALBEDO = color;
+}"""
+	var material := ShaderMaterial.new()
+	material.shader = shader
+	material.set_shader_parameter("terrain_texture", LANDSCAPE)
+	material.set_shader_parameter("ground_size", GROUND_SIZE)
+	material.set_shader_parameter("bank_color", Color("d8c68d"))
+	return material
+
 func _build_river_mesh(parent: Node3D, route: Array[Vector2], half_width: float) -> void:
 	# Individual ground triangles handle tight river bends without intersecting
 	# canvas polygons. Banks, shallows and water share the actual 3D camera.
@@ -563,7 +592,7 @@ func _build_river_mesh(parent: Node3D, route: Array[Vector2], half_width: float)
 		material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 		material.cull_mode = BaseMaterial3D.CULL_DISABLED
 		material.albedo_color = [Color("d8c68d"), Color("63afcb"), Color("176783")][band]
-		mesh.material_override = material
+		mesh.material_override = river_bank_material if band == 0 else material
 		mesh.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		parent.add_child(mesh)
 

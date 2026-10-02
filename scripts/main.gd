@@ -175,7 +175,7 @@ var bgm_volume: float = 0.8
 ## 与其每次改代码重导，不如给个滑块。与音量一起存在 user://settings.json。
 var score_speed: float = 1.0
 const SCORE_SPEED_MIN := 0.5
-const SCORE_SPEED_MAX := 1.5
+const SCORE_SPEED_MAX := 3.0
 var audio_volume_slider: HSlider
 var audio_volume_label: Label
 var score_speed_slider: HSlider
