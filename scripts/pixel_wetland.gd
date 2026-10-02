@@ -17,7 +17,14 @@ const HOUSE_ART := [
 ]
 const SPRITES := preload("res://assets/art/wetland-sprites.png")
 const BIRDS := preload("res://assets/art/wetland-birds.png")
-const BIRD_ACTIONS := preload("res://assets/art/bird-actions.png")
+const BIRD_ACTIONS := [
+	preload("res://assets/art/bird-baihe-v2.png"),
+	preload("res://assets/art/bird-dongfangbaihuan-v2.png"),
+	preload("res://assets/art/bird-xiaotiane-v2.png"),
+	preload("res://assets/art/bird-baizhenhe-v2.png"),
+	preload("res://assets/art/bird-yanlei-v2.png"),
+]
+const BIRD_ATLAS_GRID := Vector2(4, 4)
 const FLOATING_ISLAND := preload("res://assets/art/floating-island.png")
 const SHORE_TREE := preload("res://assets/art/shore-tree.png")
 const SPECIES_ART := {"baihe": 0, "dongfangbaihuan": 1, "xiaotiane": 2, "baizhenhe": 3, "yanlei": 4}
@@ -444,6 +451,13 @@ func _process_birds(delta: float) -> void:
 					bird["angle"] = to_target.angle()
 			if bird["timer"] <= 0.0:
 				_choose_bird_state(bird)
+		var animation_state := int(bird.get("animation_state", 0))
+		if animation_state != int(bird["state"]):
+			bird["animation_previous_state"] = animation_state
+			bird["animation_state"] = int(bird["state"])
+			bird["animation_age"] = 0.0
+		else:
+			bird["animation_age"] = float(bird.get("animation_age", 0.0)) + delta
 
 func _px(c: Control, p: Vector2, rect: Rect2, color: Color, scale_px: float = 2.0) -> void:
 	c.draw_rect(Rect2(p + rect.position * scale_px, rect.size * scale_px), color)
@@ -534,26 +548,39 @@ func _draw_marsh(c: Control, p: Vector2, pid: String) -> void:
 func _draw_sprite(c: Control, p: Vector2, index: int, extent: Vector2, tint: Color = Color.WHITE) -> void:
 	c.draw_texture_rect(sprites[index], Rect2((p - extent * Vector2(0.5, 0.85)).round(), extent), false, tint)
 
+func _bird_animation_frame(bird: Dictionary) -> int:
+	var state: int = bird["state"]
+	var age := float(bird.get("animation_age", 0.0))
+	var previous := int(bird.get("animation_previous_state", 0))
+	if not reduced_motion and age < 0.18:
+		if state == 3 or state == 5: return 14 # Takeoff before wingbeat loop.
+		if previous == 3 or previous == 5: return 15 # Feet-down landing.
+	var tick := int(age * 7.0 + float(bird.get("slot", 0))) if not reduced_motion else 0
+	match state:
+		1: return 6 + tick % 3 # Bend, peck, lift.
+		2: return 2 + tick % 4 # Four-step walking loop.
+		3, 5: return 9 + tick % 4 # Four-phase wingbeat.
+		4: return 13 # Folded wings while resting.
+	return int(age * 2.0) % 2 if not reduced_motion else 0
+
+func _bird_frame_region(species: int, frame: int) -> Rect2:
+	var tile := Vector2(BIRD_ACTIONS[species].get_size()) / BIRD_ATLAS_GRID
+	return Rect2(Vector2(frame % 4, floori(float(frame) / 4.0)) * tile, tile)
+
 func _draw_bird_actor(c: Control, bird: Dictionary) -> void:
 	var sprite_index: int = SPECIES_ART.get(str(bird["sid"]), 0)
 	var state: int = bird["state"]
 	var p := _point(bird["pos"])
-	var frame := 0
-	var tick := int(elapsed * 7.0 + float(bird["slot"]))
-	match state:
-		1: frame = 3 + tick % 2 # Peck and lift the head.
-		2: frame = 1 + tick % 2 # Alternate feet while walking.
-		3, 5: frame = 5 + tick % 3 # Full wingbeat in flight.
-		4: frame = 8 # Folded wings while perched.
+	var frame := _bird_animation_frame(bird)
 	if state == 3 or state == 5:
 		p.y -= 6.0 + round(sin(elapsed * 13.0) * 2.0)
 	elif state == 4:
 		p.y -= 5.0 + round(sin(elapsed * 4.0) * 1.0)
-	var extent := Vector2(34, 34) if sprite_index != 2 else Vector2(39, 39)
+	var extent := Vector2(46, 46) if sprite_index != 2 else Vector2(50, 50)
 	if state == 3 or state == 5:
 		extent *= 1.2
 	# Billboard sprites remain upright: only mirror horizontally, never rotate.
 	# Anchor the feet to the habitat point instead of the middle of the body.
 	c.draw_set_transform(p, 0.0, Vector2(_bird_facing(bird), 1.0))
-	c.draw_texture_rect_region(BIRD_ACTIONS, Rect2(-extent * Vector2(0.5, 0.875), extent), Rect2(frame * 32, sprite_index * 32, 32, 32))
+	c.draw_texture_rect_region(BIRD_ACTIONS[sprite_index], Rect2(-extent * Vector2(0.5, 0.875), extent), _bird_frame_region(sprite_index, frame))
 	c.draw_set_transform(Vector2.ZERO)

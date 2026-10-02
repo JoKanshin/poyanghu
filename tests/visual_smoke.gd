@@ -40,6 +40,18 @@ func _ready() -> void:
 	await close_popups()
 	await settle(1.0)
 	check(game.card_infos.size() > 0, "Starting a run must deal cards")
+	for species in 5:
+		var bird_sheet: Texture2D = game.wetland.BIRD_ACTIONS[species]
+		check(bird_sheet.get_width() >= 128 and bird_sheet.get_height() >= 128, "Bird atlas must contain all sixteen poses")
+		for frame in 16:
+			var region: Rect2 = game.wetland._bird_frame_region(species, frame)
+			check(Rect2(Vector2.ZERO, bird_sheet.get_size()).encloses(region), "Bird animation frame exceeds atlas")
+	for state in [0, 1, 2, 3, 4, 5]:
+		for age in [0.0, 0.2, 0.5, 1.0]:
+			var frame: int = game.wetland._bird_animation_frame({"state": state, "animation_age": age, "slot": 0})
+			check(frame >= 0 and frame < 16, "Animation state must select a valid bird pose")
+	check(game.wetland._bird_animation_frame({"state": 3, "animation_age": 0.0}) == 14, "Flight must begin with takeoff")
+	check(game.wetland._bird_animation_frame({"state": 0, "animation_previous_state": 5, "animation_age": 0.0}) == 15, "Return flight must finish with landing")
 	var camera: Camera3D = game.wetland.map_camera
 	check(camera.projection == Camera3D.PROJECTION_ORTHOGONAL, "Map must use a real orthographic 3D camera")
 	check(is_equal_approx(camera.position.x, camera.position.z), "Camera azimuth must be 45 degrees")

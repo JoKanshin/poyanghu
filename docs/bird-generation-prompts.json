@@ -1,119 +1,54 @@
 {
-  "generator": "Built-in image_gen (original zip art); geographic raster export (current terrain)",
-  "date": "2026-09-30",
-  "assets": [
+  "generator": "built-in imagegen",
+  "style_reference": "https://smolware.itch.io/pixel-geese-anim-spritesheet",
+  "copied_third_party_assets": false,
+  "atlas_grid": [
+    4,
+    4
+  ],
+  "frames": [
+    "idle1",
+    "idle2",
+    "walk1",
+    "walk2",
+    "walk3",
+    "walk4",
+    "peck_lower",
+    "peck_down",
+    "peck_lift",
+    "fly_up",
+    "fly_spread",
+    "fly_down",
+    "fly_recover",
+    "rest",
+    "takeoff",
+    "landing"
+  ],
+  "species": [
     {
-      "path": "assets/art/poyang-terrain-base.png",
-      "generator": "tools/build_poyang_terrain.py",
-      "source": "docs/geography/poyang-hydrography.geojson",
-      "source_description": "PML / ESA CCI maximum-water-extent Poyang shoreline; OpenStreetMap Yangtze and Gan distributary centerlines",
-      "size": [
-        1024,
-        1024
-      ],
-      "north_up": true,
-      "palette": [
-        "#176783",
-        "#63AFCB",
-        "#D8C68D",
-        "#829666"
-      ],
-      "terrain_only": true,
-      "license": "Lake geometry and derived map: GPL-3.0-only; OSM waterways: ODbL-1.0 with contributor attribution",
-      "request": "Actual Poyang Lake outline with Yangtze and Gan River at their geographic positions; high-water style. Flat 2D overhead pixel terrain only, no props, characters or text.",
-      "notes": "A published maximum-water-extent reference, not a single dated flood survey; shallow/deep bands and river widths are artistic gameplay layers, not measured bathymetry."
-    },
-    {
-      "path": "assets/art/poyang-wetland.png",
-      "prompt": "Use case: stylized-concept. Asset type: original production background for a Chinese Poyang Lake ecology card game. Create a beautiful meticulously crafted 16-bit pixel art wetland world, top-down oblique perspective like cozy farming RPG landscape art. Wide 1536x1024 composition. A large irregular turquoise lake occupies the middle 65 percent with lots of calm open water, cream sand banks, winding narrow inlets, small reed islands, lily pads, rich layered grass in sage and olive, detailed leafy trees framing upper corners, tiny Jiangxi whitewashed gray tile roof cottages on upper right shore, a wooden jetty, winding dirt trails. Distant blue mountain silhouette only at very top. Warm afternoon sun, beautiful restrained jade, teal, straw gold palette. Crisp square pixel clusters, no smooth painted gradients, no 3D render. Main lake open center intended for live game wildlife sprites. The lower 20 percent should be dark grassy foreground framing the lake, behind cards. No UI, no text, no labels, no border, no logos, no watermarks. Original scenery, do not copy any existing game map."
-    },
-    {
-      "path": "assets/art/conservation-cards.png",
-      "prompt": "Use case: stylized-concept. Asset type: production illustration atlas for an original Poyang Lake ecology card game. A perfectly regular 3 columns by 2 rows grid, six equally sized square art panels, edge to edge no gutters, overall 1536x1024. Each tile a beautifully composed crisp 16-bit pixel art miniature in a coordinated jade teal cream golden ochre palette, dark teal outlines, warm light, rich square pixel clusters. Top left: elegant white Siberian crane with red face and black wing tips among reeds in shallow teal water. Top center: friendly small fishing village with white walls slate roofs orange lanterns and a wooden boat. Top right: ranger's open field notebook with magnifying glass and green leaf on a wooden desk. Bottom left: lotus leaves and pink lotus flowers growing above turquoise lake with golden fish visible. Bottom center: two friendly young wetland volunteers wearing straw hats planting reeds together on shore. Bottom right: wooden observation tower, binoculars and distant white birds above the lake. Keep subject recognizable at tiny card size. Each panel is its own self-contained landscape illustration with a clearly centered subject, no text, no lettering, no UI, no border, no logo. Original art."
-    },
-    {
-      "path": "assets/art/wetland-sprites.png",
-      "transparent_background": true,
-      "prompt": "Use case: stylized-concept. Asset type: transparent sprite atlas for an original cozy 16-bit Chinese wetland ecology game. Exactly eight individual sprites laid out in a precise 4 columns x 2 rows grid on a fully transparent canvas 1536x1024. Each grid cell 384x512, one sprite centered in the cell with generous transparent padding (sprite fits central 70% of cell). All sprites top-down three-quarter farming RPG perspective, crisp low resolution square pixel clusters, limited jade teal straw cream palette, NO ground background or scenery. Row 1 left to right: white Siberian crane standing with slim long neck red face black wing tips and thin reddish legs; gray wild goose standing with white forehead orange beak; green headed wild duck; golden freshwater fish seen from overhead. Row 2 left to right: clump of 10 golden reed stalks with green leaves; small rectangular wooden floating ecological raft with lush green plants on top; single small white Jiangxi village cottage with dark gray tiled sloped roof and warm yellow window; small wooden fishing boat with straw canopy. High craft pixel sprites not photorealistic, no antialiased painterly edges, exact regular 4x2 atlas, transparent background, no text no labels no grids no frames no watermark. Original designs."
-    },
-    {
-      "path": "assets/art/wetland-birds.png",
-      "transparent_background": true,
-      "prompt": "Use case: scientific-educational. Asset type: transparent bird sprite atlas for a Poyang Lake ecology game. Canvas 1536x1024 with EXACT 3 columns x 2 rows, each tile exactly 512x512. Six isolated sprites centered within their own tile with 60 pixels padding; no grid lines or text. Crisp handcrafted 16-bit pixel art, side/three-quarter game view, consistent light, jade and warm cream colors, no backgrounds, preserve FULLY TRANSPARENT alpha. TOP LEFT: Siberian crane, white body black folded flight feathers red face, long red legs. TOP MIDDLE: Oriental stork, white body black folded wings, long straight black bill, long red legs, no red cap. TOP RIGHT: small white tundra swan, curved neck, short black bill with yellow base, floating pose. BOTTOM LEFT: white-naped crane, mostly gray body, white stripe down back of neck, red skin around eyes, long pink legs. BOTTOM MIDDLE: greater white-fronted goose, gray-brown body, white forehead, orange bill and feet, standing. BOTTOM RIGHT: a cluster of round green lotus leaves with one pink lotus flower, seen above. Sprite silhouettes must be biologically recognizable for school education. No water surface, no floor, no shadows outside sprites, no matte, no logos, no lettering. Original game sprites."
-    },
-    {
-      "path": "assets/art/bird-actions.png",
-      "generator": "tools/build_ecology_sprites.py",
-      "size": [
-        288,
-        160
-      ],
-      "layout": "Five species rows by nine 32x32 frames: stand, two walk, two peck, three fly, perch",
-      "original_pixel_art": true
-    },
-    {
-      "path": "assets/art/floating-island.png",
-      "generator": "tools/build_ecology_sprites.py",
-      "size": [
-        48,
-        48
-      ],
-      "original_pixel_art": true
-    },
-    {
-      "path": "assets/art/shore-tree.png",
-      "generator": "tools/build_ecology_sprites.py",
-      "size": [
-        40,
-        44
-      ],
-      "original_pixel_art": true
-    },
-    {
+      "id": "baihe",
       "path": "assets/art/bird-baihe-v2.png",
-      "generator": "built-in imagegen",
-      "transparent_background": true,
-      "layout": "4x4, sixteen animation frames",
       "prompt": "ONE transparent pixel animation sprite sheet of ONE bird species only: Siberian crane: elegant long thin neck, slim white body, black wing tips, RED bare face, long reddish pale pointed bill, long pink-red legs. No black neck or red crown. Original minimalist charming pixel game art inspired by simple cute duck sprites. IMPORTANT style: tiny 32x32 logical pixels enlarged nearest-neighbor, only 6 flat colors, simple clean silhouette, NO realistic feather details, NO dithering or gradients, NO antialiasing. Canvas square 1024x1024. EXACTLY FOUR columns and FOUR rows, 16 EQUAL 256x256 cells. Each cell holds exactly one entire bird facing RIGHT, feet always down. Maintain same bird design and proportions in ALL 16 cells, particularly WHITE body, RED face. Each bird about 150x180 pixels high when standing, with comfortable transparent padding in its own cell. FEET BASELINE exactly 224 pixels down in every cell, head stays well within cell. No sprite may touch the cell boundaries. No text, labels, lines, shadows, background or grid. Strict fully transparent background. Row 1: IDLE normal, IDLE breathing, WALK left foot forward, WALK legs crossing. Row 2: WALK right foot forward, WALK legs crossing other phase, PECK lowering head, PECK touching ground. Row 3: PECK raising head, FLY wings raised fully, FLY wings horizontal, FLY wings down. Row 4: FLY wings recovering, REST folded wings, TAKEOFF wings raised feet pushing, LAND wings spread braking feet DOWN. Flight body horizontal with neck extending forward, actual wings instead of circles. Standing head on upper right, feet on lower portion. Keep feet baseline stable. Frame consistency is critical, this is a functional animation asset, not an illustration board."
     },
     {
+      "id": "dongfangbaihuan",
       "path": "assets/art/bird-dongfangbaihuan-v2.png",
-      "generator": "built-in imagegen",
-      "transparent_background": true,
-      "layout": "4x4, sixteen animation frames",
       "prompt": "ONE transparent pixel animation sprite sheet of ONE bird species only: Oriental stork: white body, broad folded BLACK wings, long thick BLACK bill, white head, long RED legs. NO yellow bill, no red face or crown. Original minimalist charming pixel game art inspired by simple cute duck sprites. IMPORTANT style: tiny 32x32 logical pixels enlarged nearest-neighbor, only 6 flat colors, simple clean silhouette, NO realistic feather details, NO dithering or gradients, NO antialiasing. Canvas square 1024x1024. EXACTLY FOUR columns and FOUR rows, 16 EQUAL 256x256 cells. Each cell holds exactly one entire bird facing RIGHT, feet always down. Maintain same bird design and proportions in ALL 16 cells, particularly WHITE head, BLACK bill. Each bird about 150x180 pixels high when standing, with comfortable transparent padding in its own cell. FEET BASELINE exactly 224 pixels down in every cell, head stays well within cell. No sprite may touch the cell boundaries. No text, labels, lines, shadows, background or grid. Strict fully transparent background. Row 1: IDLE normal, IDLE breathing, WALK left foot forward, WALK legs crossing. Row 2: WALK right foot forward, WALK legs crossing other phase, PECK lowering head, PECK touching ground. Row 3: PECK raising head, FLY wings raised fully, FLY wings horizontal, FLY wings down. Row 4: FLY wings recovering, REST folded wings, TAKEOFF wings raised feet pushing, LAND wings spread braking feet DOWN. Flight body horizontal with neck extending forward, actual wings instead of circles. Standing head on upper right, feet on lower portion. Keep feet baseline stable. Frame consistency is critical, this is a functional animation asset, not an illustration board."
     },
     {
+      "id": "xiaotiane",
       "path": "assets/art/bird-xiaotiane-v2.png",
-      "generator": "built-in imagegen",
-      "transparent_background": true,
-      "layout": "4x4, sixteen animation frames",
       "prompt": "ONE transparent pixel animation sprite sheet of ONE bird species only: Bewick's tundra swan: plump white body, S curved white neck, small BLACK bill with YELLOW BASE PATCH, short BLACK feet. White wing feathers in EVERY flight frame. No red face, no black wings, no long red legs. Original minimalist charming pixel game art inspired by simple cute duck sprites. IMPORTANT style: tiny 32x32 logical pixels enlarged nearest-neighbor, only 6 flat colors, simple clean silhouette, NO realistic feather details, NO dithering or gradients, NO antialiasing. Canvas square 1024x1024. EXACTLY FOUR columns and FOUR rows, 16 EQUAL 256x256 cells. Each cell holds exactly one entire bird facing RIGHT, feet always down. Maintain same bird design and proportions in ALL 16 cells, particularly WHITE wings, BLACK feet. Each bird about 150x180 pixels high when standing, with comfortable transparent padding in its own cell. FEET BASELINE exactly 224 pixels down in every cell, head stays well within cell. No sprite may touch the cell boundaries. No text, labels, lines, shadows, background or grid. Strict fully transparent background. Row 1: IDLE normal, IDLE breathing, WALK left foot forward, WALK legs crossing. Row 2: WALK right foot forward, WALK legs crossing other phase, PECK lowering head, PECK touching ground. Row 3: PECK raising head, FLY wings raised fully, FLY wings horizontal, FLY wings down. Row 4: FLY wings recovering, REST folded wings, TAKEOFF wings raised feet pushing, LAND wings spread braking feet DOWN. Flight body horizontal with neck extending forward, actual wings instead of circles. Standing head on upper right, feet on lower portion. Keep feet baseline stable. Frame consistency is critical, this is a functional animation asset, not an illustration board."
     },
     {
+      "id": "baizhenhe",
       "path": "assets/art/bird-baizhenhe-v2.png",
-      "generator": "built-in imagegen",
-      "transparent_background": true,
-      "layout": "4x4, sixteen animation frames",
       "prompt": "ONE transparent pixel animation sprite sheet of ONE bird species only: White-naped crane: GRAY body and silvery gray wings, long gray neck with a WHITE stripe on rear of neck, red cheek around eye, dark pointed bill, long PINK legs. Every frame has GRAY body and WHITE rear-neck stripe. Never a white crane. Original minimalist charming pixel game art inspired by simple cute duck sprites. IMPORTANT style: tiny 32x32 logical pixels enlarged nearest-neighbor, only 6 flat colors, simple clean silhouette, NO realistic feather details, NO dithering or gradients, NO antialiasing. Canvas square 1024x1024. EXACTLY FOUR columns and FOUR rows, 16 EQUAL 256x256 cells. Each cell holds exactly one entire bird facing RIGHT, feet always down. Maintain same bird design and proportions in ALL 16 cells, particularly GRAY body, WHITE neck stripe. Each bird about 150x180 pixels high when standing, with comfortable transparent padding in its own cell. FEET BASELINE exactly 224 pixels down in every cell, head stays well within cell. No sprite may touch the cell boundaries. No text, labels, lines, shadows, background or grid. Strict fully transparent background. Row 1: IDLE normal, IDLE breathing, WALK left foot forward, WALK legs crossing. Row 2: WALK right foot forward, WALK legs crossing other phase, PECK lowering head, PECK touching ground. Row 3: PECK raising head, FLY wings raised fully, FLY wings horizontal, FLY wings down. Row 4: FLY wings recovering, REST folded wings, TAKEOFF wings raised feet pushing, LAND wings spread braking feet DOWN. Flight body horizontal with neck extending forward, actual wings instead of circles. Standing head on upper right, feet on lower portion. Keep feet baseline stable. Frame consistency is critical, this is a functional animation asset, not an illustration board."
     },
     {
+      "id": "yanlei",
       "path": "assets/art/bird-yanlei-v2.png",
-      "generator": "built-in imagegen",
-      "transparent_background": true,
-      "layout": "4x4, sixteen animation frames",
       "prompt": "ONE transparent pixel animation sprite sheet of ONE bird species only: Greater white-fronted goose: compact gray-brown body, short stout brown neck, WHITE forehead right above ORANGE-PINK bill, orange webbed feet, black belly bars. Wings brown-gray, pale belly. Not a swan or crane. Original minimalist charming pixel game art inspired by simple cute duck sprites. IMPORTANT style: tiny 32x32 logical pixels enlarged nearest-neighbor, only 6 flat colors, simple clean silhouette, NO realistic feather details, NO dithering or gradients, NO antialiasing. Canvas square 1024x1024. EXACTLY FOUR columns and FOUR rows, 16 EQUAL 256x256 cells. Each cell holds exactly one entire bird facing RIGHT, feet always down. Maintain same bird design and proportions in ALL 16 cells, particularly BROWN body, WHITE forehead. Each bird about 150x180 pixels high when standing, with comfortable transparent padding in its own cell. FEET BASELINE exactly 224 pixels down in every cell, head stays well within cell. No sprite may touch the cell boundaries. No text, labels, lines, shadows, background or grid. Strict fully transparent background. Row 1: IDLE normal, IDLE breathing, WALK left foot forward, WALK legs crossing. Row 2: WALK right foot forward, WALK legs crossing other phase, PECK lowering head, PECK touching ground. Row 3: PECK raising head, FLY wings raised fully, FLY wings horizontal, FLY wings down. Row 4: FLY wings recovering, REST folded wings, TAKEOFF wings raised feet pushing, LAND wings spread braking feet DOWN. Flight body horizontal with neck extending forward, actual wings instead of circles. Standing head on upper right, feet on lower portion. Keep feet baseline stable. Frame consistency is critical, this is a functional animation asset, not an illustration board."
     }
-  ],
-  "references": [
-    "https://www.playbalatro.com/press-kit",
-    "https://www.stardewvalley.net/media/",
-    "https://smolware.itch.io/pixel-geese-anim-spritesheet",
-    "https://savingcranes.org/species/siberian-crane/",
-    "https://savingcranes.org/species/white-naped-crane/",
-    "https://ebird.org/species/oristo1",
-    "https://www.allaboutbirds.org/guide/Tundra_Swan/id",
-    "https://ebird.org/species/gwfgoo"
-  ],
-  "notes": "Original generated art. Reference games are used for visual direction only; their assets are not included. guardian-card-back.svg is original code-native UI art. Current terrain uses published geographic coordinates instead of generated lake geometry; see TERRAIN_MAP.md for sources and license."
+  ]
 }
