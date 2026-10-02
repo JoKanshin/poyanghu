@@ -8,6 +8,7 @@ const VIEW_AZIMUTH := PI / 4.0
 const VIEW_PITCH := PI / 4.0
 const GROUND_SIZE := 100.0
 const BIRD_DISPLAY_SCALE := 0.65
+const RiverRoutes := preload("res://scripts/wetland_rivers.gd")
 const CREEPER_ART := preload("res://assets/creeper.png")
 const CREEPER_ANCHOR := Vector2(0.22, 0.27)
 const HOUSE_ART := [
@@ -93,6 +94,10 @@ var bird_agents: Array[Dictionary] = []
 var house_sites: Array[Vector2] = []
 var house_progress: Array[float] = []
 var house_target_count := 0
+var yangtze_route: Array[Vector2] = []
+var gan_route: Array[Vector2] = []
+var scenery_props: Array[Dictionary] = []
+var prop_textures: Array[ImageTexture] = []
 
 func _ready() -> void:
 	for i in 8:
@@ -110,7 +115,9 @@ func _ready() -> void:
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 	texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
 	terrain_image = LANDSCAPE.get_image()
+	_build_river_routes()
 	_make_house_sites()
+	_build_meadow_scenery()
 	easter_rng.randomize()
 	var land_margin := ColorRect.new()
 	land_margin.name = "LandMargin"
@@ -185,6 +192,8 @@ func _build_terrain_viewport() -> void:
 	material.albedo_texture = LANDSCAPE
 	ground.material_override = material
 	world.add_child(ground)
+	_build_river_mesh(world, yangtze_route, 0.017)
+	_build_river_mesh(world, gan_route, 0.010)
 	map_camera = Camera3D.new()
 	map_camera.name = "WetlandCamera"
 	map_camera.projection = Camera3D.PROJECTION_ORTHOGONAL
@@ -233,7 +242,7 @@ func _layout_map() -> void:
 		wildlife.position = size * 0.5 * (1.0 - 1.0 / camera_zoom_factor)
 		wildlife.queue_redraw()
 
-func set_menu_camera(far: bool, menu_zoom: float = 1.7) -> void:
+func set_menu_camera(far: bool, menu_zoom: float = 1.3) -> void:
 	if camera_tween and camera_tween.is_valid(): camera_tween.kill()
 	if far: _set_camera_zoom(1.0)
 	camera_tween = create_tween()
@@ -303,6 +312,7 @@ func _terrain_color(uv: Vector2) -> Color:
 	return terrain_image.get_pixel(x, y)
 
 func _is_water(uv: Vector2) -> bool:
+	if _in_river_corridor(uv, 0.012): return true
 	var color := _terrain_color(uv)
 	return color.b > color.g and color.g > color.r
 
@@ -311,6 +321,7 @@ func _is_shore(uv: Vector2) -> bool:
 	return color.r > 0.7 and color.r > color.g and color.g > color.b
 
 func _is_land(uv: Vector2) -> bool:
+	if _in_river_corridor(uv, 0.025): return false
 	var color := _terrain_color(uv)
 	return color.g > color.r and color.r > color.b
 
@@ -494,7 +505,130 @@ func _process_birds(delta: float) -> void:
 func _px(c: Control, p: Vector2, rect: Rect2, color: Color, scale_px: float = 2.0) -> void:
 	c.draw_rect(Rect2(p + rect.position * scale_px, rect.size * scale_px), color)
 
+func _build_river_routes() -> void:
+	yangtze_route.assign(RiverRoutes.YANGTZE)
+	gan_route.assign(RiverRoutes.GAN)
+	# Carry the boundary tangents well past every supported window's view.
+	var west := (yangtze_route[0] - yangtze_route[4]).normalized()
+	var east := (yangtze_route[-1] - yangtze_route[-4]).normalized()
+	yangtze_route.push_front(yangtze_route[0] + west * 2.5)
+	yangtze_route.append(yangtze_route[-1] + east * 2.5)
+	var south := (gan_route[0] - gan_route[5]).normalized()
+	gan_route.push_front(gan_route[0] + south * 2.5)
+
+func _in_river_corridor(uv: Vector2, radius: float) -> bool:
+	for route in [yangtze_route, gan_route]:
+		for i in range(1, route.size()):
+			var closest := Geometry2D.get_closest_point_to_segment(uv, route[i - 1], route[i])
+			if uv.distance_squared_to(closest) < radius * radius: return true
+	return false
+
+func _build_river_mesh(parent: Node3D, route: Array[Vector2], half_width: float) -> void:
+	# Individual ground triangles handle tight river bends without intersecting
+	# canvas polygons. Banks, shallows and water share the actual 3D camera.
+	for band in 3:
+		var width: float = half_width + [0.007, 0.0, -0.004][band]
+		var surface := SurfaceTool.new()
+		surface.begin(Mesh.PRIMITIVE_TRIANGLES)
+		var lift := Vector3(0, 0.01 + band * 0.006, 0)
+		for i in range(1, route.size()):
+			var direction := (route[i] - route[i - 1]).normalized()
+			var normal := Vector2(-direction.y, direction.x) * width
+			var corners := [route[i - 1] - normal, route[i - 1] + normal, route[i] + normal, route[i] - normal]
+			for corner in [0, 1, 2, 0, 2, 3]:
+				surface.add_vertex(_ground_position(corners[corner]) + lift)
+		# Round joins seal any gaps between neighboring segment banks.
+		for uv in route:
+			for k in 12:
+				surface.add_vertex(_ground_position(uv) + lift)
+				surface.add_vertex(_ground_position(uv + Vector2.from_angle(TAU * float(k) / 12.0) * width) + lift)
+				surface.add_vertex(_ground_position(uv + Vector2.from_angle(TAU * float(k + 1) / 12.0) * width) + lift)
+		var mesh := MeshInstance3D.new()
+		mesh.mesh = surface.commit()
+		var material := StandardMaterial3D.new()
+		material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		material.cull_mode = BaseMaterial3D.CULL_DISABLED
+		material.albedo_color = [Color("d8c68d"), Color("63afcb"), Color("176783")][band]
+		mesh.material_override = material
+		mesh.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		parent.add_child(mesh)
+
+func _river_sample(route: Array[Vector2], phase: float) -> Dictionary:
+	var total := 0.0
+	for i in range(1, route.size()): total += route[i - 1].distance_to(route[i])
+	var remaining := fposmod(phase, 1.0) * total
+	for i in range(1, route.size()):
+		var distance := route[i - 1].distance_to(route[i])
+		if remaining <= distance:
+			return {"pos": route[i - 1].lerp(route[i], remaining / maxf(distance, 0.00001)),
+				"direction": (route[i] - route[i - 1]).normalized()}
+		remaining -= distance
+	return {"pos": route[-1], "direction": Vector2.RIGHT}
+
+func _draw_yangtze_boats(c: Control) -> void:
+	for i in 10:
+		var sample := _river_sample(yangtze_route, elapsed * 0.007 + float(i) / 10.0)
+		var uv: Vector2 = sample["pos"]
+		var p := _wildlife_point(uv)
+		var direction: Vector2 = (_wildlife_point(uv + sample["direction"] * 0.015) - p).normalized()
+		c.draw_set_transform(p, direction.angle())
+		# Small original pixel launches, with a hull, cabin and trailing wake.
+		c.draw_line(Vector2(-24, -3), Vector2(-14, -2), Color("97d3cc"), 1.0)
+		c.draw_line(Vector2(-24, 3), Vector2(-14, 2), Color("97d3cc"), 1.0)
+		c.draw_colored_polygon(PackedVector2Array([Vector2(-13,-4), Vector2(8,-4), Vector2(14,0), Vector2(8,4), Vector2(-13,4)]), Color("694d36"))
+		c.draw_rect(Rect2(-10, -3, 17, 6), Color("c79959"))
+		c.draw_rect(Rect2(-6, -3, 8, 6), Color("f0dcaa"))
+		c.draw_rect(Rect2(-4, -2, 4, 4), Color("4c7f83"))
+		c.draw_set_transform(Vector2.ZERO)
+
+func _build_meadow_scenery() -> void:
+	# Original code-drawn pixel props: grass, flowers, shrubs, stones and pines.
+	var palette := {"d": Color("456244"), "g": Color("668650"), "l": Color("9bb364"),
+		"t": Color("73593e"), "r": Color("727b73"), "s": Color("a6ad97"),
+		"w": Color("d8d6b5"), "f": Color("e2bc73"), "p": Color("d79196")}
+	var patterns := [
+		["........", "..l.....", "..g..l..", ".lg..g..", "..g.lg..", "..gdgd..", "...dd..."],
+		["..p.....", ".pfp..w.", "..g..wfw", "..g...g.", ".lg..lg.", "..gd.g..", "...dd..."],
+		["....ll....", "..llggll..", ".lggggggl.", "lgglgggggl", "gggggldggg", ".dggggggd.", "..dddddd.."],
+		["..........", "...ssss...", "..swwsss..", ".sssssrsr.", ".srrsrrrr.", "..rrrrrr..", "...dddd..."],
+		[".....l.....", "....lgl....", "....ggg....", "...lgggl...", "..lgggggl..", "...ggdgg...", "..lgggggl..", ".lgggggggl.", "..gggdggg..", ".lgggggggl.", "ggggdgggdgg", ".ddddddddd.", "....ttt....", "....ttt...."]
+	]
+	for rows in patterns:
+		var image := Image.create(rows[0].length(), rows.size(), false, Image.FORMAT_RGBA8)
+		image.fill(Color.TRANSPARENT)
+		for y in rows.size():
+			for x in rows[y].length():
+				if palette.has(rows[y][x]): image.set_pixel(x, y, palette[rows[y][x]])
+		prop_textures.append(ImageTexture.create_from_image(image))
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 20261002
+	for y in range(-12, 33):
+		for x in range(-12, 33):
+			if rng.randf() > 0.36: continue
+			var uv := Vector2(x, y) * 0.055 + Vector2(rng.randf_range(-0.018, 0.018), rng.randf_range(-0.018, 0.018))
+			if not _is_land(uv) or _in_river_corridor(uv, 0.04) or uv.distance_to(CREEPER_ANCHOR) < 0.15: continue
+			var clear := true
+			for site in house_sites:
+				if uv.distance_to(site) < 0.06: clear = false; break
+			if not clear: continue
+			var roll := rng.randf()
+			var kind := 5 if roll < 0.06 else (4 if roll < 0.15 else (3 if roll < 0.31 else (2 if roll < 0.51 else (1 if roll < 0.68 else 0))))
+			scenery_props.append({"pos": uv, "kind": kind, "scale": rng.randf_range(1.9, 3.0)})
+	scenery_props.sort_custom(func(a: Dictionary, b: Dictionary): return a["pos"].x + a["pos"].y < b["pos"].x + b["pos"].y)
+
+func _draw_meadow_scenery(c: Control) -> void:
+	for prop in scenery_props:
+		if prop["kind"] == 5:
+			_draw_tree(c, _wildlife_point(prop["pos"]), float(prop["scale"]) * 0.55)
+			continue
+		var texture: Texture2D = prop_textures[prop["kind"]]
+		var extent := texture.get_size() * float(prop["scale"])
+		var p := _wildlife_point(prop["pos"])
+		c.draw_texture_rect(texture, Rect2((p - extent * Vector2(0.5, 0.9)).round(), extent.round()), false)
+
 func _draw_wildlife(c: Control) -> void:
+	_draw_meadow_scenery(c)
+	_draw_yangtze_boats(c)
 	# Frame the playable shore lightly; keep the secret Creeper's clearing open.
 	for uv in EDGE_TREE_TARGETS:
 		var clear := uv.distance_to(CREEPER_ANCHOR) > 0.13

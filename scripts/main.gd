@@ -377,7 +377,7 @@ func _ready() -> void:
 
 
 ## 开始页期间镜头拉远的倍率（正交 size 越大 = 视野越广）
-const MENU_CAM_ZOOM := 1.7
+const MENU_CAM_ZOOM := 1.3
 
 
 ## 根据窗口宽高比调整正交相机尺寸：让沙盘占满屏幕主体，不因宽屏被推远
@@ -1999,7 +1999,8 @@ func _build_menu() -> void:
 	var bg := ColorRect.new()
 	bg.color = Color.WHITE
 	var shade := Shader.new()
-	shade.code = "shader_type canvas_item; void fragment(){ float a = mix(0.84, 0.06, smoothstep(0.0, 0.72, UV.x)); COLOR = vec4(0.025, 0.095, 0.105, a); }"
+	bg.name = "MenuShade"
+	shade.code = "shader_type canvas_item; void fragment(){ float a = 0.82 * (1.0 - smoothstep(0.12, 0.40, UV.x)); COLOR = vec4(0.025, 0.095, 0.105, a); }"
 	var shade_mat := ShaderMaterial.new()
 	shade_mat.shader = shade
 	bg.material = shade_mat
