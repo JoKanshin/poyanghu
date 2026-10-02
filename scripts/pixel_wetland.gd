@@ -2,6 +2,8 @@ extends Control
 ## Orthographic 45-degree wetland view, with upright scenery and wildlife.
 ## All decorative placement is deterministic; never consume gameplay RNG.
 const LANDSCAPE := preload("res://assets/art/poyang-terrain-base.png")
+const SHORE_DISTANCE := preload("res://assets/art/lake-shore-distance.png")
+const GROUND_SHADER := preload("res://scripts/wetland_ground.gdshader")
 const LAND_COLOR := Color("829666")
 const MAP_ZOOM := 1.58
 const GAME_CAMERA_ZOOM := 0.9
@@ -86,9 +88,19 @@ var creeper_mesh: MeshInstance3D
 var camera_zoom_factor := GAME_CAMERA_ZOOM
 var camera_tween: Tween
 var water_material: ShaderMaterial
+var ground_material: ShaderMaterial
 var river_bank_material: ShaderMaterial
 var reduced_motion := false
 var terrain_image: Image
+var shore_image: Image
+var displayed_metrics: Dictionary = {}
+var displayed_populations: Dictionary = {}
+var displayed_plants: Dictionary = {}
+var displayed_islands := 0.0
+var transition_from: Dictionary = {}
+var transition_age := 1.0
+var transition_duration := 0.85
+var action_effects: Array[Dictionary] = []
 var visual_rng := RandomNumberGenerator.new()
 var easter_rng := RandomNumberGenerator.new()
 var visual_seed := -1
@@ -118,6 +130,7 @@ func _ready() -> void:
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 	texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
 	terrain_image = LANDSCAPE.get_image()
+	shore_image = SHORE_DISTANCE.get_image()
 	_build_river_routes()
 	_make_house_sites()
 	_build_meadow_scenery()
@@ -189,11 +202,8 @@ func _build_terrain_viewport() -> void:
 	var plane := PlaneMesh.new()
 	plane.size = Vector2.ONE * GROUND_SIZE
 	ground.mesh = plane
-	var material := StandardMaterial3D.new()
-	material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	material.texture_filter = BaseMaterial3D.TEXTURE_FILTER_NEAREST
-	material.albedo_texture = LANDSCAPE
-	ground.material_override = material
+	ground_material = _make_ground_material(false)
+	ground.material_override = ground_material
 	world.add_child(ground)
 	river_bank_material = _make_river_bank_material()
 	_build_river_mesh(world, yangtze_route, 0.017)
@@ -273,24 +283,75 @@ func roll_creeper_visibility() -> void:
 	if creeper_mesh:
 		creeper_mesh.visible = easter_rng.randf() < 0.1
 
-func sync_state() -> void:
-	metrics = GameState.metrics.duplicate()
-	populations = GameState.species_pop.duplicate()
-	plants = GameState.plant_pop.duplicate()
-	islands = GameState.floating_islands
-	settlement = GameState.settlement
-	season = maxi(0, GameState.SEASONS.find(GameState.current_season()))
-	if visual_seed != GameState.run_seed:
+## Read-only snapshots allow the score choreography to replay each card's result.
+func capture_state() -> Dictionary:
+	return {"metrics": GameState.metrics.duplicate(), "populations": GameState.species_pop.duplicate(),
+		"plants": GameState.plant_pop.duplicate(), "islands": GameState.floating_islands,
+		"settlement": GameState.settlement, "season": maxi(0, GameState.SEASONS.find(GameState.current_season())),
+		"seed": GameState.run_seed}
+
+func sync_state(state: Dictionary = {}, animate: bool = true, duration: float = 0.85) -> void:
+	if state.is_empty(): state = capture_state()
+	var new_seed := visual_seed != int(state["seed"])
+	var changed: bool = metrics != state["metrics"] or populations != state["populations"] or plants != state["plants"] or islands != int(state["islands"])
+	metrics = state["metrics"].duplicate()
+	populations = state["populations"].duplicate()
+	plants = state["plants"].duplicate()
+	islands = int(state["islands"])
+	settlement = float(state["settlement"])
+	season = int(state["season"])
+	if new_seed:
 		_reset_scenery()
 	sync_settlement_targets()
+	if new_seed or not animate or reduced_motion or displayed_metrics.is_empty():
+		displayed_metrics = metrics.duplicate()
+		displayed_populations = populations.duplicate()
+		displayed_plants = plants.duplicate()
+		displayed_islands = float(islands)
+		transition_age = duration
+		transition_duration = duration
+	elif changed:
+		transition_from = {"metrics": displayed_metrics.duplicate(), "populations": displayed_populations.duplicate(),
+			"plants": displayed_plants.duplicate(), "islands": displayed_islands}
+		transition_age = 0.0
+		transition_duration = maxf(0.05, duration)
+	_apply_terrain_state()
+	get_node("Wildlife").queue_redraw()
+
+func _lake_offset() -> float:
+	var level := float(displayed_metrics.get("water_level", 50))
+	return (level - 50.0) / 50.0 * (22.0 if level >= 50.0 else 18.0)
+
+func _apply_terrain_state() -> void:
+	for material in [ground_material, river_bank_material]:
+		if material: material.set_shader_parameter("lake_offset", _lake_offset())
 	if water_material:
-		water_material.set_shader_parameter("quality", float(metrics.get("water_quality", 65)) / 100.0)
-		water_material.set_shader_parameter("vegetation", float(metrics.get("vegetation", 50)) / 100.0)
-		water_material.set_shader_parameter("level", float(metrics.get("water_level", 50)) / 100.0)
+		water_material.set_shader_parameter("quality", float(displayed_metrics.get("water_quality", 65)) / 100.0)
+		water_material.set_shader_parameter("vegetation", float(displayed_metrics.get("vegetation", 50)) / 100.0)
+		water_material.set_shader_parameter("level", float(displayed_metrics.get("water_level", 50)) / 100.0)
 		var tints := [Color.WHITE, Color(1.03, 1.02, 0.96), Color(1.06, 0.94, 0.80), Color(0.87, 0.95, 1.05)]
 		water_material.set_shader_parameter("season_tint", tints[season])
 
+func _advance_presentation(delta: float) -> void:
+	if transition_age >= transition_duration or transition_from.is_empty(): return
+	transition_age = minf(transition_duration, transition_age + delta)
+	var fraction := 1.0 if reduced_motion else smoothstep(0.0, 1.0, transition_age / transition_duration)
+	for entry in [[displayed_metrics, metrics, "metrics"], [displayed_populations, populations, "populations"], [displayed_plants, plants, "plants"]]:
+		for key in entry[1]:
+			entry[0][key] = lerpf(float(transition_from[entry[2]].get(key, entry[1][key])), float(entry[1][key]), fraction)
+	displayed_islands = lerpf(float(transition_from["islands"]), float(islands), fraction)
+	_apply_terrain_state()
+
+func play_action(card_id: String, state: Dictionary, duration: float) -> void:
+	sync_state(state, true, duration)
+	if not reduced_motion:
+		action_effects.append({"card": card_id, "age": 0.0, "duration": maxf(0.45, duration), "slot": action_effects.size() % 3})
+
 func _process(delta: float) -> void:
+	_advance_presentation(delta)
+	for i in range(action_effects.size() - 1, -1, -1):
+		action_effects[i]["age"] += delta
+		if action_effects[i]["age"] >= action_effects[i]["duration"]: action_effects.remove_at(i)
 	if not reduced_motion:
 		elapsed += delta
 		_process_birds(delta)
@@ -327,8 +388,12 @@ func _terrain_color(uv: Vector2) -> Color:
 	var y := clampi(int(uv.y * terrain_image.get_height()), 0, terrain_image.get_height() - 1)
 	return terrain_image.get_pixel(x, y)
 
-func _is_water(uv: Vector2) -> bool:
+func _is_water(uv: Vector2, baseline: bool = false) -> bool:
 	if _in_river_corridor(uv, 0.012): return true
+	if not baseline and Rect2(Vector2.ZERO, Vector2.ONE).has_point(uv):
+		var mask := shore_image.get_pixel(clampi(int(uv.x * shore_image.get_width()), 0, shore_image.get_width() - 1), clampi(int(uv.y * shore_image.get_height()), 0, shore_image.get_height() - 1))
+		if mask.g > 0.0 and absf(_lake_offset()) > 0.01:
+			return (mask.r - 0.5) * 128.0 <= _lake_offset() * mask.g
 	var color := _terrain_color(uv)
 	return color.b > color.g and color.g > color.r
 
@@ -336,15 +401,16 @@ func _is_shore(uv: Vector2) -> bool:
 	var color := _terrain_color(uv)
 	return color.r > 0.7 and color.r > color.g and color.g > color.b
 
-func _is_land(uv: Vector2) -> bool:
+func _is_land(uv: Vector2, baseline: bool = false) -> bool:
 	if _in_river_corridor(uv, 0.025): return false
+	if _is_water(uv, baseline): return false
 	var color := _terrain_color(uv)
 	return color.g > color.r and color.r > color.b
 
-func _near_water(uv: Vector2) -> bool:
+func _near_water(uv: Vector2, baseline: bool = false) -> bool:
 	for offset in [Vector2(0.025, 0), Vector2(-0.025, 0), Vector2(0, 0.025), Vector2(0, -0.025),
 			Vector2(0.038, 0.015), Vector2(-0.038, -0.015)]:
-		if _is_water(uv + offset):
+		if _is_water(uv + offset, baseline):
 			return true
 	return false
 
@@ -384,18 +450,19 @@ func _make_house_sites() -> void:
 	house_progress.resize(house_sites.size())
 
 func sync_settlement_targets() -> void:
-	settlement = GameState.settlement
 	# Preserve the old settlement-to-village rule; the extra art anchors stay reeds.
 	house_target_count = clampi(roundi(settlement / 100.0 * 7.0), 0, mini(7, house_sites.size()))
 
 func _accept_habitat(kind: String, uv: Vector2) -> bool:
+	# Seeded placement uses the original geography, independent of the previous
+	# run's animated water level. Movement uses the current, changing shoreline.
 	match kind:
 		"bird", "submerged", "floating":
-			return _is_water(uv)
+			return _is_water(uv, true)
 		"emergent", "marsh":
-			return _is_shore(uv) or (_is_land(uv) and _near_water(uv))
+			return _is_shore(uv) or (_is_land(uv, true) and _near_water(uv, true))
 		"tree":
-			return _is_land(uv) and _near_water(uv)
+			return _is_land(uv, true) and _near_water(uv, true)
 	return false
 
 func _scatter_site(kind: String, placed: Array[Vector2]) -> Vector2:
@@ -425,7 +492,8 @@ func _reset_scenery() -> void:
 	visual_seed = GameState.run_seed
 	visual_rng.seed = int(GameState.run_seed) ^ 0x5EED5A7
 	for i in house_progress.size():
-		house_progress[i] = 1.0 if i < roundi(GameState.settlement / 100.0 * float(house_sites.size())) else 0.0
+		house_progress[i] = 1.0 if i < roundi(settlement / 100.0 * 7.0) else 0.0
+	action_effects.clear()
 	plant_sites.clear()
 	for pid in GameState.PLANTS:
 		var kind: String = GameState.PLANTS[pid]["kind"]
@@ -448,7 +516,21 @@ func _visible_trees() -> Array:
 	return sites.slice(0, count)
 
 func _bird_count(sid: String) -> int:
-	return clampi(int(float(populations.get(sid, 0)) / 10.0), 0, 10)
+	return mini(10, _visual_count("populations", sid, 10.0))
+
+func _visual_count(bucket: String, key: String, divisor: float) -> int:
+	var target: Dictionary = metrics if bucket == "metrics" else (plants if bucket == "plants" else populations)
+	var count := int(float(target.get(key, 0)) / divisor)
+	if transition_age < transition_duration and transition_from.has(bucket):
+		count = maxi(count, int(float(transition_from[bucket].get(key, 0)) / divisor))
+	return count
+
+func _visual_weight(bucket: String, key: String, slot: int, divisor: float) -> float:
+	var target: Dictionary = metrics if bucket == "metrics" else (plants if bucket == "plants" else populations)
+	var to_weight := 1.0 if slot < int(float(target.get(key, 0)) / divisor) else 0.0
+	if transition_age >= transition_duration or not transition_from.has(bucket): return to_weight
+	var from_weight := 1.0 if slot < int(float(transition_from[bucket].get(key, 0)) / divisor) else 0.0
+	return lerpf(from_weight, to_weight, smoothstep(0.0, 1.0, transition_age / transition_duration))
 
 func _choose_bird_state(bird: Dictionary) -> void:
 	var roll := visual_rng.randf()
@@ -540,28 +622,14 @@ func _in_river_corridor(uv: Vector2, radius: float) -> bool:
 	return false
 
 func _make_river_bank_material() -> ShaderMaterial:
-	var shader := Shader.new()
-	shader.code = """shader_type spatial;
-render_mode unshaded, cull_disabled;
-uniform sampler2D terrain_texture : source_color, filter_nearest, repeat_disable;
-uniform float ground_size = 100.0;
-uniform vec4 bank_color : source_color;
-varying vec2 terrain_uv;
-void vertex() {
- terrain_uv = VERTEX.xz / ground_size + vec2(0.5);
-}
-void fragment() {
- vec3 color = bank_color.rgb;
- if (all(greaterThanEqual(terrain_uv, vec2(0.0))) && all(lessThanEqual(terrain_uv, vec2(1.0)))) {
-  vec3 underlying = texture(terrain_texture, terrain_uv).rgb;
-  // River banks crossing the lake or another mapped channel remain water.
-  if (underlying.b > underlying.g && underlying.g > underlying.r) color = underlying;
- }
- ALBEDO = color;
-}"""
+	return _make_ground_material(true)
+
+func _make_ground_material(bank: bool) -> ShaderMaterial:
 	var material := ShaderMaterial.new()
-	material.shader = shader
+	material.shader = GROUND_SHADER
 	material.set_shader_parameter("terrain_texture", LANDSCAPE)
+	material.set_shader_parameter("shore_distance", SHORE_DISTANCE)
+	material.set_shader_parameter("river_bank", bank)
 	material.set_shader_parameter("ground_size", GROUND_SIZE)
 	material.set_shader_parameter("bank_color", Color("d8c68d"))
 	return material
@@ -661,6 +729,7 @@ func _build_meadow_scenery() -> void:
 
 func _draw_meadow_scenery(c: Control) -> void:
 	for prop in scenery_props:
+		if _is_water(prop["pos"]): continue
 		if prop["kind"] == 5:
 			_draw_tree(c, _wildlife_point(prop["pos"]), float(prop["scale"]) * 0.55)
 			continue
@@ -686,17 +755,21 @@ func _draw_wildlife(c: Control) -> void:
 		var p := _wildlife_point(WATER_ANCHORS[i % WATER_ANCHORS.size()])
 		var alpha := 0.10 + 0.13 * (sin(elapsed * 1.5 + i * 2.0) + 1.0)
 		c.draw_rect(Rect2(p, Vector2(8 + i % 4 * 3, 2)), Color(0.77, 0.94, 0.83, alpha))
-	for i in clampi(int(float(metrics.get("fish", 50)) / 12.0), 0, 12):
+	for i in mini(12, _visual_count("metrics", "fish", 12.0)):
 		var p := _wildlife_point(WATER_ANCHORS[i % WATER_ANCHORS.size()])
 		p.x += round(sin(elapsed * 0.35 + i) * 4)
-		_draw_sprite(c, p, 3, Vector2(15, 24), Color(0.6, 0.85, 0.8, 0.45))
+		_draw_sprite(c, p, 3, Vector2(15, 24), Color(0.6, 0.85, 0.8, 0.45 * _visual_weight("metrics", "fish", i, 12.0)))
 	# The old scene used plant populations / 7. Keep those visual thresholds and
 	# scatter each kind only on its matching terrain color.
 	for pid in GameState.PLANTS:
 		var sites: Array = plant_sites.get(pid, [])
-		var count := mini(int(float(plants.get(pid, 0)) / 7.0), sites.size())
+		var count := mini(_visual_count("plants", str(pid), 7.0), sites.size())
 		for i in count:
 			var p := _wildlife_point(sites[i])
+			var growth := _visual_weight("plants", str(pid), i, 7.0)
+			if growth <= 0.001: continue
+			c.draw_set_transform(p, 0.0, Vector2.ONE * growth)
+			p = Vector2.ZERO
 			match str(pid):
 				"lian":
 					c.draw_texture_rect(bird_sprites[5], Rect2(p - Vector2(19, 21), Vector2(38, 38)), false)
@@ -709,10 +782,16 @@ func _draw_wildlife(c: Control) -> void:
 					c.draw_line(p + Vector2(3, 3), p + Vector2(1, -5), Color("89b68c"), 2, false)
 				_:
 					_draw_marsh(c, p, str(pid))
-	for i in islands:
+			c.draw_set_transform(Vector2.ZERO)
+	for i in mini(ISLAND_ANCHORS.size(), ceili(displayed_islands)):
 		var p := _wildlife_point(ISLAND_ANCHORS[i % ISLAND_ANCHORS.size()])
+		var growth := clampf(displayed_islands - float(i), 0.0, 1.0)
 		p.y += round(sin(elapsed + i) * 1.0)
-		c.draw_texture_rect(FLOATING_ISLAND, Rect2((p - Vector2(24, 31)).round(), Vector2(48, 48)), false)
+		if growth < 0.99:
+			c.draw_arc(p, 9 + (1.0 - growth) * 15, 0, TAU, 16, Color(0.72, 0.93, 0.98, 1.0 - growth), 2.0)
+		var extent := Vector2(48, 48) * maxf(0.08, growth)
+		p.y += (1.0 - growth) * 14.0
+		c.draw_texture_rect(FLOATING_ISLAND, Rect2((p - extent * Vector2(0.5, 0.65)).round(), extent), false, Color(1, 1, 1, growth))
 	_draw_houses(c)
 	for bird in bird_agents:
 		if int(bird["slot"]) < _bird_count(str(bird["sid"])):
@@ -720,6 +799,28 @@ func _draw_wildlife(c: Control) -> void:
 	var boat_pos := _wildlife_point(BOAT_ANCHOR)
 	boat_pos.x += round(sin(elapsed * 0.06) * 4)
 	_draw_sprite(c, boat_pos, 7, Vector2(60, 62))
+	_draw_action_effects(c)
+
+func _draw_action_effects(c: Control) -> void:
+	for effect in action_effects:
+		var phase := float(effect.age) / float(effect.duration)
+		var alpha := sin(phase * PI) * 0.8
+		var card_id := str(effect.card)
+		var anchor := BOAT_ANCHOR + Vector2(0.06 * float(effect.slot), -0.06)
+		var p := _wildlife_point(anchor)
+		if card_id in ["patrol", "guard_team", "smart_patrol", "research", "water_monitor"]:
+			c.draw_arc(p, 10 + phase * 45, 0, TAU, 32, Color(0.78, 0.94, 0.62, alpha), 2.0)
+			if card_id in ["patrol", "guard_team", "smart_patrol"]:
+				_draw_sprite(c, p + Vector2((phase - 0.5) * 65, 0), 7, Vector2(30, 32), Color(1, 1, 1, alpha))
+		else:
+			var card := GameState.card_by_id(card_id)
+			var water_action := false
+			for e in card.get("tiers", {}).get("effective", {}).get("effects", []):
+				if e.get("metric") == "water_level" or e.get("metric") == "water_quality": water_action = true
+			if water_action:
+				for i in 3:
+					var wave := _wildlife_point(WATER_ANCHORS[(int(effect.slot) * 3 + i * 2) % WATER_ANCHORS.size()])
+					c.draw_arc(wave, 6 + phase * 35, 0, TAU, 24, Color(0.73, 0.94, 1.0, alpha), 2.0)
 
 func _draw_houses(c: Control) -> void:
 	var lit := roundi(float(metrics.get("community", 50)) / 100.0 * float(house_target_count))
@@ -777,6 +878,8 @@ func _bird_frame_region(species: int, frame: int) -> Rect2:
 	return Rect2(Vector2(frame % 4, floori(float(frame) / 4.0)) * tile, tile)
 
 func _draw_bird_actor(c: Control, bird: Dictionary) -> void:
+	var visibility := _visual_weight("populations", str(bird["sid"]), int(bird["slot"]), 10.0)
+	if visibility <= 0.001: return
 	var sprite_index: int = SPECIES_ART.get(str(bird["sid"]), 0)
 	var state: int = bird["state"]
 	var p := _wildlife_point(bird["pos"])
@@ -791,5 +894,5 @@ func _draw_bird_actor(c: Control, bird: Dictionary) -> void:
 	# Billboard sprites remain upright: only mirror horizontally, never rotate.
 	# Anchor the feet to the habitat point instead of the middle of the body.
 	c.draw_set_transform(p, 0.0, Vector2(_bird_facing(bird), 1.0))
-	c.draw_texture_rect_region(BIRD_ACTIONS[sprite_index], Rect2(-extent * Vector2(0.5, 0.875), extent), _bird_frame_region(sprite_index, frame))
+	c.draw_texture_rect_region(BIRD_ACTIONS[sprite_index], Rect2(-extent * Vector2(0.5, 0.875), extent), _bird_frame_region(sprite_index, frame), Color(1, 1, 1, visibility))
 	c.draw_set_transform(Vector2.ZERO)

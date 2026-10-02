@@ -5529,6 +5529,7 @@ func _spawn_dispatched_cards(played: Array) -> void:
 			"base_pos": panel.position, "theta": 0.0, "radial": Vector2(0.0, -1.0),
 			"selected": true, "shaking": false, "hovered": false,
 			"tier": str(d["tier"]), "flying": true, "dispatched": true,
+			"sandpan_state": wetland.capture_state(),
 		})
 		played.append(card_infos.size() - 1)
 
@@ -6274,6 +6275,7 @@ func _finish_turn() -> void:
 		var info: Dictionary = card_infos[i]
 		if info["selected"]:
 			if GameState.execute_action(info["card_id"], _info_tier(info)):
+				info["sandpan_state"] = wetland.capture_state()
 				played.append(i)
 			else:
 				failed.append(info["card_id"])
@@ -6519,6 +6521,8 @@ func _play_score_animation(ledger: Array, before_all: Dictionary, played: Array,
 		# 现在压到 -4dB，把"最响"留给指标合计那一下"落定"。
 		play_sfx("ding", 1.0 + 0.05 * float(k), -4.0)
 		var fx: Array = card_fx.get(str(info["card_id"]), [])
+		if wetland and info.has("sandpan_state"):
+			wetland.play_action(str(info["card_id"]), info["sandpan_state"], card_beat)
 		var anchor: Vector2 = panel.global_position + Vector2(panel.size.x * 0.5, 0.0)
 		for j in fx.size():
 			var e: Dictionary = fx[j]
@@ -6532,6 +6536,9 @@ func _play_score_animation(ledger: Array, before_all: Dictionary, played: Array,
 		if _score_anim_id != my_id:
 			return _score_anim_cleanup()
 
+	# Delayed effects, synergy, natural evolution and crises follow the card replay.
+	# Presentation uses snapshots only; never execute cards or roll RNG again.
+	if wetland: wetland.sync_state({}, true, 0.85 * ds)
 	# ---- ③+④ 指标结算（→ 2.80）：按已耗时自适应预算，保证总时长贴近 2.8s ----
 	var elapsed: float = Time.get_ticks_msec() / 1000.0 - t_start
 	# 指标结算节拍的时长倍率（速度 ÷0.8 ⇔ 时长 ×1.25）
