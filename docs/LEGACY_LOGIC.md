@@ -1,6 +1,6 @@
 # 老版逻辑与新版美术
 
-以分支原有的 `8b0807f` 为逻辑基准。`scripts/game_state.gd`、`scripts/achievements.gd`、`scripts/talents.gd` 和 `scenes/main.tscn` 与该提交一致；回合、事件、危机、难度、预算、行动槽位、种群计算、天赋、成就和存档格式沿用老版。新版美术由 `pixel_wetland.gd` 读取游戏状态，不改写玩法数据。
+以分支原有的 `8b0807f` 为逻辑基准。`scripts/achievements.gd`、`scripts/talents.gd` 和 `scenes/main.tscn` 与该提交一致；`scripts/game_state.gd` 后续仅合入队友 `af8e159` 的 39 项卡牌价格调整，其余内容与该提交一致。回合、事件、危机、难度、预算、行动槽位、种群计算、天赋、成就和存档格式沿用老版。新版美术由 `pixel_wetland.gd` 读取游戏状态，不改写玩法数据。
 
 主菜单与对局使用实际的正交 Camera3D，方位角和俯角均为 45 度。恢复原菜单镜头节奏：主菜单从正常视野用 1.2 秒拉远，进入对局用 0.8 秒推进回正常视野，沿用 Sine / Ease Out。按后续美术要求，菜单拉远倍数调整为 1.3；房屋、植物、鸟与水面特效随摄像机同步缩放。
 

@@ -263,7 +263,7 @@ const ACTION_CARDS := [
 		"season": "winter",
 		"tags": ["补水调度"],
 		"desc": "调节湖区水位，改善沉水植物块茎发育。",
-		"cost": 39,
+		"cost": 40,
 		"tiers": {
 			"basic":     {"effects": [{"metric": "water_level", "delta": 6, "delay": 1} , {"metric": "community", "delta": -1, "delay": 0}]},
 			"effective": {"effects": [{"metric": "water_level", "delta": 8, "delay": 0}, {"metric": "vegetation", "delta": 4, "delay": 2} , {"metric": "community", "delta": -2, "delay": 0}]},
@@ -309,7 +309,7 @@ const ACTION_CARDS := [
 		"season": "spring",
 		"tags": ["生态修复"],
 		"desc": "保育苦草、黑藻的冬芽与种子库，为后续萌发留足种源 —— 便宜，但要等 2~3 回合才见效。",
-		"cost": 33,
+		"cost": 30,
 		"tiers": {
 			"basic":     {"effects": [{"metric": "vegetation", "delta": 8, "delay": 3} , {"metric": "community", "delta": -1, "delay": 0}]},
 			"effective": {"effects": [{"metric": "vegetation", "delta": 13, "delay": 2} , {"metric": "community", "delta": -1, "delay": 0}]},
@@ -322,7 +322,7 @@ const ACTION_CARDS := [
 		"season": "all",
 		"tags": ["水体治理", "病害防控"],
 		"desc": "监测总磷总氮，提前发现并防治病害风险。",
-		"cost": 22,
+		"cost": 20,
 		"tiers": {
 			"basic":     {"effects": [{"metric": "water_quality", "delta": 3, "delay": 0}]},
 			"effective": {"effects": [{"metric": "water_quality", "delta": 6, "delay": 0}]},
@@ -335,7 +335,7 @@ const ACTION_CARDS := [
 		"season": "summer",
 		"tags": ["物种防控"],
 		"desc": "清除福寿螺、凤眼莲等外来入侵物种。",
-		"cost": 31,
+		"cost": 30,
 		"tiers": {
 			"basic":     {"effects": [{"metric": "vegetation", "delta": 2, "delay": 0}, {"metric": "fish", "delta": 2, "delay": 0} , {"metric": "community", "delta": -1, "delay": 0}]},
 			"effective": {"effects": [{"metric": "vegetation", "delta": 5, "delay": 1}, {"metric": "fish", "delta": 5, "delay": 1} , {"metric": "community", "delta": -2, "delay": 0}]},
@@ -348,7 +348,7 @@ const ACTION_CARDS := [
 		"season": "autumn",
 		"tags": ["栖息地营造"],
 		"desc": "在堤外农田预留食物地块，减少人鸟冲突。",
-		"cost": 19,
+		"cost": 20,
 		"tiers": {
 			"basic":     {"effects": [{"metric": "birds", "delta": 3, "delay": 1} , {"metric": "community", "delta": -1, "delay": 0}]},
 			"effective": {"effects": [{"metric": "birds", "delta": 6, "delay": 1} , {"metric": "community", "delta": -2, "delay": 0}]},
@@ -361,7 +361,7 @@ const ACTION_CARDS := [
 		"season": "all",
 		"tags": ["应急救护"],
 		"desc": "救护搁浅或受伤个体，建立响应机制。",
-		"cost": 11,
+		"cost": 10,
 		"tiers": {
 			"basic":     {"effects": [{"metric": "birds", "delta": 2, "delay": 2}]},
 			"effective": {"effects": [{"metric": "birds", "delta": 3, "delay": 0}]},
@@ -374,7 +374,7 @@ const ACTION_CARDS := [
 		"season": "all",
 		"tags": ["社区补偿"],
 		"desc": "补偿农户候鸟致害损失，缓解人鸟冲突。",
-		"cost": 29,
+		"cost": 30,
 		"tiers": {
 			"basic":     {"effects": [{"metric": "community", "delta": 4, "delay": 0}]},
 			"effective": {"effects": [{"metric": "community", "delta": 8, "delay": 0}]},
@@ -387,7 +387,7 @@ const ACTION_CARDS := [
 		"season": "all",
 		"tags": ["产业转产"],
 		"desc": "扶持退捕渔民转产，形成替代生计。",
-		"cost": 28,
+		"cost": 30,
 		"tiers": {
 			"basic":     {"effects": [{"metric": "community", "delta": 7, "delay": 3}]},
 			"effective": {"effects": [{"metric": "community", "delta": 8, "delay": 2}, {"metric": "fish", "delta": 3, "delay": 2}]},
@@ -400,7 +400,7 @@ const ACTION_CARDS := [
 		"season": "all",
 		"tags": ["公众参与"],
 		"desc": "建立护鸟员队伍，形成社区巡护网络。",
-		"cost": 25,
+		"cost": 20,
 		"tiers": {
 			"basic":     {"effects": [{"metric": "community", "delta": 4, "delay": 1}]},
 			"effective": {"effects": [{"metric": "community", "delta": 5, "delay": 1}, {"metric": "fish", "delta": 3, "delay": 1}]},
@@ -413,7 +413,7 @@ const ACTION_CARDS := [
 		"season": "all",
 		"tags": ["公众参与"],
 		"desc": "提升村民与学生认知，形成公众监测网络。",
-		"cost": 18,
+		"cost": 20,
 		"tiers": {
 			"basic":     {"effects": [{"metric": "community", "delta": 3, "delay": 1}]},
 			"effective": {"effects": [{"metric": "community", "delta": 5, "delay": 0}]},
@@ -426,7 +426,7 @@ const ACTION_CARDS := [
 		"season": "all",
 		"tags": ["执法巡护"],
 		"desc": "严查非法捕捞，直接决定鱼类恢复速度。",
-		"cost": 19,
+		"cost": 20,
 		"tiers": {
 			"basic":     {"effects": [{"metric": "fish", "delta": 3, "delay": 1} , {"metric": "community", "delta": -1, "delay": 0}]},
 			"effective": {"effects": [{"metric": "fish", "delta": 6, "delay": 1} , {"metric": "community", "delta": -1, "delay": 0}]},
@@ -452,7 +452,7 @@ const ACTION_CARDS := [
 		"season": "winter",
 		"tags": ["补水调度"],
 		"desc": "跨流域引水补充湖区水量，缓解枯水、恢复浅滩生境。",
-		"cost": 49,
+		"cost": 50,
 		"tiers": {
 			"basic":     {"effects": [{"metric": "water_level", "delta": 7, "delay": 0} , {"metric": "community", "delta": -1, "delay": 0}]},
 			"effective": {"effects": [{"metric": "water_level", "delta": 11, "delay": 0}, {"metric": "vegetation", "delta": 3, "delay": 1} , {"metric": "community", "delta": -2, "delay": 0}]},
@@ -465,7 +465,7 @@ const ACTION_CARDS := [
 		"season": "autumn",
 		"tags": ["补水调度"],
 		"desc": "在碟形湖与入江水道修建蓄水闸，汛期拦蓄、旱季保水，稳定湖区水位。",
-		"cost": 33,
+		"cost": 30,
 		"tiers": {
 			"basic":     {"effects": [{"metric": "water_level", "delta": 5, "delay": 1} , {"metric": "community", "delta": -1, "delay": 0}]},
 			"effective": {"effects": [{"metric": "water_level", "delta": 9, "delay": 0} , {"metric": "community", "delta": -2, "delay": 0}]},
@@ -478,7 +478,7 @@ const ACTION_CARDS := [
 		"season": "summer",
 		"tags": ["补水调度"],
 		"desc": "协调上游水库联合调度，保障湖区生态流量，缓解枯水并改善水体流动性。",
-		"cost": 33,
+		"cost": 30,
 		"tiers": {
 			"basic":     {"effects": [{"metric": "water_level", "delta": 5, "delay": 1} , {"metric": "community", "delta": -1, "delay": 0}]},
 			"effective": {"effects": [{"metric": "water_level", "delta": 7, "delay": 0}, {"metric": "water_quality", "delta": 2, "delay": 0} , {"metric": "community", "delta": -1, "delay": 0}]},
@@ -491,7 +491,7 @@ const ACTION_CARDS := [
 		"season": "autumn",
 		"tags": ["生态修复"],
 		"desc": "将环湖低产农田退还为湿地，重建自然水文节律。",
-		"cost": 31,
+		"cost": 40,
 		"tiers": {
 			"basic":     {"effects": [{"metric": "vegetation", "delta": 5, "delay": 1} , {"metric": "community", "delta": -1, "delay": 0}]},
 			"effective": {"effects": [{"metric": "vegetation", "delta": 10, "delay": 2}, {"metric": "water_quality", "delta": 5, "delay": 2}, {"metric": "community", "delta": -2, "delay": 0}]},
@@ -504,7 +504,7 @@ const ACTION_CARDS := [
 		"season": "spring",
 		"tags": ["水体治理"],
 		"desc": "布置人工浮岛与生态浮床，吸附氮磷、净化水体。",
-		"cost": 35,
+		"cost": 30,
 		"tiers": {
 			"basic":     {"effects": [{"metric": "water_quality", "delta": 5, "delay": 1} , {"metric": "community", "delta": -1, "delay": 0}]},
 			"effective": {"effects": [{"metric": "water_quality", "delta": 7, "delay": 0}, {"metric": "vegetation", "delta": 3, "delay": 1} , {"metric": "community", "delta": -2, "delay": 0}]},
@@ -517,7 +517,7 @@ const ACTION_CARDS := [
 		"season": "winter",
 		"tags": ["水体治理"],
 		"desc": "疏浚淤积底泥，削减内源污染、恢复湖床通透性。",
-		"cost": 27,
+		"cost": 30,
 		"tiers": {
 			"basic":     {"effects": [{"metric": "water_quality", "delta": 5, "delay": 2} , {"metric": "community", "delta": -1, "delay": 0}]},
 			"effective": {"effects": [{"metric": "water_quality", "delta": 7, "delay": 1}, {"metric": "fish", "delta": 2, "delay": 2} , {"metric": "community", "delta": -2, "delay": 0}]},
@@ -530,7 +530,7 @@ const ACTION_CARDS := [
 		"season": "autumn",
 		"tags": ["栖息地营造"],
 		"desc": "划定并管护候鸟越冬栖息地，控制人为干扰与栖息地破碎化。",
-		"cost": 27,
+		"cost": 20,
 		"tiers": {
 			"basic":     {"effects": [{"metric": "birds", "delta": 4, "delay": 1} , {"metric": "community", "delta": -1, "delay": 0}]},
 			"effective": {"effects": [{"metric": "birds", "delta": 7, "delay": 1}, {"metric": "vegetation", "delta": 2, "delay": 2} , {"metric": "community", "delta": -2, "delay": 0}]},
@@ -543,7 +543,7 @@ const ACTION_CARDS := [
 		"season": "winter",
 		"tags": ["产业转产"],
 		"desc": "发展观鸟旅游与生态体验，让保护产生社区收益。",
-		"cost": 31,
+		"cost": 30,
 		"tiers": {
 			"basic":     {"effects": [{"metric": "community", "delta": 5, "delay": 1}]},
 			"effective": {"effects": [{"metric": "community", "delta": 6, "delay": 0}, {"metric": "birds", "delta": 3, "delay": 1}]},
@@ -556,7 +556,7 @@ const ACTION_CARDS := [
 		"season": "autumn",
 		"tags": ["社区补偿"],
 		"desc": "建立候鸟致害补偿保险，农户损失及时赔付。",
-		"cost": 32,
+		"cost": 30,
 		"tiers": {
 			"basic":     {"effects": [{"metric": "community", "delta": 5, "delay": 1}]},
 			"effective": {"effects": [{"metric": "community", "delta": 7, "delay": 0}, {"metric": "birds", "delta": 2, "delay": 1}]},
@@ -569,7 +569,7 @@ const ACTION_CARDS := [
 		"season": "all",
 		"tags": ["产业转产"],
 		"desc": "认证湖区生态农产品并拓展销路，让绿色生产有利可图。",
-		"cost": 26,
+		"cost": 30,
 		"tiers": {
 			"basic":     {"effects": [{"metric": "community", "delta": 5, "delay": 2}]},
 			"effective": {"effects": [{"metric": "community", "delta": 6, "delay": 1}, {"metric": "water_quality", "delta": 3, "delay": 2}]},
@@ -582,7 +582,7 @@ const ACTION_CARDS := [
 		"season": "spring",
 		"tags": ["增殖放流"],
 		"desc": "投放鱼苗，恢复鱼类资源量与江湖洄游通道。",
-		"cost": 26,
+		"cost": 20,
 		"tiers": {
 			"basic":     {"effects": [{"metric": "fish", "delta": 5, "delay": 2} ]},
 			"effective": {"effects": [{"metric": "fish", "delta": 8, "delay": 2}, {"metric": "community", "delta": 2, "delay": 2}]},
@@ -599,7 +599,7 @@ const ACTION_CARDS := [
 		"season": "spring",
 		"tags": ["生态修复"],
 		"desc": "修复四大家鱼产卵场与洄游通道：当回合就见鱼群回补，后续繁殖还会再涨一波。",
-		"cost": 43,
+		"cost": 40,
 		"tiers": {
 			"basic":     {"effects": [{"metric": "fish", "delta": 6, "delay": 0} , {"metric": "community", "delta": -1, "delay": 0}]},
 			"effective": {"effects": [{"metric": "fish", "delta": 9, "delay": 0}, {"metric": "fish", "delta": 4, "delay": 2} , {"metric": "community", "delta": -2, "delay": 0}]},
@@ -612,7 +612,7 @@ const ACTION_CARDS := [
 		"season": "all",
 		"tags": ["执法巡护"],
 		"desc": "无人机与遥感全天候巡护，监测非法捕捞、火情与水质。",
-		"cost": 25,
+		"cost": 20,
 		"tiers": {
 			"basic":     {"effects": [{"metric": "fish", "delta": 4, "delay": 1}]},
 			"effective": {"effects": [{"metric": "fish", "delta": 6, "delay": 1}, {"metric": "water_quality", "delta": 2, "delay": 1}]},
@@ -625,7 +625,7 @@ const ACTION_CARDS := [
 		"season": "all",
 		"tags": ["执法巡护"],
 		"desc": "推动地方湿地保护条例，划定禁渔区与生态红线。",
-		"cost": 33,
+		"cost": 40,
 		"tiers": {
 			"basic":     {"effects": [{"metric": "fish", "delta": 8, "delay": 3} ]},
 			"effective": {"effects": [{"metric": "fish", "delta": 6, "delay": 2}, {"metric": "birds", "delta": 4, "delay": 2}, {"metric": "community", "delta": 3, "delay": 2}]},
@@ -638,7 +638,7 @@ const ACTION_CARDS := [
 		"season": "autumn",
 		"tags": ["生态修复"],
 		"desc": "禁止湖洲过度放牧，保护洲滩草甸植被。",
-		"cost": 11,
+		"cost": 10,
 		"tiers": {
 			"basic":     {"effects": [{"metric": "vegetation", "delta": 2, "delay": 2} , {"metric": "community", "delta": -1, "delay": 0}]},
 			"effective": {"effects": [{"metric": "vegetation", "delta": 5, "delay": 0}, {"metric": "community", "delta": -2, "delay": 0}]},
@@ -665,7 +665,7 @@ const ACTION_CARDS := [
 		"season": "all",
 		"tags": ["社区参与", "补水调度"],
 		"desc": "把灌溉与生态用水的分配权交给村民议事会，从抢水变成共管。",
-		"cost": 44,
+		"cost": 40,
 		"tiers": {
 			"basic":     {"effects": [{"metric": "water_level", "delta": 6, "delay": 0}]},
 			"effective": {"effects": [{"metric": "water_level", "delta": 9, "delay": 0}, {"metric": "community", "delta": 3, "delay": 0}]},
@@ -678,7 +678,7 @@ const ACTION_CARDS := [
 		"season": "all",
 		"tags": ["水体治理", "社区参与"],
 		"desc": "村民自建自管小型污水设施，从源头削减入湖污染。",
-		"cost": 47,
+		"cost": 50,
 		"tiers": {
 			"basic":     {"effects": [{"metric": "water_quality", "delta": 8, "delay": 1}]},
 			"effective": {"effects": [{"metric": "water_quality", "delta": 10, "delay": 0}, {"metric": "community", "delta": 3, "delay": 0}]},
@@ -691,7 +691,7 @@ const ACTION_CARDS := [
 		"season": "all",
 		"tags": ["社区参与", "增殖放流"],
 		"desc": "村集体统一经营渔获与品牌，收益按户分红，让护鱼的人有饭吃。",
-		"cost": 44,
+		"cost": 40,
 		"tiers": {
 			"basic":     {"effects": [{"metric": "fish", "delta": 6, "delay": 0}]},
 			"effective": {"effects": [{"metric": "fish", "delta": 9, "delay": 0}, {"metric": "community", "delta": 3, "delay": 0}]},
@@ -704,7 +704,7 @@ const ACTION_CARDS := [
 		"season": "all",
 		"tags": ["社区参与", "栖息地营造"],
 		"desc": "与社区共建候鸟友好型生产生活方式，减少人鸟冲突。",
-		"cost": 44,
+		"cost": 40,
 		"tiers": {
 			"basic":     {"effects": [{"metric": "birds", "delta": 6, "delay": 0}]},
 			"effective": {"effects": [{"metric": "birds", "delta": 9, "delay": 0}, {"metric": "community", "delta": 3, "delay": 0}]},
@@ -717,7 +717,7 @@ const ACTION_CARDS := [
 		"season": "all",
 		"tags": ["产业转型", "社区参与"],
 		"desc": "组织退捕渔民参加技能培训与就业对接，转产不离乡。",
-		"cost": 42,
+		"cost": 40,
 		"tiers": {
 			"basic":     {"effects": [{"metric": "community", "delta": 6, "delay": 0}]},
 			"effective": {"effects": [{"metric": "community", "delta": 9, "delay": 0}, {"metric": "fish", "delta": 3, "delay": 1}]},
@@ -730,7 +730,7 @@ const ACTION_CARDS := [
 		"season": "all",
 		"tags": ["社区参与", "生态修复"],
 		"desc": "设护湿员、护鸟员等公益岗位，把生态保护变成村民的稳定收入。",
-		"cost": 41,
+		"cost": 40,
 		"tiers": {
 			"basic":     {"effects": [{"metric": "community", "delta": 4, "delay": 1}, {"metric": "vegetation", "delta": 2, "delay": 0}]},
 			"effective": {"effects": [{"metric": "community", "delta": 7, "delay": 0}, {"metric": "vegetation", "delta": 5, "delay": 1}]},
@@ -743,7 +743,7 @@ const ACTION_CARDS := [
 		"season": "all",
 		"tags": ["生态修复", "产业转型"],
 		"desc": "把圩区内的居民迁出并妥善安置，退出的土地交给湿地自然恢复。",
-		"cost": 42,
+		"cost": 40,
 		"tiers": {
 			"basic":     {"effects": [{"metric": "vegetation", "delta": 10, "delay": 2}, {"metric": "community", "delta": -2, "delay": 2}]},
 			"effective": {"effects": [{"metric": "vegetation", "delta": 12, "delay": 1}, {"metric": "water_quality", "delta": 5, "delay": 1}, {"metric": "community", "delta": -3, "delay": 0}]},
@@ -758,7 +758,7 @@ const ACTION_CARDS := [
 		"season": "spring",
 		"tags": ["增殖放流", "水工调控"],
 		"desc": "汛期开闸引江，让长江鱼苗随水进入湖区 —— 老办法，但管用。",
-		"cost": 42,
+		"cost": 40,
 		"tiers": {
 			"basic":     {"effects": [{"metric": "fish", "delta": 6, "delay": 0} , {"metric": "community", "delta": -1, "delay": 0}]},
 			"effective": {"effects": [{"metric": "fish", "delta": 9, "delay": 0}, {"metric": "water_level", "delta": 3, "delay": 1} , {"metric": "community", "delta": -2, "delay": 0}]},
@@ -771,7 +771,7 @@ const ACTION_CARDS := [
 		"season": "autumn",
 		"tags": ["栖息地营造", "执法巡护"],
 		"desc": "维护候鸟停歇地的水位与人为干扰管控，保证迁徙通道畅通。",
-		"cost": 42,
+		"cost": 40,
 		"tiers": {
 			"basic":     {"effects": [{"metric": "birds", "delta": 6, "delay": 0} , {"metric": "community", "delta": -1, "delay": 0}]},
 			"effective": {"effects": [{"metric": "birds", "delta": 9, "delay": 0}, {"metric": "vegetation", "delta": 3, "delay": 1} , {"metric": "community", "delta": -2, "delay": 0}]},
@@ -797,7 +797,7 @@ const ACTION_CARDS := [
 		"season": "winter",
 		"tags": ["执法巡护", "生态修复"],
 		"desc": "清理湖区内违规围网、矮围与违建，让水草重新长回来。",
-		"cost": 42,
+		"cost": 40,
 		"tiers": {
 			"basic":     {"effects": [{"metric": "vegetation", "delta": 6, "delay": 0} , {"metric": "community", "delta": -1, "delay": 0}]},
 			"effective": {"effects": [{"metric": "vegetation", "delta": 9, "delay": 0}, {"metric": "fish", "delta": 3, "delay": 1} , {"metric": "community", "delta": -2, "delay": 0}]},
@@ -810,7 +810,7 @@ const ACTION_CARDS := [
 		"season": "winter",
 		"tags": ["执法巡护", "社区参与"],
 		"desc": "把生态指标纳入湖区干部考核，压着各级真正去治。",
-		"cost": 41,
+		"cost": 40,
 		"tiers": {
 			"basic":     {"effects": [{"metric": "community", "delta": 6, "delay": 1}]},
 			"effective": {"effects": [{"metric": "community", "delta": 8, "delay": 0}, {"metric": "water_quality", "delta": 4, "delay": 1}]},
@@ -823,7 +823,7 @@ const ACTION_CARDS := [
 		"season": "winter",
 		"tags": ["栖息地营造", "增殖放流"],
 		"desc": "在闸坝上补建过鱼设施，恢复江湖洄游通道 —— 工程量大，见效要等。",
-		"cost": 44,
+		"cost": 40,
 		"tiers": {
 			"basic":     {"effects": [{"metric": "fish", "delta": 9, "delay": 2} , {"metric": "community", "delta": -1, "delay": 0}]},
 			"effective": {"effects": [{"metric": "fish", "delta": 11, "delay": 1}, {"metric": "birds", "delta": 4, "delay": 2} , {"metric": "community", "delta": -2, "delay": 0}]},
@@ -836,7 +836,7 @@ const ACTION_CARDS := [
 		"season": "summer",
 		"tags": ["执法巡护", "水体治理"],
 		"desc": "汛期高水位下非法采砂最猖獗：搅动河床、悬浮物激增，沉水植物被连根冲走。集中巡江可护住水质与草场 —— 但触及砂石从业者的生计。",
-		"cost": 42,
+		"cost": 40,
 		"tiers": {
 			"basic":     {"effects": [{"metric": "water_quality", "delta": 6, "delay": 0}, {"metric": "vegetation", "delta": 1, "delay": 0}, {"metric": "community", "delta": -1, "delay": 0}]},
 			"effective": {"effects": [{"metric": "water_quality", "delta": 11, "delay": 0}, {"metric": "vegetation", "delta": 3, "delay": 0}, {"metric": "community", "delta": -2, "delay": 0}]},
