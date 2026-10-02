@@ -23,6 +23,15 @@ func close_popups() -> void:
 		game._on_popup_button()
 		await settle(0.1)
 
+func creeper_screen_rect() -> Rect2:
+	var mesh: MeshInstance3D = game.wetland.creeper_mesh
+	var camera: Camera3D = game.wetland.map_camera
+	var bounds := mesh.get_aabb()
+	var rect := Rect2(camera.unproject_position(mesh.to_global(bounds.get_endpoint(0))), Vector2.ZERO)
+	for i in range(1, 8):
+		rect = rect.expand(camera.unproject_position(mesh.to_global(bounds.get_endpoint(i))))
+	return rect
+
 func _ready() -> void:
 	AudioServer.set_bus_mute(0, true)
 	var scene: Node = load("res://scenes/main.tscn").instantiate()
@@ -47,6 +56,7 @@ func _ready() -> void:
 	var secret: Vector2 = game.wetland._point(game.wetland.CREEPER_ANCHOR)
 	var window_rect := get_viewport().get_visible_rect().grow(-24)
 	check(window_rect.has_point(secret) and secret.x > window_rect.size.x * 0.40, "Menu camera must keep the Creeper inside the unshaded view")
+	check(window_rect.encloses(creeper_screen_rect()), "Entire Creeper must fit inside the menu view")
 	check(game.wetland.scenery_props.size() > 200, "Empty meadows need varied pixel vegetation and stones")
 	for prop in game.wetland.scenery_props:
 		check(prop.pos.distance_to(game.wetland.CREEPER_ANCHOR) >= 0.15, "Scenery must leave the secret clearing open")
@@ -60,6 +70,7 @@ func _ready() -> void:
 	await settle(0.4)
 	var small_secret: Vector2 = game.wetland._point(game.wetland.CREEPER_ANCHOR)
 	check(get_viewport().get_visible_rect().grow(-20).has_point(small_secret), "Small-window menu must keep the secret visible")
+	check(get_viewport().get_visible_rect().grow(-20).encloses(creeper_screen_rect()), "Small-window menu must show the entire Creeper")
 	await capture("01b-menu-small-window")
 	get_window().size = Vector2i(1280, 720)
 	await settle(0.4)
@@ -69,12 +80,13 @@ func _ready() -> void:
 	game.seed_input.text = "20260930"
 	game._on_start_pressed()
 	await settle(0.3)
-	check(game.wetland.map_camera.size < menu_camera_size and game.wetland.camera_zoom_factor > 1.0, "Entering a run must animate camera zoom")
+	check(game.wetland.map_camera.size < menu_camera_size and game.wetland.camera_zoom_factor > game.wetland.GAME_CAMERA_ZOOM, "Entering a run must animate camera zoom")
 	check(game.wetland.creeper_mesh.visible, "Starting a run must preserve the menu's Creeper roll")
 	await close_popups()
 	await settle(1.0)
 	check(game.card_infos.size() > 0, "Starting a run must deal cards")
-	check(is_equal_approx(game.wetland.camera_zoom_factor, 1.0), "Game camera zoom must settle at normal scale")
+	check(is_equal_approx(game.wetland.camera_zoom_factor, game.wetland.GAME_CAMERA_ZOOM), "Game camera zoom must settle at its closer scale")
+	check(not get_viewport().get_visible_rect().intersects(creeper_screen_rect()), "Entire Creeper must be beyond the gameplay viewport")
 	var wildlife: Control = game.wetland.get_node("Wildlife")
 	var habitat := Vector2(0.4, 0.6)
 	var screen_anchor: Vector2 = wildlife.get_transform() * game.wetland._wildlife_point(habitat)
@@ -205,10 +217,29 @@ func _ready() -> void:
 	get_window().size = Vector2i(960, 540)
 	await settle(0.8)
 	await capture("11-small-window")
+	check(not get_viewport().get_visible_rect().intersects(creeper_screen_rect()), "Small-window gameplay must leave the entire Creeper outside")
 	check(game.end_turn_btn.get_global_rect().end.y <= get_viewport().get_visible_rect().size.y, "Small-window controls clipped")
 	get_window().size = Vector2i(1600, 900)
 	await settle(0.8)
 	await capture("12-large-window")
+	check(not get_viewport().get_visible_rect().intersects(creeper_screen_rect()), "Large-window gameplay must leave the entire Creeper outside")
+	# Returning to the menu reveals the same physical clearing as the camera retreats.
+	game._pause_game()
+	game._on_pause_exit()
+	game.wetland.creeper_mesh.visible = true
+	await settle(1.3)
+	await capture("13-return-to-menu")
+	for window_size in [Vector2i(960, 900), Vector2i(1920, 720)]:
+		get_window().size = window_size
+		await settle(0.4)
+		check(get_viewport().get_visible_rect().grow(-20).encloses(creeper_screen_rect()), "Menu must reveal the entire Creeper across aspect ratios")
+		game._on_continue_pressed()
+		await settle(1.0)
+		check(not get_viewport().get_visible_rect().intersects(creeper_screen_rect()), "Resuming must move the entire Creeper beyond the viewport")
+		game._pause_game()
+		game._on_pause_exit()
+		game.wetland.creeper_mesh.visible = true
+		await settle(1.3)
 	print("VISUAL_SMOKE: ", "PASS" if failures.is_empty() else "FAIL", " (", failures.size(), " failures)")
 	scene.queue_free()
 	await get_tree().process_frame

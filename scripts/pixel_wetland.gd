@@ -4,13 +4,15 @@ extends Control
 const LANDSCAPE := preload("res://assets/art/poyang-terrain-base.png")
 const LAND_COLOR := Color("829666")
 const MAP_ZOOM := 1.58
+const GAME_CAMERA_ZOOM := 0.9
 const VIEW_AZIMUTH := PI / 4.0
 const VIEW_PITCH := PI / 4.0
 const GROUND_SIZE := 100.0
 const BIRD_DISPLAY_SCALE := 0.65
 const RiverRoutes := preload("res://scripts/wetland_rivers.gd")
 const CREEPER_ART := preload("res://assets/creeper.png")
-const CREEPER_ANCHOR := Vector2(0.22, 0.27)
+# Peripheral grass: within the menu view, beyond the closer gameplay view.
+const CREEPER_ANCHOR := Vector2(0.5110534, -0.1960534)
 const HOUSE_ART := [
 	preload("res://assets/houses/house1.png"),
 	preload("res://assets/houses/house2.png"),
@@ -81,7 +83,7 @@ var backdrop: TextureRect
 var terrain_viewport: SubViewport
 var map_camera: Camera3D
 var creeper_mesh: MeshInstance3D
-var camera_zoom_factor := 1.0
+var camera_zoom_factor := GAME_CAMERA_ZOOM
 var camera_tween: Tween
 var water_material: ShaderMaterial
 var reduced_motion := false
@@ -203,6 +205,18 @@ func _build_terrain_viewport() -> void:
 	world.add_child(map_camera)
 	map_camera.look_at(Vector3.ZERO, Vector3.UP)
 	map_camera.current = true
+	var clearing := MeshInstance3D.new()
+	clearing.name = "CreeperClearing"
+	var clearing_plane := PlaneMesh.new()
+	clearing_plane.size = Vector2(30, 30)
+	clearing.mesh = clearing_plane
+	clearing.position = _ground_position(CREEPER_ANCHOR)
+	var clearing_material := StandardMaterial3D.new()
+	clearing_material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	clearing_material.albedo_color = LAND_COLOR
+	clearing.material_override = clearing_material
+	clearing.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	world.add_child(clearing)
 	# Keep the original face as a ground decal, viewed by the same 3D camera.
 	creeper_mesh = MeshInstance3D.new()
 	creeper_mesh.name = "CreeperEasterEgg"
@@ -244,10 +258,10 @@ func _layout_map() -> void:
 
 func set_menu_camera(far: bool, menu_zoom: float = 1.3) -> void:
 	if camera_tween and camera_tween.is_valid(): camera_tween.kill()
-	if far: _set_camera_zoom(1.0)
+	if far: _set_camera_zoom(GAME_CAMERA_ZOOM)
 	camera_tween = create_tween()
 	camera_tween.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
-	camera_tween.tween_method(_set_camera_zoom, camera_zoom_factor, menu_zoom if far else 1.0, 1.2 if far else 0.8)
+	camera_tween.tween_method(_set_camera_zoom, camera_zoom_factor, menu_zoom if far else GAME_CAMERA_ZOOM, 1.2 if far else 0.8)
 
 func _set_camera_zoom(value: float) -> void:
 	camera_zoom_factor = value
