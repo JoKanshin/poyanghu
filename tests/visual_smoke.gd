@@ -40,6 +40,12 @@ func _ready() -> void:
 	await close_popups()
 	await settle(1.0)
 	check(game.card_infos.size() > 0, "Starting a run must deal cards")
+	var camera: Camera3D = game.wetland.map_camera
+	check(camera.projection == Camera3D.PROJECTION_ORTHOGONAL, "Map must use a real orthographic 3D camera")
+	check(is_equal_approx(camera.position.x, camera.position.z), "Camera azimuth must be 45 degrees")
+	check(is_equal_approx(camera.position.y, Vector2(camera.position.x, camera.position.z).length()), "Camera pitch must be 45 degrees")
+	var marker := Vector2(0.4, 0.6)
+	check(game.wetland._point(marker).is_equal_approx(camera.unproject_position(game.wetland._ground_position(marker)).round()), "Habitat must match projected terrain")
 	check(game.wetland.house_sites.size() >= 12, "Village should spread around the lake")
 	for site in game.wetland.house_sites:
 		check(game.wetland._is_land(site) and game.wetland._near_water(site), "Cottage must be on near-shore land")
@@ -62,6 +68,12 @@ func _ready() -> void:
 	flying_bird["target"] = Vector2(0.35, 0.50)
 	game.wetland._process_birds(0.05)
 	check(absf(absf(float(flying_bird["angle"])) - PI) < 0.01, "Flying bird must face its destination")
+	check(game.wetland._bird_facing(flying_bird) == -1.0, "Bird flying screen-left must mirror horizontally")
+	for heading in [0.0, PI / 2.0, PI, -PI / 2.0]:
+		var center := Vector2(0.5, 0.5)
+		var screen_direction := camera.unproject_position(game.wetland._ground_position(center + Vector2.from_angle(heading) * 0.01)) - camera.unproject_position(game.wetland._ground_position(center))
+		var expected_facing := -1.0 if screen_direction.x < 0.0 else 1.0
+		check(game.wetland._bird_facing({"angle": heading}) == expected_facing, "Bird facing must follow projected motion")
 	for info in game.card_infos:
 		check(info.panel.size.is_equal_approx(Vector2(122, 165)), "Card footprint changed: " + str(info.panel.size))
 	check(game.end_turn_btn.get_global_rect().end.y <= get_viewport().get_visible_rect().size.y, "End turn button exceeds viewport")

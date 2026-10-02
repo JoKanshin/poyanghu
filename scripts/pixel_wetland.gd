@@ -1,9 +1,12 @@
 extends Control
-## North-up terrain map, with read-only projections of the live ecology state.
+## Orthographic 45-degree wetland view, with upright scenery and wildlife.
 ## All decorative placement is deterministic; never consume gameplay RNG.
 const LANDSCAPE := preload("res://assets/art/poyang-terrain-base.png")
 const LAND_COLOR := Color("829666")
 const MAP_ZOOM := 1.58
+const VIEW_AZIMUTH := PI / 4.0
+const VIEW_PITCH := PI / 4.0
+const GROUND_SIZE := 100.0
 const CREEPER_ART := preload("res://assets/creeper.png")
 const CREEPER_ANCHOR := Vector2(0.22, 0.27)
 const HOUSE_ART := [
@@ -66,6 +69,8 @@ var season := 0
 var elapsed := 0.0
 var clock_accum := 0.0
 var backdrop: TextureRect
+var terrain_viewport: SubViewport
+var map_camera: Camera3D
 var creeper_rect: TextureRect
 var water_material: ShaderMaterial
 var reduced_motion := false
@@ -105,7 +110,6 @@ func _ready() -> void:
 	add_child(land_margin)
 	backdrop = TextureRect.new()
 	backdrop.set_anchors_and_offsets_preset(Control.PRESET_TOP_LEFT)
-	backdrop.texture = LANDSCAPE
 	backdrop.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 	backdrop.stretch_mode = TextureRect.STRETCH_SCALE
 	backdrop.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -132,6 +136,8 @@ void fragment() {
 	# Share the same ecology and season tint across map land and empty margins.
 	land_margin.material = water_material
 	backdrop.material = water_material
+	_build_terrain_viewport()
+	backdrop.texture = terrain_viewport.get_texture()
 	add_child(backdrop)
 	_layout_map()
 	creeper_rect = TextureRect.new()
@@ -159,11 +165,49 @@ void fragment() {
 	resized.connect(func(): wildlife.queue_redraw())
 	sync_state()
 
+func _build_terrain_viewport() -> void:
+	terrain_viewport = SubViewport.new()
+	terrain_viewport.name = "TerrainViewport"
+	terrain_viewport.own_world_3d = true
+	terrain_viewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS
+	add_child(terrain_viewport)
+	var world := Node3D.new()
+	terrain_viewport.add_child(world)
+	var environment := WorldEnvironment.new()
+	environment.environment = Environment.new()
+	environment.environment.background_mode = Environment.BG_COLOR
+	environment.environment.background_color = LAND_COLOR
+	world.add_child(environment)
+	var ground := MeshInstance3D.new()
+	ground.name = "WetlandGround"
+	var plane := PlaneMesh.new()
+	plane.size = Vector2.ONE * GROUND_SIZE
+	ground.mesh = plane
+	var material := StandardMaterial3D.new()
+	material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	material.texture_filter = BaseMaterial3D.TEXTURE_FILTER_NEAREST
+	material.albedo_texture = LANDSCAPE
+	ground.material_override = material
+	world.add_child(ground)
+	map_camera = Camera3D.new()
+	map_camera.name = "WetlandCamera"
+	map_camera.projection = Camera3D.PROJECTION_ORTHOGONAL
+	map_camera.keep_aspect = Camera3D.KEEP_HEIGHT
+	map_camera.position = Vector3(sin(VIEW_AZIMUTH) * cos(VIEW_PITCH),
+		sin(VIEW_PITCH), cos(VIEW_AZIMUTH) * cos(VIEW_PITCH)) * 150.0
+	world.add_child(map_camera)
+	map_camera.look_at(Vector3.ZERO, Vector3.UP)
+	map_camera.current = true
+
 func _layout_map() -> void:
-	var scale := minf(size.x / LANDSCAPE.get_width(), size.y / LANDSCAPE.get_height()) * MAP_ZOOM
-	var extent := Vector2(LANDSCAPE.get_size()) * scale
-	backdrop.position = ((size - extent) * 0.5).round()
-	backdrop.size = extent.round()
+	var viewport_size := Vector2i(maxi(1, roundi(size.x)), maxi(1, roundi(size.y)))
+	terrain_viewport.size = viewport_size
+	var aspect := float(viewport_size.x) / float(viewport_size.y)
+	var ground_width := GROUND_SIZE * (sin(VIEW_AZIMUTH) + cos(VIEW_AZIMUTH))
+	var ground_height := ground_width * sin(VIEW_PITCH)
+	map_camera.size = maxf(ground_height, ground_width / aspect) / MAP_ZOOM
+	backdrop.position = Vector2.ZERO
+	backdrop.size = Vector2(viewport_size)
 	if creeper_rect:
 		creeper_rect.size = Vector2(62, 38)
 		creeper_rect.position = _point(CREEPER_ANCHOR) - creeper_rect.size * 0.5
@@ -202,8 +246,18 @@ func _process(delta: float) -> void:
 	get_node("Wildlife").queue_redraw()
 
 func _point(uv: Vector2) -> Vector2:
-	# Keep habitat markers aligned with the enlarged terrain at every window size.
-	return (backdrop.position + uv * backdrop.size).round()
+	# Camera projection keeps upright screen sprites attached to the 3D ground.
+	return map_camera.unproject_position(_ground_position(uv)).round()
+
+func _ground_position(uv: Vector2) -> Vector3:
+	return Vector3((uv.x - 0.5) * GROUND_SIZE, 0.0, (uv.y - 0.5) * GROUND_SIZE)
+
+func _bird_facing(bird: Dictionary) -> float:
+	# Heading is stored in map coordinates; facing must follow screen motion.
+	var direction := Vector2.from_angle(float(bird["angle"]))
+	var center := Vector2(0.5, 0.5)
+	var screen_direction := map_camera.unproject_position(_ground_position(center + direction * 0.01)) - map_camera.unproject_position(_ground_position(center))
+	return -1.0 if screen_direction.x < -0.0001 else 1.0
 
 func _terrain_color(uv: Vector2) -> Color:
 	var x := clampi(int(uv.x * terrain_image.get_width()), 0, terrain_image.get_width() - 1)
@@ -498,7 +552,8 @@ func _draw_bird_actor(c: Control, bird: Dictionary) -> void:
 	var extent := Vector2(34, 34) if sprite_index != 2 else Vector2(39, 39)
 	if state == 3 or state == 5:
 		extent *= 1.2
-	# Each sprite faces right; rotate the actual frame with its travel vector.
-	c.draw_set_transform(p, float(bird["angle"]))
-	c.draw_texture_rect_region(BIRD_ACTIONS, Rect2(-extent * 0.5, extent), Rect2(frame * 32, sprite_index * 32, 32, 32))
+	# Billboard sprites remain upright: only mirror horizontally, never rotate.
+	# Anchor the feet to the habitat point instead of the middle of the body.
+	c.draw_set_transform(p, 0.0, Vector2(_bird_facing(bird), 1.0))
+	c.draw_texture_rect_region(BIRD_ACTIONS, Rect2(-extent * Vector2(0.5, 0.875), extent), Rect2(frame * 32, sprite_index * 32, 32, 32))
 	c.draw_set_transform(Vector2.ZERO)
