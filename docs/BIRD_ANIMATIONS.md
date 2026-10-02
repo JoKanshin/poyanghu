@@ -26,6 +26,8 @@
 
 原来的 `bird-actions.png` 与其生成脚本保留供对照，新图集由 imagegen 生成，不由 `build_ecology_sprites.py` 覆盖。完整生成提示保存在 `bird-generation-prompts.json`。
 
+游戏内鸟类显示尺寸统一乘以 0.65：普通鸟约 30×30，天鹅约 32.5×32.5 逻辑像素。菜单拉远时再随摄像机一起缩小，脚部位置始终跟随地面投影。
+
 参考：
 
 - https://smolware.itch.io/pixel-geese-anim-spritesheet

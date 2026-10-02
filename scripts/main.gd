@@ -360,7 +360,6 @@ func _ready() -> void:
 	_build_ui()
 	GameState.metrics_changed.connect(_update_hud)
 	GameState.metrics_changed.connect(_update_3d)
-	GameState.metrics_changed.connect(_sync_settlement_visual)
 	GameState.funds_changed.connect(_update_hud)
 	GameState.event_triggered.connect(_on_event)
 	GameState.crisis_warned.connect(_on_crisis_warn)
@@ -383,6 +382,9 @@ const MENU_CAM_ZOOM := 1.7
 
 ## 根据窗口宽高比调整正交相机尺寸：让沙盘占满屏幕主体，不因宽屏被推远
 func _fit_camera_to_window() -> void:
+	if wetland:
+		wetland._layout_map()
+		return
 	var cam := get_node("../Camera3D") as Camera3D
 	if cam == null:
 		return
@@ -406,6 +408,9 @@ func _cam_base_size() -> float:
 ## 进入游戏时收回来。
 func _set_menu_camera(far: bool) -> void:
 	menu_camera_far = far
+	if wetland:
+		wetland.set_menu_camera(far, MENU_CAM_ZOOM)
+		return
 	var cam := get_node_or_null("../Camera3D") as Camera3D
 	if cam == null:
 		return
@@ -1140,6 +1145,8 @@ func _build_mudflats(parent: Node3D) -> void:
 func _process(delta: float) -> void:
 	# 指标悬停小窗：暂停/弹层时它自己会收起来，所以放在 _paused 提前返回之前
 	_update_metric_tip()
+	if wetland:
+		wetland.set_process(not _paused)
 	if _paused:
 		return
 	# 开场 PPT 计时：不按键则 8 秒自动过一张
@@ -1147,8 +1154,6 @@ func _process(delta: float) -> void:
 		_intro_elapsed += delta
 		if _intro_elapsed >= INTRO_SLIDE_SEC:
 			_advance_intro()
-	if wetland:
-		wetland.set_process(not _paused)
 	_update_card_hover(delta)
 	_process_deck_gyro(delta)
 	_update_sort_cooldown()
@@ -1656,13 +1661,6 @@ func _update_3d() -> void:
 	# Keep the existing signal and score-animation boundary; presentation is read-only.
 	if not _score_animating and wetland:
 		wetland.sync_state()
-
-
-func _sync_settlement_visual() -> void:
-	# House construction or retreat starts as soon as a played card changes
-	# settlement, even while the score reveal keeps other scenery frozen.
-	if wetland:
-		wetland.sync_settlement_targets()
 
 
 # ==================== UI ====================

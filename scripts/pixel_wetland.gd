@@ -7,6 +7,7 @@ const MAP_ZOOM := 1.58
 const VIEW_AZIMUTH := PI / 4.0
 const VIEW_PITCH := PI / 4.0
 const GROUND_SIZE := 100.0
+const BIRD_DISPLAY_SCALE := 0.65
 const CREEPER_ART := preload("res://assets/creeper.png")
 const CREEPER_ANCHOR := Vector2(0.22, 0.27)
 const HOUSE_ART := [
@@ -78,7 +79,9 @@ var clock_accum := 0.0
 var backdrop: TextureRect
 var terrain_viewport: SubViewport
 var map_camera: Camera3D
-var creeper_rect: TextureRect
+var creeper_mesh: MeshInstance3D
+var camera_zoom_factor := 1.0
+var camera_tween: Tween
 var water_material: ShaderMaterial
 var reduced_motion := false
 var terrain_image: Image
@@ -147,20 +150,6 @@ void fragment() {
 	backdrop.texture = terrain_viewport.get_texture()
 	add_child(backdrop)
 	_layout_map()
-	creeper_rect = TextureRect.new()
-	creeper_rect.texture = CREEPER_ART
-	creeper_rect.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-	creeper_rect.stretch_mode = TextureRect.STRETCH_SCALE
-	creeper_rect.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
-	creeper_rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	creeper_rect.visible = false
-	var creeper_shader := Shader.new()
-	creeper_shader.code = "shader_type canvas_item; void fragment() { vec4 pixel = texture(TEXTURE, UV); if (pixel.g > 0.63 && pixel.g > pixel.r * 1.08 && pixel.r > 0.48) discard; COLOR = pixel; }"
-	var creeper_material := ShaderMaterial.new()
-	creeper_material.shader = creeper_shader
-	creeper_rect.material = creeper_material
-	add_child(creeper_rect)
-	_layout_map()
 	# Wildlife stays separate from the terrain-only texture.
 	var wildlife := Control.new()
 	wildlife.name = "Wildlife"
@@ -205,6 +194,29 @@ func _build_terrain_viewport() -> void:
 	world.add_child(map_camera)
 	map_camera.look_at(Vector3.ZERO, Vector3.UP)
 	map_camera.current = true
+	# Keep the original face as a ground decal, viewed by the same 3D camera.
+	creeper_mesh = MeshInstance3D.new()
+	creeper_mesh.name = "CreeperEasterEgg"
+	var creeper_plane := PlaneMesh.new()
+	creeper_plane.size = Vector2(8.0, 8.0 * CREEPER_ART.get_height() / CREEPER_ART.get_width())
+	creeper_mesh.mesh = creeper_plane
+	creeper_mesh.position = _ground_position(CREEPER_ANCHOR) + Vector3(0, 0.03, 0)
+	var creeper_shader := Shader.new()
+	creeper_shader.code = """shader_type spatial;
+render_mode unshaded, cull_disabled;
+uniform sampler2D face_texture : source_color, filter_nearest;
+void fragment() {
+ vec4 pixel = texture(face_texture, UV);
+ if (pixel.a < 0.5 || (pixel.g > 0.63 && pixel.g > pixel.r * 1.08 && pixel.r > 0.48)) discard;
+ ALBEDO = pixel.rgb;
+}"""
+	var creeper_material := ShaderMaterial.new()
+	creeper_material.shader = creeper_shader
+	creeper_material.set_shader_parameter("face_texture", CREEPER_ART)
+	creeper_mesh.material_override = creeper_material
+	creeper_mesh.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	creeper_mesh.visible = false
+	world.add_child(creeper_mesh)
 
 func _layout_map() -> void:
 	var viewport_size := Vector2i(maxi(1, roundi(size.x)), maxi(1, roundi(size.y)))
@@ -212,16 +224,29 @@ func _layout_map() -> void:
 	var aspect := float(viewport_size.x) / float(viewport_size.y)
 	var ground_width := GROUND_SIZE * (sin(VIEW_AZIMUTH) + cos(VIEW_AZIMUTH))
 	var ground_height := ground_width * sin(VIEW_PITCH)
-	map_camera.size = maxf(ground_height, ground_width / aspect) / MAP_ZOOM
+	map_camera.size = maxf(ground_height, ground_width / aspect) / MAP_ZOOM * camera_zoom_factor
 	backdrop.position = Vector2.ZERO
 	backdrop.size = Vector2(viewport_size)
-	if creeper_rect:
-		creeper_rect.size = Vector2(62, 38)
-		creeper_rect.position = _point(CREEPER_ANCHOR) - creeper_rect.size * 0.5
+	var wildlife := get_node_or_null("Wildlife") as Control
+	if wildlife:
+		wildlife.scale = Vector2.ONE / camera_zoom_factor
+		wildlife.position = size * 0.5 * (1.0 - 1.0 / camera_zoom_factor)
+		wildlife.queue_redraw()
+
+func set_menu_camera(far: bool, menu_zoom: float = 1.7) -> void:
+	if camera_tween and camera_tween.is_valid(): camera_tween.kill()
+	if far: _set_camera_zoom(1.0)
+	camera_tween = create_tween()
+	camera_tween.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+	camera_tween.tween_method(_set_camera_zoom, camera_zoom_factor, menu_zoom if far else 1.0, 1.2 if far else 0.8)
+
+func _set_camera_zoom(value: float) -> void:
+	camera_zoom_factor = value
+	_layout_map()
 
 func roll_creeper_visibility() -> void:
-	if creeper_rect:
-		creeper_rect.visible = easter_rng.randf() < 0.1
+	if creeper_mesh:
+		creeper_mesh.visible = easter_rng.randf() < 0.1
 
 func sync_state() -> void:
 	metrics = GameState.metrics.duplicate()
@@ -255,6 +280,12 @@ func _process(delta: float) -> void:
 func _point(uv: Vector2) -> Vector2:
 	# Camera projection keeps upright screen sprites attached to the 3D ground.
 	return map_camera.unproject_position(_ground_position(uv)).round()
+
+func _wildlife_point(uv: Vector2) -> Vector2:
+	# Undo the overlay's camera zoom for local coordinates; its scale then makes
+	# every sprite and ripple zoom in sync with the ground and Creeper decal.
+	var wildlife := get_node("Wildlife") as Control
+	return (wildlife.get_transform().affine_inverse() * _point(uv)).round()
 
 func _ground_position(uv: Vector2) -> Vector3:
 	return Vector3((uv.x - 0.5) * GROUND_SIZE, 0.0, (uv.y - 0.5) * GROUND_SIZE)
@@ -327,7 +358,8 @@ func _make_house_sites() -> void:
 
 func sync_settlement_targets() -> void:
 	settlement = GameState.settlement
-	house_target_count = clampi(roundi(settlement / 100.0 * float(house_sites.size())), 0, house_sites.size())
+	# Preserve the old settlement-to-village rule; the extra art anchors stay reeds.
+	house_target_count = clampi(roundi(settlement / 100.0 * 7.0), 0, mini(7, house_sites.size()))
 
 func _accept_habitat(kind: String, uv: Vector2) -> bool:
 	match kind:
@@ -471,14 +503,14 @@ func _draw_wildlife(c: Control) -> void:
 				clear = false
 				break
 		if clear and _is_land(uv):
-			_draw_tree(c, _point(uv), 0.78)
+			_draw_tree(c, _wildlife_point(uv), 0.78)
 	# Ripples occupy open water, keeping the HUD readable.
 	for i in 28:
-		var p := _point(WATER_ANCHORS[i % WATER_ANCHORS.size()])
+		var p := _wildlife_point(WATER_ANCHORS[i % WATER_ANCHORS.size()])
 		var alpha := 0.10 + 0.13 * (sin(elapsed * 1.5 + i * 2.0) + 1.0)
 		c.draw_rect(Rect2(p, Vector2(8 + i % 4 * 3, 2)), Color(0.77, 0.94, 0.83, alpha))
-	for i in clampi(int(metrics.get("fish", 50)) / 9, 0, 12):
-		var p := _point(WATER_ANCHORS[i % WATER_ANCHORS.size()])
+	for i in clampi(int(float(metrics.get("fish", 50)) / 12.0), 0, 12):
+		var p := _wildlife_point(WATER_ANCHORS[i % WATER_ANCHORS.size()])
 		p.x += round(sin(elapsed * 0.35 + i) * 4)
 		_draw_sprite(c, p, 3, Vector2(15, 24), Color(0.6, 0.85, 0.8, 0.45))
 	# The old scene used plant populations / 7. Keep those visual thresholds and
@@ -487,7 +519,7 @@ func _draw_wildlife(c: Control) -> void:
 		var sites: Array = plant_sites.get(pid, [])
 		var count := mini(int(float(plants.get(pid, 0)) / 7.0), sites.size())
 		for i in count:
-			var p := _point(sites[i])
+			var p := _wildlife_point(sites[i])
 			match str(pid):
 				"lian":
 					c.draw_texture_rect(bird_sprites[5], Rect2(p - Vector2(19, 21), Vector2(38, 38)), false)
@@ -501,21 +533,21 @@ func _draw_wildlife(c: Control) -> void:
 				_:
 					_draw_marsh(c, p, str(pid))
 	for i in islands:
-		var p := _point(ISLAND_ANCHORS[i % ISLAND_ANCHORS.size()])
+		var p := _wildlife_point(ISLAND_ANCHORS[i % ISLAND_ANCHORS.size()])
 		p.y += round(sin(elapsed + i) * 1.0)
 		c.draw_texture_rect(FLOATING_ISLAND, Rect2((p - Vector2(24, 31)).round(), Vector2(48, 48)), false)
 	_draw_houses(c)
 	for bird in bird_agents:
 		if int(bird["slot"]) < _bird_count(str(bird["sid"])):
 			_draw_bird_actor(c, bird)
-	var boat_pos := _point(BOAT_ANCHOR)
+	var boat_pos := _wildlife_point(BOAT_ANCHOR)
 	boat_pos.x += round(sin(elapsed * 0.06) * 4)
 	_draw_sprite(c, boat_pos, 7, Vector2(60, 62))
 
 func _draw_houses(c: Control) -> void:
 	var lit := roundi(float(metrics.get("community", 50)) / 100.0 * float(house_target_count))
 	for i in house_sites.size():
-		var p := _point(house_sites[i])
+		var p := _wildlife_point(house_sites[i])
 		var phase: float = house_progress[i]
 		if phase <= 0.01:
 			_draw_sprite(c, p, 4, Vector2(30, 40))
@@ -570,13 +602,13 @@ func _bird_frame_region(species: int, frame: int) -> Rect2:
 func _draw_bird_actor(c: Control, bird: Dictionary) -> void:
 	var sprite_index: int = SPECIES_ART.get(str(bird["sid"]), 0)
 	var state: int = bird["state"]
-	var p := _point(bird["pos"])
+	var p := _wildlife_point(bird["pos"])
 	var frame := _bird_animation_frame(bird)
 	if state == 3 or state == 5:
 		p.y -= 6.0 + round(sin(elapsed * 13.0) * 2.0)
 	elif state == 4:
 		p.y -= 5.0 + round(sin(elapsed * 4.0) * 1.0)
-	var extent := Vector2(46, 46) if sprite_index != 2 else Vector2(50, 50)
+	var extent := (Vector2(46, 46) if sprite_index != 2 else Vector2(50, 50)) * BIRD_DISPLAY_SCALE
 	if state == 3 or state == 5:
 		extent *= 1.2
 	# Billboard sprites remain upright: only mirror horizontally, never rotate.

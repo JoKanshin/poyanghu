@@ -30,16 +30,37 @@ func _ready() -> void:
 	game = scene.get_node("Game")
 	await settle(0.3)
 	if game._intro_playing: game._finish_intro()
-	await settle()
+	await settle(1.3)
+	var menu_camera_size: float = game.wetland.map_camera.size
+	check(is_equal_approx(game.wetland.camera_zoom_factor, game.MENU_CAM_ZOOM), "Menu must pull the active map camera back")
+	game.wetland.easter_rng.seed = 20261002
+	var saw_creeper := false
+	var saw_no_creeper := false
+	for i in 100:
+		game._roll_creeper_visibility()
+		saw_creeper = saw_creeper or game.wetland.creeper_mesh.visible
+		saw_no_creeper = saw_no_creeper or not game.wetland.creeper_mesh.visible
+	check(saw_creeper and saw_no_creeper, "Creeper probability must allow both outcomes")
+	game.wetland.creeper_mesh.visible = true
+	check(game.wetland.creeper_mesh.is_visible_in_tree(), "Creeper must be attached to the rendered 3D world")
+	check(game.wetland._is_land(game.wetland.CREEPER_ANCHOR), "Creeper decal must remain on land")
 	await capture("01-menu")
 	game._on_title_start()
 	await capture("02-difficulty")
 	game._on_difficulty_pick(GameState.Difficulty.EASY)
 	game.seed_input.text = "20260930"
 	game._on_start_pressed()
+	await settle(0.3)
+	check(game.wetland.map_camera.size < menu_camera_size and game.wetland.camera_zoom_factor > 1.0, "Entering a run must animate camera zoom")
+	check(game.wetland.creeper_mesh.visible, "Starting a run must preserve the menu's Creeper roll")
 	await close_popups()
 	await settle(1.0)
 	check(game.card_infos.size() > 0, "Starting a run must deal cards")
+	check(is_equal_approx(game.wetland.camera_zoom_factor, 1.0), "Game camera zoom must settle at normal scale")
+	var wildlife: Control = game.wetland.get_node("Wildlife")
+	var habitat := Vector2(0.4, 0.6)
+	var screen_anchor: Vector2 = wildlife.get_transform() * game.wetland._wildlife_point(habitat)
+	check(screen_anchor.distance_to(game.wetland._point(habitat)) < 2.0, "Scenery must track the camera projection")
 	for species in 5:
 		var bird_sheet: Texture2D = game.wetland.BIRD_ACTIONS[species]
 		check(bird_sheet.get_width() >= 128 and bird_sheet.get_height() >= 128, "Bird atlas must contain all sixteen poses")
@@ -66,14 +87,26 @@ func _ready() -> void:
 	GameState.settlement = 100.0
 	GameState.metrics_changed.emit()
 	await settle(0.25)
-	check(game.wetland.house_target_count == game.wetland.house_sites.size(), "Expansion must target every cottage")
-	check(game.wetland.house_progress[-1] > 0.0, "Expansion must animate construction")
+	check(game.wetland.house_target_count == 7, "Settlement must keep the old maximum of seven cottages")
+	check(game.wetland.house_progress[6] > 0.0, "Expansion must animate construction")
+	game._score_animating = true
+	GameState.settlement = 0.0
+	GameState.metrics_changed.emit()
+	check(game.wetland.house_target_count == 7, "Scenery must stay frozen during score reveal")
+	game._score_animating = false
+	game._update_3d()
 	GameState.settlement = 0.0
 	GameState.metrics_changed.emit()
 	await settle(0.25)
 	check(game.wetland.house_progress[0] < 1.0, "Wetland recovery must animate cottage removal")
 	GameState.settlement = original_settlement
 	GameState.metrics_changed.emit()
+	game._pause_game()
+	await settle(0.1)
+	var paused_elapsed: float = game.wetland.elapsed
+	await settle(0.2)
+	check(is_equal_approx(paused_elapsed, game.wetland.elapsed), "Pause must freeze scenery animation")
+	game._resume_game()
 	var flying_bird: Dictionary = game.wetland.bird_agents[0]
 	flying_bird["state"] = 3
 	flying_bird["pos"] = Vector2(0.42, 0.50)
