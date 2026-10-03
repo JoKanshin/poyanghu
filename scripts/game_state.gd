@@ -868,6 +868,7 @@ const KNOWLEDGE_CARDS := {
 		"threat": "水体富营养化可能导致种群大面积腐烂死亡。",
 		"management": "补种前应先检测水质，控制总磷、总氮浓度。",
 		"condition": "vegetation < 62",
+		"tags": ["生态修复", "水体治理"],
 	},
 	"bird_baihe": {
 		"name": "白鹤", "category": "鸟类", "trigger": "observation",
@@ -876,6 +877,7 @@ const KNOWLEDGE_CARDS := {
 		"threat": "沉水植被退化导致食物不足，转向农田觅食。",
 		"management": "保护碟形湖与草洲，营建候鸟食堂。",
 		"condition": "birds < 62",
+		"tags": ["栖息地营造", "应急救护"],
 	},
 	"bird_xiaotiane": {
 		"name": "小天鹅", "category": "鸟类", "trigger": "observation",
@@ -884,6 +886,7 @@ const KNOWLEDGE_CARDS := {
 		"threat": "水位异常波动会让浅水觅食地消失，种群随之下滑。",
 		"management": "碟形湖控水应维持适宜浅水深度，保障小天鹅觅食地。",
 		"condition": "water_level < 58",
+		"tags": ["水工调控", "补水调度"],
 	},
 	"bird_dongfang": {
 		"name": "东方白鹳", "category": "鸟类", "trigger": "observation",
@@ -892,6 +895,7 @@ const KNOWLEDGE_CARDS := {
 		"threat": "鱼类资源下降与栖息地破碎化。",
 		"management": "禁渔与执法巡逻是恢复鱼类资源的关键。",
 		"condition": "fish < 62",
+		"tags": ["执法巡护", "增殖放流"],
 	},
 	"mech_water_quality": {
 		"name": "水质与苦草", "category": "机制", "trigger": "decision",
@@ -900,6 +904,7 @@ const KNOWLEDGE_CARDS := {
 		"threat": "忽视水质监测，病害可能滞后爆发。",
 		"management": "补种与水质治理应同步推进。",
 		"condition": "vegetation < 45",
+		"tags": ["水体治理", "科研监测"],
 	},
 	"mech_fushouluo": {
 		"name": "福寿螺综合防控", "category": "外来物种", "trigger": "decision",
@@ -908,6 +913,7 @@ const KNOWLEDGE_CARDS := {
 		"threat": "化学灭杀可能误伤本土螺类。",
 		"management": "应优先农业防治与生态调控，科学用药为最后手段。",
 		"condition": "vegetation < 40",
+		"tags": ["物种防控"],
 	},
 	"cons_disease": {
 		"name": "苦草病害的因果", "category": "案例", "trigger": "consequence",
@@ -916,6 +922,7 @@ const KNOWLEDGE_CARDS := {
 		"threat": "后果延迟 2~3 回合，容易被忽略。",
 		"management": "长期监测水质是预防的关键。",
 		"condition": "water_quality < 35",
+		"tags": ["病害防控", "水体治理"],
 	},
 	"cons_compensate": {
 		"name": "野生动物致害补偿", "category": "管理策略", "trigger": "consequence",
@@ -924,6 +931,7 @@ const KNOWLEDGE_CARDS := {
 		"threat": "补偿缺位可能触发驱鸟等对抗行为。",
 		"management": "走合规补偿渠道，配合转产扶持。",
 		"condition": "community < 40",
+		"tags": ["社区补偿", "产业转产"],
 	},
 }
 
@@ -1136,6 +1144,12 @@ var effects_queue: Array = []       # 延迟效果 {metric, delta, remaining, so
 var used_action_ids: Array = []     # 本回合已执行的卡
 var knowledge_unlocked: Array = []
 var pending_knowledge: Array = []   # 待弹出的知识卡 id
+## 知识卡随机赠送用**独立**随机源：不消耗对局主随机流，
+## 老种子下的对局走向不会被这次改动带偏（同种子仍可复现，只是多了一条支线）。
+var _knowledge_rng := RandomNumberGenerator.new()
+## 上一次弹出知识卡是在第几回合（-99 = 本局还没出过）——
+## 用来保证「不连续两回合都出」，见 KNOWLEDGE_MIN_GAP_TURNS。
+var knowledge_last_turn: int = -99
 var log_messages: Array = []        # 因果提示
 # ==================== 算分流水账 ====================
 # 每笔指标增减的归因记录，供主场景播「小丑牌风算分动画」。纯只读副产品，不参与任何判定。
@@ -1279,6 +1293,7 @@ func reset_game() -> void:
 	used_action_ids = []
 	knowledge_unlocked = []
 	pending_knowledge = []
+	knowledge_last_turn = -99
 	log_messages = []
 	score_ledger = []
 	game_over = false
@@ -1305,6 +1320,8 @@ func reset_game() -> void:
 		randomize()
 		run_seed = randi()
 	seed(run_seed)
+	# 知识卡随机赠送的独立随机流：由本局种子派生，但与主随机流错开
+	_knowledge_rng.seed = run_seed * 2654435761 + 0x5EED
 	# 本局天赋：随种子随机附赠 0~3 条词条。必须在 _roll_starting_metrics() 之前 ——
 	# 开局指标要吃「开局 +N」这类词条。见 版本更新0.0.8.md。
 	Talents.roll_for_run(run_seed, difficulty)
@@ -2330,14 +2347,97 @@ func metrics_below_threshold() -> Array:
 	return out
 
 
-## 检查知识卡触发条件，压入待弹出队列
+## 知识卡的两条节拍规则（2026-10-03 反馈）——
+##   ① 一回合最多出一张：原先「条件同时满足几张就排队弹几张」会一回合连弹；
+##   ② 不连续两回合都出：出了卡的下一回合必定安静。
+const KNOWLEDGE_MIN_GAP_TURNS := 1
+
+## 知识卡的标签权重：本回合打出的行动卡里出现同名标签，这张卡就更容易被抽中。
+## 与「危机 - 对策」同一套标签词表（见 ACTION_CARDS 的 tags / CRISES 的 needs）。
+## 命中一个标签乘一刀 —— 命中越多越容易出。
+const KNOWLEDGE_TAG_BOOST := 3.0
+
+## 每回合末：除了「指标跌破条件」触发的，还有这么大概率**随机**送一张还没解锁的知识卡。
+## 为什么需要它：现有 8 张卡的条件全是 `指标 < 阈值` —— 也就是**玩崩了才会触发**，
+## 认真治理的玩家反而一张都收不到。加这条随机线，图鉴在正常对局里才收得动。
+## 0.0 = 关掉随机赠送（只剩条件触发）。
+const KNOWLEDGE_RANDOM_CHANCE := 0.25
+
+
+## 回合末的知识卡检查 —— **每回合最多挑一张**，压入待弹出队列。
+##
+## 优先级：
+##   ① 节拍闸门：上一回合刚出过 → 整回合安静（不掷、不触发）；
+##   ② 条件命中的卡优先（可能同时命中好几张，但**只挑一张**）；
+##   ③ 都没命中时，走那条随机线（概率见 KNOWLEDGE_RANDOM_CHANCE）。
+## ②③ 两步都用「本回合打过的牌」的标签做权重：出什么类型的牌，就更容易出什么样的知识卡。
 func _check_knowledge_triggers() -> void:
+	if knowledge_last_turn >= turn - KNOWLEDGE_MIN_GAP_TURNS:
+		return
+
+	var candidates: Array = []
 	for card_id in KNOWLEDGE_CARDS:
-		if card_id in knowledge_unlocked:
-			continue
+		if not (card_id in knowledge_unlocked):
+			candidates.append(card_id)
+	if candidates.is_empty():
+		return
+
+	# 本回合打过的行动卡带的标签 —— 决定「哪张更容易被抽中」
+	var turn_tags := _knowledge_turn_tags()
+
+	var hit: Array = []
+	for card_id in candidates:
 		if _eval_condition(KNOWLEDGE_CARDS[card_id]["condition"]):
-			knowledge_unlocked.append(card_id)
-			pending_knowledge.append(card_id)
+			hit.append(card_id)
+
+	var pick := ""
+	if not hit.is_empty():
+		# 条件命中优先，但一次只出一张：同时踩线时，与本回合出牌同标签的那张更容易被挑中
+		pick = _pick_knowledge(hit, turn_tags)
+	elif KNOWLEDGE_RANDOM_CHANCE > 0.0 and _knowledge_rng.randf() < KNOWLEDGE_RANDOM_CHANCE:
+		pick = _pick_knowledge(candidates, turn_tags)
+
+	if pick == "":
+		return
+	knowledge_unlocked.append(pick)
+	pending_knowledge.append(pick)
+	knowledge_last_turn = turn
+
+
+## 本回合打过的行动卡带的所有标签（去重）
+func _knowledge_turn_tags() -> Dictionary:
+	var out := {}
+	for cid in used_action_ids:
+		for c in ACTION_CARDS:
+			if str(c["id"]) == str(cid):
+				for t in c.get("tags", []):
+					out[str(t)] = true
+				break
+	return out
+
+
+## 按权重从候选里抽一张：每命中一个「本回合打过的标签」就把权重乘一刀
+## （KNOWLEDGE_TAG_BOOST）。命中越多越容易出，全不命中就是等概率。
+func _pick_knowledge(candidates: Array, turn_tags: Dictionary) -> String:
+	if candidates.is_empty():
+		return ""
+	var weights: Array = []
+	var total := 0.0
+	for card_id in candidates:
+		var w := 1.0
+		for t in KNOWLEDGE_CARDS[card_id].get("tags", []):
+			if turn_tags.has(str(t)):
+				w *= KNOWLEDGE_TAG_BOOST
+		weights.append(w)
+		total += w
+	if total <= 0.0:
+		return ""
+	var roll := _knowledge_rng.randf() * total
+	for i in candidates.size():
+		roll -= float(weights[i])
+		if roll <= 0.0:
+			return str(candidates[i])
+	return str(candidates[candidates.size() - 1])
 
 
 func pop_pending_knowledge() -> String:
