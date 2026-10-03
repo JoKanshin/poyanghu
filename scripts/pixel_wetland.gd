@@ -39,11 +39,13 @@ const SHADOWS := {
 ## 月牙"逐栋调"的地方：每张贴图一个椭圆半径（76px 方框里的像素单位）。
 ## 四张房子外形差得远（高矮、宽窄、脚点都不同），共用一条公式必然要么矮房露多了像浮空、
 ## 要么高楼露少了看着别扭。数值：前伸深度 / 房子视觉高 ≈ 19% / 20% / 23% / 24%。
-const HOUSE_SHADOW_RADIUS := [32.0, 33.0, 24.0, 26.0]
-## 影子中心相对房子视觉脚点再**往下推**多少像素。0 = 正好一半被房子挡住、一半露在房前；
-## 调大 = 影子整体前移、露得更多。四张贴图的脚点高低差很多（house3/4 的视觉底边甚至高于落点），
-## 统一往下推一点，才不会出现"矮房的影子全压在房子底下"。
-const SHADOW_FRONT_LIFT := 4.0
+## 逐栋调：椭圆半径 + 影子中心相对房子视觉脚点的下推量（都是 76px 方框里的像素单位）。
+## 高楼（house1/2，视觉高 66/64）—— 房子本身高、底边窄，影子要**多藏进房子下面**：
+##   半径收一点、下推量给 0（中心正好压在脚点上，只露前半）。
+## 矮房（house3/4，视觉高 41/42）—— 房子矮，影子露出来才好看：
+##   半径放大一圈、再往前推 6px，露出的前半更完整。
+const HOUSE_SHADOW_RADIUS := [30.0, 31.0, 34.0, 36.0]
+const HOUSE_SHADOW_FOOT := [0.0, 0.0, 6.0, 6.0]
 ## 空地（只有一株芦苇标记）的接触阴影：草本植物，给小一号的。
 const PLOT_SHADOW_RADIUS := 15.0
 const PLOT_SHADOW_FOOT := 3.0
@@ -889,15 +891,21 @@ func _px_to_uv(px: float) -> float:
 		return 0.0
 	return px / px_per_uv
 
+## 影子的顶点不能走 _wildlife_point —— 那函数里的两次 round() 是为了让贴图/物件像素对齐，
+## 拿来连多边形会把每个顶点都吸到整数格，半径一大就显出锯齿和棱角（看起来"崩"）。这里保留浮点。
+func _shadow_point(uv: Vector2) -> Vector2:
+	var wildlife := get_node("Wildlife") as Control
+	return wildlife.get_transform().affine_inverse() * map_camera.unproject_position(_ground_position(uv))
+
 ## 立着的东西要在地面上留下压扁的影子，"立"才读得出来。
-## 正交 45° 相机下，地面上的圆投影到屏幕是个斜着的椭圆（长轴方向由相机方位角决定），
+## 正交相机下，地面上的圆投影到屏幕是个椭圆（长轴方向由相机方位角决定），
 ## 所以不写死屏幕轴向 —— 把一圈地图坐标投影出来连成多边形，方位角 / 俯角 / 缩放全都自动对上。
-func _shadow_polygon(uv: Vector2, radius_uv: float, segments: int = 20) -> PackedVector2Array:
+func _shadow_polygon(uv: Vector2, radius_uv: float, segments: int = 40) -> PackedVector2Array:
 	var pts := PackedVector2Array()
 	for k in segments:
 		var a := TAU * float(k) / float(segments)
 		# 在地面平面上先按 SHADOW_FLATTEN 压扁，交给相机投影后才是最终形状。
-		pts.append(_wildlife_point(uv + Vector2(cos(a), sin(a) * SHADOW_FLATTEN) * radius_uv))
+		pts.append(_shadow_point(uv + Vector2(cos(a), sin(a) * SHADOW_FLATTEN) * radius_uv))
 	return pts
 
 ## foot = 影子中心相对落点再往下推多少像素（贴图底边 ≠ 落点，影子要比脚点再低一点才露得出来）。
@@ -930,8 +938,9 @@ func _draw_houses(c: Control) -> void:
 		# 影子：椭圆半径**每张贴图一个数**（表格里逐栋调），随建造进度缩放；
 		# 中心压在房子贴图的视觉前底边上 → 后半个被房子挡住、前半个露在房前（竖直方向一半一半）。
 		var radius_px: float = float(HOUSE_SHADOW_RADIUS[art_index % HOUSE_SHADOW_RADIUS.size()]) * sc
+		var lift_px: float = float(HOUSE_SHADOW_FOOT[art_index % HOUSE_SHADOW_FOOT.size()]) * sc
 		var shape: Dictionary = _house_shape(art_index)
-		var foot: float = float(shape["bottom"]) * sc + SHADOW_FRONT_LIFT * sc
+		var foot: float = float(shape["bottom"]) * sc + lift_px
 		_draw_shadow(c, uv, _px_to_uv(radius_px), 0.36, foot, "building")
 		if phase < 0.99:
 			# Foundation and scaffold make both construction and wetland retreat legible.
