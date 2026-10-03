@@ -21,6 +21,26 @@ const HOUSE_ART := [
 	preload("res://assets/houses/house3.png"),
 	preload("res://assets/houses/house4.png"),
 ]
+## 房子贴图被画进 76×76 的方框、锚点纵向在 0.86 —— 必须和 _draw_houses 的绘制一致。
+const HOUSE_BOX := 76.0
+const HOUSE_ANCHOR_Y := 0.86
+## 影子按对象分开关。反馈历史：先"太诡异，把影子都删掉" → 再"船不加影子，建筑物加回来"。
+## 默认只给建筑开着，其余随时改这里，不用动调用点。
+const SHADOWS := {
+	"building": true,    # 房屋
+	"boat": false,       # 渔船
+	"tree": false,       # 树 / 沿岸植被
+	"island": false,     # 浮岛
+}
+## 月牙"逐栋调"的地方：每张贴图一个椭圆半径（76px 方框里的像素单位）。
+## 四张房子外形差得远（高矮、宽窄、脚点都不同），共用一条公式必然要么矮房露多了像浮空、
+## 要么高楼露少了看着别扭。数值：前伸深度 / 房子视觉高 ≈ 19% / 20% / 23% / 24%。
+const HOUSE_SHADOW_RADIUS := [44.0, 45.0, 33.0, 36.0]
+## 椭圆中心再沿屏幕下移多少像素。0 = 正好一半被房子挡住、一半露在房前。
+const SHADOW_FRONT_LIFT := 0.0
+## 空地（只有一株芦苇标记）的接触阴影：草本植物，给小一号的。
+const PLOT_SHADOW_RADIUS := 20.0
+const PLOT_SHADOW_FOOT := 3.0
 const SPRITES := preload("res://assets/art/wetland-sprites.png")
 const BIRDS := preload("res://assets/art/wetland-birds.png")
 const BIRD_ACTIONS := [
@@ -113,6 +133,8 @@ var yangtze_route: Array[Vector2] = []
 var gan_route: Array[Vector2] = []
 var scenery_props: Array[Dictionary] = []
 var prop_textures: Array[ImageTexture] = []
+## 每栋房子贴图的不透明外形（_ready 里量一次）：月牙要按"这栋房子实际多宽、多高、脚在哪"给。
+var house_art_shape: Array[Dictionary] = []
 
 func _ready() -> void:
 	for i in 8:
@@ -133,6 +155,7 @@ func _ready() -> void:
 	shore_image = SHORE_DISTANCE.get_image()
 	_build_river_routes()
 	_make_house_sites()
+	_measure_house_art()
 	_build_meadow_scenery()
 	easter_rng.randomize()
 	var land_margin := ColorRect.new()
@@ -822,15 +845,77 @@ func _draw_action_effects(c: Control) -> void:
 					var wave := _wildlife_point(WATER_ANCHORS[(int(effect.slot) * 3 + i * 2) % WATER_ANCHORS.size()])
 					c.draw_arc(wave, 6 + phase * 35, 0, TAU, 24, Color(0.73, 0.94, 1.0, alpha), 2.0)
 
+## 量一遍每栋房子贴图的不透明外形：半宽、脚点、视觉高度（都是 76px 方框里的像素单位）。
+## half_w / height 用于给上面那张参数表定值和复核露出比例，绘制只用 bottom。
+func _measure_house_art() -> void:
+	var unit := HOUSE_BOX / 128.0
+	house_art_shape.clear()
+	for art in HOUSE_ART:
+		var bbox: Rect2i = art.get_image().get_used_rect()
+		house_art_shape.append({
+			"half_w": bbox.size.x * unit * 0.5,
+			"bottom": bbox.end.y * unit - HOUSE_BOX * HOUSE_ANCHOR_Y,
+			"height": bbox.size.y * unit,
+		})
+
+func _house_shape(art_index: int) -> Dictionary:
+	if house_art_shape.is_empty():
+		_measure_house_art()
+	return house_art_shape[art_index % house_art_shape.size()]
+
+## 76px 房框里的像素长度 → 地图 uv 长度。屏幕像素与 uv 的比例由当前相机决定
+## （菜单拉远 / 对局推近时会变，所以每次都现算，不写死）。
+func _px_to_uv(px: float) -> float:
+	var origin := _wildlife_point(Vector2(0.5, 0.5))
+	var step := _wildlife_point(Vector2(0.51, 0.5))
+	var px_per_uv := origin.distance_to(step) / 0.01
+	if px_per_uv <= 0.0001:
+		return 0.0
+	return px / px_per_uv
+
+## 立着的东西要在地面上留下压扁的影子，"立"才读得出来。
+## 正交 45° 相机下，地面上的圆投影到屏幕是个斜着的椭圆（长轴方向由相机方位角决定），
+## 所以不写死屏幕轴向 —— 把一圈地图坐标投影出来连成多边形，方位角 / 俯角 / 缩放全都自动对上。
+func _shadow_polygon(uv: Vector2, radius_uv: float, segments: int = 20) -> PackedVector2Array:
+	var pts := PackedVector2Array()
+	for k in segments:
+		var a := TAU * float(k) / float(segments)
+		pts.append(_wildlife_point(uv + Vector2(cos(a), sin(a)) * radius_uv))
+	return pts
+
+## foot = 影子中心相对落点再往下推多少像素（贴图底边 ≠ 落点，影子要比脚点再低一点才露得出来）。
+func _draw_shadow(c: Control, uv: Vector2, radius_uv: float, alpha: float = 0.22, foot: float = 0.0, kind: String = "building") -> void:
+	if not SHADOWS.get(kind, false):
+		return
+	if radius_uv <= 0.0:
+		return
+	var pts := _shadow_polygon(uv, radius_uv)
+	if not is_zero_approx(foot):
+		for i in pts.size():
+			pts[i] += Vector2(0.0, foot)
+	c.draw_colored_polygon(pts, Color(0.05, 0.10, 0.09, alpha))
+
 func _draw_houses(c: Control) -> void:
 	var lit := roundi(float(metrics.get("community", 50)) / 100.0 * float(house_target_count))
 	for i in house_sites.size():
-		var p := _wildlife_point(house_sites[i])
+		var uv: Vector2 = house_sites[i]
+		var p := _wildlife_point(uv)
 		var phase: float = house_progress[i]
+		# 空地：村子还没盖到这里，只有一个芦苇标记。它看着就是一株草本植物，所以影子也只能按
+		# 草本给小的 —— 挂一整块建筑月牙，看起来就是"草丛带着一个大影子"。
 		if phase <= 0.01:
+			_draw_shadow(c, uv, _px_to_uv(PLOT_SHADOW_RADIUS), 0.26, PLOT_SHADOW_FOOT, "building")
 			_draw_sprite(c, p, 4, Vector2(30, 40))
 			continue
 		var eased := phase * phase * (3.0 - 2.0 * phase)
+		var sc := maxf(0.12, eased)
+		var art_index := i % HOUSE_ART.size()
+		# 影子：椭圆半径**每张贴图一个数**（表格里逐栋调），随建造进度缩放；
+		# 中心压在房子贴图的视觉前底边上 → 后半个被房子挡住、前半个露在房前（竖直方向一半一半）。
+		var radius_px: float = float(HOUSE_SHADOW_RADIUS[art_index % HOUSE_SHADOW_RADIUS.size()]) * sc
+		var shape: Dictionary = _house_shape(art_index)
+		var foot: float = float(shape["bottom"]) * sc - SHADOW_FRONT_LIFT - 2.0
+		_draw_shadow(c, uv, _px_to_uv(radius_px), 0.32, foot, "building")
 		if phase < 0.99:
 			# Foundation and scaffold make both construction and wetland retreat legible.
 			c.draw_rect(Rect2(p + Vector2(-19, -7), Vector2(38, 8)), Color("6f6949"))
@@ -839,9 +924,9 @@ func _draw_houses(c: Control) -> void:
 			for dust in 4:
 				var offset := Vector2(-23 + dust * 13, -12 - int(elapsed * 15.0 + float(i + dust)) % 8)
 				c.draw_rect(Rect2((p + offset).round(), Vector2(3, 3)), Color("e4ce9b"))
-		var extent := Vector2(76, 76) * maxf(0.12, eased)
+		var extent := Vector2(HOUSE_BOX, HOUSE_BOX) * sc
 		var tint := Color.WHITE if i < lit else Color(0.66, 0.63, 0.56)
-		c.draw_texture_rect(HOUSE_ART[i % HOUSE_ART.size()], Rect2((p - extent * Vector2(0.5, 0.86)).round(), extent.round()), false, tint)
+		c.draw_texture_rect(HOUSE_ART[art_index], Rect2((p - extent * Vector2(0.5, HOUSE_ANCHOR_Y)).round(), extent.round()), false, tint)
 		if phase < 0.22 and i >= house_target_count:
 			_draw_sprite(c, p + Vector2(7, 0), 4, Vector2(16, 23))
 

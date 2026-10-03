@@ -60,6 +60,15 @@ func _ready() -> void:
 	check(window_rect.has_point(secret) and secret.x > window_rect.size.x * 0.40, "Menu camera must keep the Creeper inside the unshaded view")
 	check(window_rect.encloses(creeper_screen_rect()), "Entire Creeper must fit inside the menu view")
 	check(game.wetland.scenery_props.size() > 200, "Empty meadows need varied pixel vegetation and stones")
+	# 房影：四张贴图各自量过不透明外形（逐栋调半径的依据），且 px→uv 换算可用
+	check(game.wetland.house_art_shape.size() == 4, "四张房子贴图都应量出外形，实际 %d" % game.wetland.house_art_shape.size())
+	var shape_bottoms: Array = game.wetland.house_art_shape.map(func(s): return float(s["bottom"]))
+	check(shape_bottoms.size() == 4, "应量到四栋的脚点")
+	check(not is_equal_approx(shape_bottoms[0], shape_bottoms[3]), "四栋房子的脚点不该一样 —— 影子是逐栋调的")
+	check(game.wetland.HOUSE_SHADOW_RADIUS.size() == 4, "逐栋影子半径表应有四张")
+	check(game.wetland.HOUSE_SHADOW_RADIUS[0] != game.wetland.HOUSE_SHADOW_RADIUS[2], "不同房子的影子半径应不同")
+	check(game.wetland.SHADOWS.get("building", false) and not game.wetland.SHADOWS.get("tree", true), "默认只给建筑开影子")
+	check(game.wetland._px_to_uv(44.0) > 0.0, "px→uv 换算应可用（影子半径换算依赖它）")
 	for prop in game.wetland.scenery_props:
 		check(prop.pos.distance_to(game.wetland.CREEPER_ANCHOR) >= 0.15, "Scenery must leave the secret clearing open")
 	for route in [game.wetland.yangtze_route, game.wetland.gan_route]:
