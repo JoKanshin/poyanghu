@@ -88,7 +88,6 @@ const CRISIS_CHANCE := { Difficulty.EASY: 0.38, Difficulty.NORMAL: 0.55, Difficu
 const CRISIS_SLOPE := { Difficulty.EASY: 0.22, Difficulty.NORMAL: 0.25, Difficulty.HARD: 0.28, Difficulty.NIGHTMARE: 0.28 }   # 危机概率随回合增幅
 const START_FLOOR := { Difficulty.EASY: 48, Difficulty.NORMAL: 48, Difficulty.HARD: 48, Difficulty.NIGHTMARE: 48 }          # 开局指标下限（各难度统一，难度只体现在阈值）
 const START_BOOST := { Difficulty.EASY: 6, Difficulty.NORMAL: 6, Difficulty.HARD: 6, Difficulty.NIGHTMARE: 6 }             # 开局指标加成（各难度统一）
-const REPORT_SCORE := { Difficulty.EASY: 80.0, Difficulty.NORMAL: 70.0, Difficulty.HARD: 65.0, Difficulty.NIGHTMARE: 65.0 }   # 天赋点达标平均分
 # 每回合行动位（行动位 = 一回合最多能打几张牌）
 # 简单档多给一个位：新手还没建立起「先补水再护鸟」这类联动的直觉，
 # 三个位常常只够救火、铺不出组合，体验偏挫败。普通/困难/噩梦维持 3。
@@ -1163,6 +1162,7 @@ var game_over: bool = false
 var total_spent: int = 0            # 累计卡牌支出（用于资金效率评价）
 # ===== 肉鸽机制状态 =====
 var run_seed: int = 0               # 本局种子（同种子可复现，用于反事实对照）
+var run_id: String = ""             # Unique reward receipt; independent of seeded gameplay RNG.
 var settlement: int = 70            # 环湖人类围垦强度 0-100，仅用于 3D 房子表现
 var difficulty: int = Difficulty.EASY   # 当前难度档位（主菜单选择）
 var floating_islands: int = 0       # 人工浮岛数量（视觉表现，0=无）
@@ -1216,9 +1216,10 @@ func serialize() -> Dictionary:
 		"pending_knowledge": pending_knowledge.duplicate(),
 		"log_messages": log_messages.duplicate(),
 		"game_over": game_over, "total_spent": total_spent,
-		"run_seed": run_seed, "settlement": settlement,
+		"run_seed": run_seed, "run_id": run_id, "settlement": settlement,
 		# 本局天赋词条：继续游戏要原样带回来，否则中途读档会丢加成
 		"talents": Talents.granted.duplicate(),
+		"tree_talents": Talents.run_tree_ranks.duplicate(), "tree_mastery": Talents.run_tree_mastery,
 		"difficulty": difficulty, "floating_islands": floating_islands,
 		"pending_crisis": pending_crisis.duplicate(true),
 		"forecast_crisis": forecast_crisis.duplicate(true),
@@ -1255,8 +1256,10 @@ func load_state(d: Dictionary) -> void:
 	total_spent = int(d.get("total_spent", 0))
 	run_seed = int(d.get("run_seed", 0))
 	Talents.set_granted(d.get("talents", []))
+	Talents.set_run_tree(d.get("tree_talents", {}), bool(d.get("tree_mastery", false)))
 	settlement = int(d.get("settlement", 70))
 	difficulty = int(d.get("difficulty", 1 if d.get("hard_mode", false) else 0))
+	run_id = str(d.get("run_id", "legacy:%d:%d" % [run_seed, difficulty]))
 	floating_islands = int(d.get("floating_islands", 0))
 	pending_crisis = d.get("pending_crisis", {})
 	forecast_crisis = d.get("forecast_crisis", {})
@@ -1282,6 +1285,7 @@ func _int_dict(d: Dictionary) -> Dictionary:
 
 
 func reset_game() -> void:
+	run_id = Crypto.new().generate_random_bytes(16).hex_encode()
 	turn = 0
 	carry = 0
 	funds = 0
@@ -2527,10 +2531,9 @@ func generate_report() -> Dictionary:
 	var social := _eval_social()
 	var manage := _eval_manage()
 	var reflection := _build_reflection()
-	# 本局天赋点：需玩到 12 轮以上且平均评分达标（普通 >80 / 困难 >70），达标得 2 点
-	var avg_score: float = (eco["score"] + social["score"] + manage["score"]) / 3.0
-	var threshold: float = REPORT_SCORE[difficulty]
-	var earned: int = 2 if (turn >= 12 and avg_score > threshold) else 0
+	# 奖励看胜利结果；提前胜利也适用，不把奖励绑在回合数上。
+	var victory := game_over and not is_failure
+	var earned: int = Talents.CLEAR_REWARDS[difficulty] if victory else 0
 	return {
 		"eco": eco, "social": social, "manage": manage,
 		"reflection": reflection,
@@ -2546,7 +2549,8 @@ func generate_report() -> Dictionary:
 		"research_points": research_points,
 		"knowledge_count": knowledge_unlocked.size(),
 		"total_knowledge": KNOWLEDGE_CARDS.size(),
-		"talent_points": earned,
+		"victory": victory, "difficulty": difficulty, "run_id": run_id,
+		"inspiration_reward": earned, "unlock_all_talents": victory and difficulty == Difficulty.NIGHTMARE,
 	}
 
 

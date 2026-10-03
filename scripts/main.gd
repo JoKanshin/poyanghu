@@ -114,10 +114,9 @@ class SeasonDial extends Control:
 			Color(1.0, 0.86, 0.42), 2.0, true)
 		draw_circle(c, 2.5, Color(1.0, 0.86, 0.42))
 
-## 天赋树系统暂时关闭（2026-09-28 需求）：主菜单不再有「技能树」按钮，
-## 天赋改为**每局开局随机附赠 0~3 条词条**（见 talents.gd 的 roll_for_run）。
-## 恢复天赋树：把这里改回 true，并把 talents.gd 的 get_bonus 改回读 unlocked。
-const TALENT_TREE_ENABLED := false
+## Permanent study and seeded random talents coexist; allocations start next run.
+const TALENT_TREE_ENABLED := true
+const TalentTreePanel := preload("res://scripts/talent_tree_panel.gd")
 
 # 成就图标配色：解锁 = 金牌，未解锁 = 灰牌（同一个网格，只换颜色）
 const ACH_GOLD := Color(0.98, 0.80, 0.30)
@@ -230,7 +229,7 @@ var bgm_volume: float = 0.8
 ## 与其每次改代码重导，不如给个滑块。与音量一起存在 user://settings.json。
 var score_speed: float = 1.0
 const SCORE_SPEED_MIN := 0.5
-const SCORE_SPEED_MAX := 1.5
+const SCORE_SPEED_MAX := 3.0
 var audio_volume_slider: HSlider
 var audio_volume_label: Label
 var score_speed_slider: HSlider
@@ -256,9 +255,6 @@ var _sfx_players: Array = []
 var _sfx_streams: Dictionary = {}
 var _sfx_cursor: int = 0        # 轮转下标（比"找空闲播放器"简单，且一定不会切掉正在响的那个）
 var menu_camera_far: bool = false      # 开始页期间镜头拉远看全景
-var talent_points_label: Label
-var talent_list: VBoxContainer
-var talent_unlock_btn: Button
 var menu_continue_btn: Button
 
 # 暂停 / 存档
@@ -427,7 +423,6 @@ func _ready() -> void:
 	_build_ui()
 	GameState.metrics_changed.connect(_update_hud)
 	GameState.metrics_changed.connect(_update_3d)
-	GameState.metrics_changed.connect(_sync_settlement_visual)
 	GameState.funds_changed.connect(_update_hud)
 	GameState.event_triggered.connect(_on_event)
 	GameState.crisis_warned.connect(_on_crisis_warn)
@@ -445,11 +440,14 @@ func _ready() -> void:
 
 
 ## 开始页期间镜头拉远的倍率（正交 size 越大 = 视野越广）
-const MENU_CAM_ZOOM := 1.7
+const MENU_CAM_ZOOM := 1.3
 
 
 ## 根据窗口宽高比调整正交相机尺寸：让沙盘占满屏幕主体，不因宽屏被推远
 func _fit_camera_to_window() -> void:
+	if wetland:
+		wetland._layout_map()
+		return
 	var cam := get_node("../Camera3D") as Camera3D
 	if cam == null:
 		return
@@ -473,6 +471,9 @@ func _cam_base_size() -> float:
 ## 进入游戏时收回来。
 func _set_menu_camera(far: bool) -> void:
 	menu_camera_far = far
+	if wetland:
+		wetland.set_menu_camera(far, MENU_CAM_ZOOM)
+		return
 	var cam := get_node_or_null("../Camera3D") as Camera3D
 	if cam == null:
 		return
@@ -1207,6 +1208,8 @@ func _build_mudflats(parent: Node3D) -> void:
 func _process(delta: float) -> void:
 	# 指标悬停小窗：暂停/弹层时它自己会收起来，所以放在 _paused 提前返回之前
 	_update_metric_tip()
+	if wetland:
+		wetland.set_process(not _paused)
 	if _paused:
 		return
 	# 开场 PPT 计时：不按键则 8 秒自动过一张
@@ -1214,8 +1217,6 @@ func _process(delta: float) -> void:
 		_intro_elapsed += delta
 		if _intro_elapsed >= INTRO_SLIDE_SEC:
 			_advance_intro()
-	if wetland:
-		wetland.set_process(not _paused)
 	_update_card_hover(delta)
 	_process_deck_gyro(delta)
 	_process_detail_gyro(delta)   # 点开的那张放大牌：指针压上去时同样要晃
@@ -1726,13 +1727,6 @@ func _update_3d() -> void:
 		wetland.sync_state()
 
 
-func _sync_settlement_visual() -> void:
-	# House construction or retreat starts as soon as a played card changes
-	# settlement, even while the score reveal keeps other scenery frozen.
-	if wetland:
-		wetland.sync_settlement_targets()
-
-
 # ==================== UI ====================
 func _build_ui() -> void:
 	var canvas := CanvasLayer.new()
@@ -2070,7 +2064,8 @@ func _build_menu() -> void:
 	var bg := ColorRect.new()
 	bg.color = Color.WHITE
 	var shade := Shader.new()
-	shade.code = "shader_type canvas_item; void fragment(){ float a = mix(0.84, 0.06, smoothstep(0.0, 0.72, UV.x)); COLOR = vec4(0.025, 0.095, 0.105, a); }"
+	bg.name = "MenuShade"
+	shade.code = "shader_type canvas_item; void fragment(){ float a = 0.82 * (1.0 - smoothstep(0.12, 0.40, UV.x)); COLOR = vec4(0.025, 0.095, 0.105, a); }"
 	var shade_mat := ShaderMaterial.new()
 	shade_mat.shader = shade
 	bg.material = shade_mat
@@ -2199,9 +2194,8 @@ func _build_menu() -> void:
 	menu_col.add_child(menu_back_btn)
 
 	# 一级：其余选项（设置与制作人员暂未实现效果）
-	# 「技能树」按钮暂时删掉（天赋树系统暂关）。恢复时把 TALENT_TREE_ENABLED 改 true。
 	if TALENT_TREE_ENABLED:
-		menu_talent_btn = _make_button("技能树", _show_talent_panel, 18)
+		menu_talent_btn = _make_button("天赋树 · 灵感研修", _show_talent_panel, 18)
 		menu_talent_btn.custom_minimum_size = Vector2(0, 44)
 		menu_col.add_child(menu_talent_btn)
 
@@ -2252,44 +2246,10 @@ func _build_menu() -> void:
 	menu_col.add_child(menu_quit_btn)
 
 	# --- 第 4 页：天赋树 ---
-	menu_talent_panel = PanelContainer.new()
-	menu_talent_panel.custom_minimum_size = Vector2(480, 0)
-	_panel_style(menu_talent_panel, Color(0.20, 0.14, 0.09, 0.97))
+	menu_talent_panel = TalentTreePanel.new()
 	menu_talent_panel.visible = false
+	menu_talent_panel.back_requested.connect(_on_talent_back)
 	center.add_child(menu_talent_panel)
-
-	var kvb := VBoxContainer.new()
-	kvb.add_theme_constant_override("separation", 10)
-	menu_talent_panel.add_child(kvb)
-
-	var t_title := _make_label("天赋树", 24, Color(1, 0.9, 0.55))
-	t_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	kvb.add_child(t_title)
-
-	talent_points_label = _make_label("天赋点：0", 14, Color(1, 0.95, 0.6))
-	talent_points_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	kvb.add_child(talent_points_label)
-
-	var t_sep := HSeparator.new()
-	kvb.add_child(t_sep)
-
-	var t_scroll := ScrollContainer.new()
-	t_scroll.custom_minimum_size = Vector2(0, 380)
-	t_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	kvb.add_child(t_scroll)
-
-	talent_list = VBoxContainer.new()
-	talent_list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	talent_list.add_theme_constant_override("separation", 6)
-	t_scroll.add_child(talent_list)
-
-	talent_unlock_btn = _make_button("点亮下一个天赋", _on_talent_unlock, 16)
-	talent_unlock_btn.custom_minimum_size = Vector2(0, 44)
-	kvb.add_child(talent_unlock_btn)
-
-	var t_back := _make_button("返回", _on_talent_back, 16)
-	t_back.custom_minimum_size = Vector2(0, 40)
-	kvb.add_child(t_back)
 
 	# --- 设置面板 ---
 	menu_settings_panel = PanelContainer.new()
@@ -2394,7 +2354,7 @@ func _build_menu() -> void:
 	cl_vb.add_child(cl_title)
 
 	var cl_body := _make_label(
-			"将永久删除：\n· 当前对局进度（继续游戏）\n· 全部天赋点与已解锁天赋\n· 全部成就\n\n此操作不可撤销。",
+			"将永久删除：\n· 当前对局进度（继续游戏）\n· 全部灵感、研修分配与噩梦满树奖励\n· 旧天赋进度备份\n· 全部成就\n\n此操作不可撤销。",
 			14, Color(0.92, 0.88, 0.86))
 	cl_body.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	cl_body.custom_minimum_size = Vector2(320, 0)
@@ -3344,32 +3304,9 @@ func _update_bgm_btn() -> void:
 		pause_bgm_btn.text = txt
 
 
-func _on_talent_unlock() -> void:
-	Talents.unlock_next()
-	_refresh_talent_panel()
-
-
-## 重建天赋列表 + 刷新点数与按钮状态
+## The branching panel owns node selection, allocation limits and purchases.
 func _refresh_talent_panel() -> void:
-	for c in talent_list.get_children():
-		talent_list.remove_child(c)
-		c.queue_free()
-	talent_points_label.text = "天赋点：%d" % Talents.points
-	for t in Talents.TALENTS:
-		var lit := Talents.has(t["id"])
-		var row := HBoxContainer.new()
-		row.add_theme_constant_override("separation", 8)
-		var name_l := _make_label(t["name"], 14, Color(1, 0.95, 0.6) if lit else Color(0.6, 0.6, 0.6))
-		name_l.custom_minimum_size = Vector2(80, 0)
-		row.add_child(name_l)
-		var desc_l := _make_label(t["desc"], 12, Color(0.82, 0.86, 0.9) if lit else Color(0.55, 0.58, 0.6))
-		desc_l.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		row.add_child(desc_l)
-		var status_l := _make_label("已点亮" if lit else "未点亮", 12, Color(0.55, 0.9, 0.55) if lit else Color(0.55, 0.55, 0.55))
-		row.add_child(status_l)
-		talent_list.add_child(row)
-	talent_unlock_btn.text = "点亮下一个天赋（%d 点）" % Talents.next_cost()
-	talent_unlock_btn.disabled = not (Talents.points >= Talents.next_cost() and Talents.next_talent_id() != "")
+	if menu_talent_panel != null: menu_talent_panel.call("refresh")
 
 
 func _hide_menu() -> void:
@@ -3683,8 +3620,8 @@ func _process_crisis_queue() -> void:
 		return  # 已判负：失败报告优先，危机弹层不再抢屏
 	if _score_animating:
 		return  # 算分动画期间先攒着：危机预警/爆发已挪到回合末发射，
-		        # 此刻弹出来会糊在结算动画与结算弹窗上。
-		        # 队列不会丢 —— _finish_turn 在结算弹窗铺好后会再调一次本函数。
+				# 此刻弹出来会糊在结算动画与结算弹窗上。
+				# 队列不会丢 —— _finish_turn 在结算弹窗铺好后会再调一次本函数。
 	if _crisis_queue.is_empty() or crisis_root.visible:
 		return
 	var item: Dictionary = _crisis_queue.pop_front()
@@ -5382,6 +5319,11 @@ func _show_run_talents_popup() -> void:
 			if t.is_empty():
 				continue
 			body += "\n[b]%s[/b]　%s" % [t["name"], t["desc"]]
+	if Talents.run_tree_count() > 0:
+		body += "\n\n[b]永久研修（%d 项，本局固定）[/b]\n" % Talents.run_tree_count() + Talents.run_tree_effect_summary()
+		body += "\n[color=#9dd5bd]在左上角永久研修提示中查看节点详情。[/color]"
+	else:
+		body += "\n\n[color=#9dd5bd]暂无永久研修。通关可获得灵感，在主菜单天赋树中分配。[/color]"
 	_show_popup("本局天赋", body, "开始", _on_run_talents_done)
 
 
@@ -5755,13 +5697,18 @@ func _on_event(text: String) -> void:
 func _refresh_run_talents() -> void:
 	if talents_row == null:
 		return
-	var sig := ",".join(Talents.granted)
+	var sig := ",".join(Talents.granted) + JSON.stringify(Talents.run_tree_ranks)
 	if sig == _talents_sig:
 		return
 	_talents_sig = sig
 	for c in talents_row.get_children():
 		talents_row.remove_child(c)
 		c.queue_free()
+	if Talents.run_tree_count() > 0:
+		var study := _make_label("永久研修：%d 节点" % Talents.run_tree_count(), 12, VisualTheme.MINT)
+		study.mouse_filter = Control.MOUSE_FILTER_PASS
+		study.tooltip_text = "本局固定的永久研修：\n" + Talents.run_tree_summary()
+		talents_row.add_child(study)
 	if Talents.granted.is_empty():
 		talents_row.add_child(_make_label("本局无额外天赋", 12, Color(0.68, 0.66, 0.62)))
 		return
@@ -6096,6 +6043,7 @@ func _spawn_dispatched_cards(played: Array) -> void:
 			"base_pos": panel.position, "theta": 0.0, "radial": Vector2(0.0, -1.0),
 			"selected": true, "shaking": false, "hovered": false,
 			"tier": str(d["tier"]), "flying": true, "dispatched": true,
+			"sandpan_state": wetland.capture_state(),
 		})
 		played.append(card_infos.size() - 1)
 
@@ -6885,6 +6833,7 @@ func _finish_turn() -> void:
 		var info: Dictionary = card_infos[i]
 		if info["selected"]:
 			if GameState.execute_action(info["card_id"], _info_tier(info)):
+				info["sandpan_state"] = wetland.capture_state()
 				played.append(i)
 			else:
 				failed.append(info["card_id"])
@@ -7130,6 +7079,8 @@ func _play_score_animation(ledger: Array, before_all: Dictionary, played: Array,
 		# 现在压到 -4dB，把"最响"留给指标合计那一下"落定"。
 		play_sfx("ding", 1.0 + 0.05 * float(k), -4.0)
 		var fx: Array = card_fx.get(str(info["card_id"]), [])
+		if wetland and info.has("sandpan_state"):
+			wetland.play_action(str(info["card_id"]), info["sandpan_state"], card_beat)
 		var anchor: Vector2 = panel.global_position + Vector2(panel.size.x * 0.5, 0.0)
 		for j in fx.size():
 			var e: Dictionary = fx[j]
@@ -7143,6 +7094,9 @@ func _play_score_animation(ledger: Array, before_all: Dictionary, played: Array,
 		if _score_anim_id != my_id:
 			return _score_anim_cleanup()
 
+	# Delayed effects, synergy, natural evolution and crises follow the card replay.
+	# Presentation uses snapshots only; never execute cards or roll RNG again.
+	if wetland: wetland.sync_state({}, true, 0.85 * ds)
 	# ---- ③+④ 指标结算（→ 2.80）：按已耗时自适应预算，保证总时长贴近 2.8s ----
 	var elapsed: float = Time.get_ticks_msec() / 1000.0 - t_start
 	# 指标结算节拍的时长倍率（速度 ÷0.8 ⇔ 时长 ×1.25）
@@ -7465,7 +7419,7 @@ func _show_report(r: Dictionary) -> void:
 	# 何况结算期间 _defer_game_over 还会让它整个提前 return。
 	# _show_report 是两种结局的唯一汇合点，判在这里才不会漏。
 	# 只认「不是判负」，不看分数档位 —— 困难难度能撑满 16 回合本身就是成就。
-	if not bool(r.get("is_failure", false)) and GameState.difficulty == GameState.Difficulty.HARD:
+	if bool(r.get("victory", false)) and int(r.get("turns_survived", 0)) >= GameState.TOTAL_TURNS and GameState.difficulty == GameState.Difficulty.HARD:
 		Achievements.try_unlock("hard_clear")
 	# 「被做局了」：噩梦档第 1 或第 2 回合就被撤换。
 	# 这个模式本来就打不过，能死得这么快纯粹是开局掷得差（或运气）——
@@ -7477,14 +7431,15 @@ func _show_report(r: Dictionary) -> void:
 	# 「廉政先锋」：通关，且全程平均每回合花费不到门槛。
 	# 用 total_spent / 总回合数 这个**均值**口径，而不是"每一回合都得少花"——
 	# 后者太苛刻：玩家偶尔砸一张大牌救火就会被判出局，不给人留余地。
-	if not bool(r.get("is_failure", false)) \
+	if bool(r.get("victory", false)) \
+			and int(r.get("turns_survived", 0)) >= GameState.TOTAL_TURNS \
 			and float(GameState.total_spent) / float(GameState.TOTAL_TURNS) <= float(Achievements.THRIFTY_SPEND_PER_TURN):
 		Achievements.try_unlock("thrifty")
-	var earned: int = r.get("talent_points", 0)
-	if earned > 0:
-		Talents.award(earned)
+	var reward: Dictionary = Talents.claim_victory_report(r)
 	var body := ""
 	var title := "四年 · 生态报告"
+	if bool(r.get("victory", false)) and int(r.get("turns_survived", 0)) < GameState.TOTAL_TURNS:
+		title = "提前胜利 · 生态报告"
 	if r.get("is_failure", false):
 		title = "被撤换 · 修复失败"
 		body += "[color=#ff7060][b]第 %d 回合，%s[/b][/color]\n\n" % [
@@ -7519,10 +7474,16 @@ func _show_report(r: Dictionary) -> void:
 		body += "  · %s\n" % n
 	body += "\n[b]知识卡收集[/b]：%d / %d　[b]科研点[/b]：%d\n" % [r["knowledge_count"], r["total_knowledge"], r["research_points"]]
 	body += "[color=#8a8a8a]本局种子：%d（同种子可复现，便于对照实验）[/color]\n" % r.get("seed", 0)
-	# 天赋树暂关期间不在报告里显示天赋点（有奖励没处花只会让人困惑）；
-	# 点数仍在后台累积（见上面的 Talents.award），恢复天赋树后继续可用。
-	if earned > 0 and TALENT_TREE_ENABLED:
-		body += "[color=#ffd060]获得天赋点：+%d[/color]\n" % earned
+	if reward.save_error:
+		body += "[color=#ff9090]通关奖励未能保存，请检查本地存档目录。[/color]\n"
+	elif reward.duplicate:
+		body += "[color=#9dd5bd]本局通关奖励已领取。[/color]\n"
+	elif reward.mastery:
+		body += "[color=#ffd060][b]噩梦通关奖励：全部天赋满级，解除分配上限！[/b][/color]\n"
+	elif int(reward.amount) > 0:
+		body += "[color=#ffd060]通关获得灵感：+%d　（当前 %d）[/color]\n" % [reward.amount, Talents.inspiration]
+	else:
+		body += "[color=#9dd5bd]胜利通关（含提前胜利）可获得灵感，本次未获得。[/color]\n"
 	body += "\n[b]反思[/b]\n%s" % r["reflection"]
 	_show_popup(title, body, "返回主菜单", _restart)
 
