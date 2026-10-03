@@ -5,16 +5,20 @@ const LANDSCAPE := preload("res://assets/art/poyang-terrain-base.png")
 const SHORE_DISTANCE := preload("res://assets/art/lake-shore-distance.png")
 const GROUND_SHADER := preload("res://scripts/wetland_ground.gdshader")
 const LAND_COLOR := Color("829666")
-const MAP_ZOOM := 1.58
+## 相机方位角转正后，地面在屏幕上的投影宽度从 GROUND_SIZE*(sin45+cos45)=1.414 倍
+## 变成 GROUND_SIZE*1.0 倍；把 MAP_ZOOM 按同样比例缩回来，视野才跟转正前一致。
+const MAP_ZOOM := 1.12
 const GAME_CAMERA_ZOOM := 0.9
-const VIEW_AZIMUTH := PI / 4.0
+const VIEW_AZIMUTH := 0.0
 const VIEW_PITCH := PI / 4.0
 const GROUND_SIZE := 100.0
 const BIRD_DISPLAY_SCALE := 0.65
 const RiverRoutes := preload("res://scripts/wetland_rivers.gd")
 const CREEPER_ART := preload("res://assets/creeper.png")
 # Peripheral grass: within the menu view, beyond the closer gameplay view.
-const CREEPER_ANCHOR := Vector2(0.5110534, -0.1960534)
+# 转正后实测（tools 探针扫描）：菜单半视野里的 216 个候选点中，有 144 个在进入对局后会出画；
+# 出画的判据是屏幕 y 落到画面上方。取右上方那一档 —— 开始页完整可见、对局时整只出画。
+const CREEPER_ANCHOR := Vector2(0.9700000, 0.0400000)
 const HOUSE_ART := [
 	preload("res://assets/houses/house1.png"),
 	preload("res://assets/houses/house2.png"),
@@ -29,18 +33,26 @@ const HOUSE_ANCHOR_Y := 0.86
 const SHADOWS := {
 	"building": true,    # 房屋
 	"boat": false,       # 渔船
-	"tree": false,       # 树 / 沿岸植被
+	"tree": true,        # 树 / 沿岸植被
 	"island": false,     # 浮岛
 }
 ## 月牙"逐栋调"的地方：每张贴图一个椭圆半径（76px 方框里的像素单位）。
 ## 四张房子外形差得远（高矮、宽窄、脚点都不同），共用一条公式必然要么矮房露多了像浮空、
 ## 要么高楼露少了看着别扭。数值：前伸深度 / 房子视觉高 ≈ 19% / 20% / 23% / 24%。
-const HOUSE_SHADOW_RADIUS := [44.0, 45.0, 33.0, 36.0]
-## 椭圆中心再沿屏幕下移多少像素。0 = 正好一半被房子挡住、一半露在房前。
-const SHADOW_FRONT_LIFT := 0.0
+const HOUSE_SHADOW_RADIUS := [32.0, 33.0, 24.0, 26.0]
+## 影子中心相对房子视觉脚点再**往下推**多少像素。0 = 正好一半被房子挡住、一半露在房前；
+## 调大 = 影子整体前移、露得更多。四张贴图的脚点高低差很多（house3/4 的视觉底边甚至高于落点），
+## 统一往下推一点，才不会出现"矮房的影子全压在房子底下"。
+const SHADOW_FRONT_LIFT := 4.0
 ## 空地（只有一株芦苇标记）的接触阴影：草本植物，给小一号的。
-const PLOT_SHADOW_RADIUS := 20.0
+const PLOT_SHADOW_RADIUS := 15.0
 const PLOT_SHADOW_FOOT := 3.0
+## 额外把影子在地面平面上再压扁一点。真 3D 的相机投影只压到 sin(45°)≈0.707，看着仍偏圆；
+## 1.0 = 不再额外压（纯相机投影），越小越扁。
+const SHADOW_FLATTEN := 0.62
+## 树（岸树 / 草地上的树 / 赤山树）的接触阴影。
+const TREE_SHADOW_RADIUS := 19.0
+const TREE_SHADOW_FOOT := 4.0
 const SPRITES := preload("res://assets/art/wetland-sprites.png")
 const BIRDS := preload("res://assets/art/wetland-birds.png")
 const BIRD_ACTIONS := [
@@ -754,7 +766,7 @@ func _draw_meadow_scenery(c: Control) -> void:
 	for prop in scenery_props:
 		if _is_water(prop["pos"]): continue
 		if prop["kind"] == 5:
-			_draw_tree(c, _wildlife_point(prop["pos"]), float(prop["scale"]) * 0.55)
+			_draw_tree(c, _wildlife_point(prop["pos"]), float(prop["scale"]) * 0.55, prop["pos"])
 			continue
 		var texture: Texture2D = prop_textures[prop["kind"]]
 		var extent := texture.get_size() * float(prop["scale"])
@@ -772,7 +784,7 @@ func _draw_wildlife(c: Control) -> void:
 				clear = false
 				break
 		if clear and _is_land(uv):
-			_draw_tree(c, _wildlife_point(uv), 0.78)
+			_draw_tree(c, _wildlife_point(uv), 0.78, uv)
 	# Ripples occupy open water, keeping the HUD readable.
 	for i in 28:
 		var p := _wildlife_point(WATER_ANCHORS[i % WATER_ANCHORS.size()])
@@ -791,6 +803,10 @@ func _draw_wildlife(c: Control) -> void:
 			var p := _wildlife_point(sites[i])
 			var growth := _visual_weight("plants", str(pid), i, 7.0)
 			if growth <= 0.001: continue
+			# 赤山树是立着的，先给它垫影子 —— 影子多边形走绝对屏幕坐标，
+			# 必须赶在下面这行缩放变换之前画，否则会被 growth 再缩一次。
+			if str(pid) == "chishan":
+				_draw_shadow(c, sites[i], _px_to_uv(TREE_SHADOW_RADIUS * growth), 0.24, TREE_SHADOW_FOOT, "tree")
 			c.draw_set_transform(p, 0.0, Vector2.ONE * growth)
 			p = Vector2.ZERO
 			match str(pid):
@@ -880,7 +896,8 @@ func _shadow_polygon(uv: Vector2, radius_uv: float, segments: int = 20) -> Packe
 	var pts := PackedVector2Array()
 	for k in segments:
 		var a := TAU * float(k) / float(segments)
-		pts.append(_wildlife_point(uv + Vector2(cos(a), sin(a)) * radius_uv))
+		# 在地面平面上先按 SHADOW_FLATTEN 压扁，交给相机投影后才是最终形状。
+		pts.append(_wildlife_point(uv + Vector2(cos(a), sin(a) * SHADOW_FLATTEN) * radius_uv))
 	return pts
 
 ## foot = 影子中心相对落点再往下推多少像素（贴图底边 ≠ 落点，影子要比脚点再低一点才露得出来）。
@@ -914,8 +931,8 @@ func _draw_houses(c: Control) -> void:
 		# 中心压在房子贴图的视觉前底边上 → 后半个被房子挡住、前半个露在房前（竖直方向一半一半）。
 		var radius_px: float = float(HOUSE_SHADOW_RADIUS[art_index % HOUSE_SHADOW_RADIUS.size()]) * sc
 		var shape: Dictionary = _house_shape(art_index)
-		var foot: float = float(shape["bottom"]) * sc - SHADOW_FRONT_LIFT - 2.0
-		_draw_shadow(c, uv, _px_to_uv(radius_px), 0.32, foot, "building")
+		var foot: float = float(shape["bottom"]) * sc + SHADOW_FRONT_LIFT * sc
+		_draw_shadow(c, uv, _px_to_uv(radius_px), 0.36, foot, "building")
 		if phase < 0.99:
 			# Foundation and scaffold make both construction and wetland retreat legible.
 			c.draw_rect(Rect2(p + Vector2(-19, -7), Vector2(38, 8)), Color("6f6949"))
@@ -930,7 +947,10 @@ func _draw_houses(c: Control) -> void:
 		if phase < 0.22 and i >= house_target_count:
 			_draw_sprite(c, p + Vector2(7, 0), 4, Vector2(16, 23))
 
-func _draw_tree(c: Control, p: Vector2, scale_factor: float = 1.0) -> void:
+func _draw_tree(c: Control, p: Vector2, scale_factor: float = 1.0, uv: Vector2 = Vector2.INF) -> void:
+	# 树也要在地面上留影子，"立着"才读得出来。必须传 uv —— 屏幕点反推不出地形坐标。
+	if uv != Vector2.INF:
+		_draw_shadow(c, uv, _px_to_uv(TREE_SHADOW_RADIUS * scale_factor), 0.24, TREE_SHADOW_FOOT * scale_factor, "tree")
 	var extent := Vector2(40, 44) * scale_factor
 	c.draw_texture_rect(SHORE_TREE, Rect2((p - extent * Vector2(0.5, 0.9)).round(), extent.round()), false)
 

@@ -67,7 +67,10 @@ func _ready() -> void:
 	check(not is_equal_approx(shape_bottoms[0], shape_bottoms[3]), "四栋房子的脚点不该一样 —— 影子是逐栋调的")
 	check(game.wetland.HOUSE_SHADOW_RADIUS.size() == 4, "逐栋影子半径表应有四张")
 	check(game.wetland.HOUSE_SHADOW_RADIUS[0] != game.wetland.HOUSE_SHADOW_RADIUS[2], "不同房子的影子半径应不同")
-	check(game.wetland.SHADOWS.get("building", false) and not game.wetland.SHADOWS.get("tree", true), "默认只给建筑开影子")
+	check(game.wetland.SHADOWS.get("building", false) and game.wetland.SHADOWS.get("tree", false), "房子和树的影子都应打开")
+	check(not game.wetland.SHADOWS.get("boat", true) and not game.wetland.SHADOWS.get("island", true), "船和浮岛暂不投影子")
+	check(game.wetland.SHADOW_FLATTEN < 1.0, "影子要额外压扁（真 3D 只压到 0.707，偏圆）")
+	check(game.wetland.TREE_SHADOW_RADIUS > 0.0, "树影半径应有效")
 	check(game.wetland._px_to_uv(44.0) > 0.0, "px→uv 换算应可用（影子半径换算依赖它）")
 	for prop in game.wetland.scenery_props:
 		check(prop.pos.distance_to(game.wetland.CREEPER_ANCHOR) >= 0.15, "Scenery must leave the secret clearing open")
@@ -188,7 +191,7 @@ func _ready() -> void:
 	check(game.wetland._bird_animation_frame({"state": 0, "animation_previous_state": 5, "animation_age": 0.0}) == 15, "Return flight must finish with landing")
 	var camera: Camera3D = game.wetland.map_camera
 	check(camera.projection == Camera3D.PROJECTION_ORTHOGONAL, "Map must use a real orthographic 3D camera")
-	check(is_equal_approx(camera.position.x, camera.position.z), "Camera azimuth must be 45 degrees")
+	check(is_zero_approx(camera.position.x), "Camera azimuth must be 0 (地图转正)")
 	check(is_equal_approx(camera.position.y, Vector2(camera.position.x, camera.position.z).length()), "Camera pitch must be 45 degrees")
 	var marker := Vector2(0.4, 0.6)
 	check(game.wetland._point(marker).is_equal_approx(camera.unproject_position(game.wetland._ground_position(marker)).round()), "Habitat must match projected terrain")
