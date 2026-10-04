@@ -32,13 +32,16 @@ const KNOWLEDGE_CATEGORY_COLORS := {
 	"外来物种": Color(0.82, 0.52, 0.32),
 	"案例": Color(0.80, 0.42, 0.46),
 	"管理策略": Color(0.36, 0.70, 0.68),
+	"地理": Color(0.34, 0.65, 0.78),
+	"水生动物": Color(0.38, 0.60, 0.73),
+	"保护行动": Color(0.65, 0.72, 0.36),
 }
 ## 未收集时的灰调（卡面 / 详情共用，改一处就整体变灰深浅）
 const KNOWLEDGE_LOCKED_INK := Color(0.55, 0.58, 0.58)
 ## 知识卡没有自己的插图，从行动卡图集（conservation-cards，3 列 × 2 行）里挑一格 ——
 ## 图鉴与牌库于是是同一套视觉语言。**显式指定 (列, 行)**，不走 id hash：
 ## hash 挑图会把「苦草」配上鸟图，看着就不对。
-## 六格图给八张卡，注定有两组同图 —— 挑的都是同类主题（水草/涉禽），看着不违和。
+## 共用六格主题场景图，不作为各物种的识别图。
 const KNOWLEDGE_ART_TILE := {
 	"plant_kucao": Vector2i(0, 1),          # 荷花池 + 鱼：沉水植物
 	"bird_baihe": Vector2i(0, 0),           # 白鹤站在芦苇里
@@ -48,6 +51,38 @@ const KNOWLEDGE_ART_TILE := {
 	"mech_fushouluo": Vector2i(1, 1),       # 农田劳作：防控现场
 	"cons_disease": Vector2i(0, 1),         # 水草塘：病害发生地（与苦草同图）
 	"cons_compensate": Vector2i(1, 0),      # 水乡村庄：社区共管
+	"geo_poyang": Vector2i(0, 1),
+	"geo_five_rivers": Vector2i(0, 1),
+	"geo_hukou": Vector2i(0, 1),
+	"geo_seasonal_lake": Vector2i(0, 1),
+	"geo_saucer_lakes": Vector2i(0, 1),
+	"geo_flood_storage": Vector2i(0, 1),
+	"animal_finless_porpoise": Vector2i(0, 1),
+	"bird_white_naped_crane": Vector2i(2, 1),
+	"bird_wintering_geese": Vector2i(2, 1),
+	"plant_sedge": Vector2i(0, 0),
+	"plant_reeds": Vector2i(0, 0),
+	"plant_lotus": Vector2i(0, 1),
+	"mech_fish_migration": Vector2i(0, 1),
+	"mech_vegetation_zones": Vector2i(0, 1),
+	"mech_food_web": Vector2i(0, 0),
+	"mech_feeding_depth": Vector2i(0, 0),
+	"case_extreme_drought": Vector2i(2, 0),
+	"mech_micro_wetlands": Vector2i(0, 1),
+	"mech_wetland_carbon": Vector2i(2, 0),
+	"mech_runoff_pollution": Vector2i(1, 1),
+	"manage_flyway": Vector2i(2, 1),
+	"mech_bird_rings": Vector2i(2, 0),
+	"manage_bird_surveys": Vector2i(2, 1),
+	"manage_fishing_ban": Vector2i(0, 1),
+	"protect_scientific_release": Vector2i(0, 1),
+	"manage_bird_canteens": Vector2i(1, 1),
+	"protect_birdwatching": Vector2i(2, 1),
+	"protect_bird_rescue": Vector2i(2, 0),
+	"protect_wetland_tracks": Vector2i(0, 0),
+	"case_entanglement": Vector2i(2, 0),
+	"manage_fisher_transition": Vector2i(1, 0),
+	"mech_underwater_noise": Vector2i(2, 0),
 }
 ## 主页「知识卡」按钮的像素图标（一张卡片：外框 + 两条文字线）
 const KNOWLEDGE_ICON_GRID := """..########..
@@ -143,7 +178,6 @@ var refresh_btn: Button           # 刷新手牌：花 5 万重抽整手，每�
 var dispatch_panel: Control       # 紧急调度的选牌面板（与牌库同款的全屏卡牌网格）
 var dispatch_grid: HFlowContainer
 var dispatch_hint: Label          # 面板顶部说明（含当前调度费，逐次递增所以要重写）
-var _dispatch_viewports: Array = []   # 调度面板卡牌的 SubViewport（重建时清理）
 var _refresh_used_turn: int = -1  # 本回合是否已刷过手牌（-1 = 没刷过）
 var _season_dial_index: int = -1  # 指针当前停在第几季，避免 _update_hud 每帧重触发动画
 var funds_label: Label
@@ -316,20 +350,18 @@ const SORT_COOLDOWN_MS := 3000       # 两次切换排序方式的最低间隔�
 # 初始值取足够久远 → 开局就是可用的。与排序那套（3 秒）同源，都是防连点。
 var _lever_cooldown_ms: int = -6000
 const LEVER_COOLDOWN_MS := 1000
-var _deck_viewports: Array = []       # 牌库卡牌的 SubViewport（重建时清理）
 var _deck_gyro_view: Control = null   # 当前鼠标悬停的牌库卡牌（只对它做陀螺仪）
 
 # 知识卡图鉴（主页入口）：与牌库查看器同款的网格 + 悬停 + 详情，
 # 但它是**独立一层**（MenuLayer 之上，因为入口在开始页而不是对局里）。
 var knowledge_viewer: Control          # 知识卡图鉴（全屏弹层）
 var knowledge_grid: HFlowContainer     # 知识卡网格
-var knowledge_count_label: Label       # 「已收集 x / 8」
+var knowledge_count_label: Label       # 「已收集 x / 总数」
 var knowledge_detail: Control          # 知识卡详情弹层（覆盖在查看器之上）
 var knowledge_detail_card: CenterContainer  # 左侧大牌容器
 var knowledge_detail_title: Label
 var knowledge_detail_body: RichTextLabel
 var _knowledge_big_card: Control = null     # 当前详情大牌（重开时清理）
-var _knowledge_viewports: Array = []        # 知识卡的 SubViewport（重建时清理）
 
 # ==================== 算分动画（小丑牌风）====================
 # 五类来源的**展示**顺序。⚠ 与 end_turn() 的真实执行顺序**不同**：
@@ -1991,6 +2023,7 @@ func _build_ui() -> void:
 	pv.add_child(popup_title)
 	popup_body = RichTextLabel.new()
 	popup_body.bbcode_enabled = true
+	popup_body.meta_clicked.connect(_on_knowledge_source_clicked)
 	popup_body.fit_content = true
 	popup_body.custom_minimum_size = Vector2(540, 0)
 	popup_body.add_theme_font_size_override("normal_font_size", _snap_px(16))
@@ -2468,7 +2501,7 @@ func _build_menu() -> void:
 	avb.add_child(HSeparator.new())
 
 	var a_scroll := ScrollContainer.new()
-	a_scroll.custom_minimum_size = Vector2(540, 300)
+	a_scroll.custom_minimum_size = Vector2(540, 360)
 	a_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	avb.add_child(a_scroll)
 
@@ -2546,11 +2579,14 @@ func _build_achievement_rows() -> void:
 	if ach_rows_col == null:
 		return
 	for c in ach_rows_col.get_children():
+		ach_rows_col.remove_child(c)
 		c.queue_free()
-	ach_count_label.text = "已解锁 %d / %d" % [Achievements.unlocked_count(), Achievements.LIST.size()]
-	for a in Achievements.LIST:
+	var visible_achievements := Achievements.visible_list()
+	ach_count_label.text = "已解锁 %d / %d" % [Achievements.unlocked_count(), visible_achievements.size()]
+	for a in visible_achievements:
 		var got: bool = Achievements.is_unlocked(str(a["id"]))
 		var row := HBoxContainer.new()
+		row.set_meta("achievement_id", str(a["id"]))
 		row.add_theme_constant_override("separation", 14)
 
 		var icon := _make_icon(str(a["icon"]), ACH_GOLD if got else ACH_LOCKED, 44)
@@ -2610,6 +2646,8 @@ func _build_achievement_popup() -> void:
 
 ## Achievements.achievement_unlocked 的接收端。一回合可能同时解锁多个，排队播。
 func _on_achievement_unlocked(achievement_id: String) -> void:
+	if menu_achievements_panel != null and menu_achievements_panel.visible:
+		_build_achievement_rows()
 	_ach_queue.append(achievement_id)
 	if not _ach_showing:
 		_drain_achievement_queue()
@@ -4233,33 +4271,13 @@ func _open_deck_viewer() -> void:
 	for c in deck_viewer_grid.get_children():
 		deck_viewer_grid.remove_child(c)
 		c.queue_free()
-	for vp in _deck_viewports:
-		if is_instance_valid(vp):
-			vp.queue_free()
-	_deck_viewports.clear()
 	_deck_gyro_view = null
 	var cards: Array = []
 	for card in _sorted_action_cards(_deck_sort_by_category):
-		# 卡牌内容放进 SubViewport 渲染成纹理，再挂到 TextureRect 上，
-		# 这样整张牌（面板 + 文字）是一个可被透视着色器整体倾斜的图元。
 		var made := _make_card(card, "effective")
 		var panel: PanelContainer = made["panel"]
-		var vp := SubViewport.new()
-		vp.size = Vector2(122, 165)
-		vp.transparent_bg = true
-		vp.render_target_update_mode = SubViewport.UPDATE_WHEN_VISIBLE
-		vp.add_child(panel)
-		deck_viewer.add_child(vp)
-		_deck_viewports.append(vp)
-
-		var view := TextureRect.new()
-		view.texture = vp.get_texture()
-		view.custom_minimum_size = Vector2(122, 165)
-		view.stretch_mode = TextureRect.STRETCH_SCALE
-		view.mouse_filter = Control.MOUSE_FILTER_STOP
+		var view := _make_gyro_card_view(panel)
 		view.set_meta("card", card)
-		view.set_meta("panel", panel)
-		view.material = _make_gyro_material()
 		view.tooltip_text = "%s\n\n%s" % [card["desc"], _effect_text(card)]
 		view.scale = Vector2(0.3, 0.3)
 		view.modulate.a = 0.0
@@ -4279,15 +4297,8 @@ func _open_deck_viewer() -> void:
 
 
 ## 卡牌的透视倾斜材质（绕 X/Y 轴 3D 旋转 + 透视投影）。
-## 牌库 / 紧急调度 / 知识卡图鉴的网格卡，以及**手牌**，全都用它 —— 三处手感因此完全一致。
-##
-## 与第一版的区别：变换在**画布坐标**里做，而不是「局部坐标 - card_size/2」。
-## 为什么必须这样：手牌不是一张图，是一棵 Control 子树（背景框 / 插图 / 每一行文字各自绘制）。
-## 只有让所有子节点都相对**同一个世界中心**做同一套变换，整张牌才会作为一个平面一起歪；
-## 若各按各自的局部中心算，卡片会碎成一堆各歪各的碎片。
-## 网格里的牌本来就只有一个图元（SubViewport 渲染好的一整张纹理），走同一条路径完全等价。
-##
-## card_center 由调用方每帧写入 —— 悬停时牌在浮动 + 放大，中心是动的。
+## 使用队友放大知识卡的原始实现：整棵卡面子树共用同一画布中心。
+## card_center 由 _step_card_gyro 每帧写入，跟随卡牌的移动、旋转和缩放。
 func _make_gyro_material() -> ShaderMaterial:
 	var shader := Shader.new()
 	shader.code = """shader_type canvas_item;
@@ -4318,14 +4329,53 @@ void vertex() {
 	return mat
 
 
-## 把一棵子树的绘制都并到「父级材质」上（**不含根自己**）。
-## 手牌是一棵 Control 子树，要让整张牌一起被透视着色器倾斜，
-## 就得让每个子节点都用 panel 上那个材质 —— 见 _make_gyro_material 的注释。
-func _use_parent_material_tree(n: Node) -> void:
-	for c in n.get_children():
-		if c is CanvasItem:
-			(c as CanvasItem).use_parent_material = true
-		_use_parent_material_tree(c)
+func _use_parent_material_tree(node: Node) -> void:
+	for child in node.get_children():
+		if child is CanvasItem:
+			child.use_parent_material = true
+		_use_parent_material_tree(child)
+
+
+func _bind_card_gyro(card: Control) -> void:
+	card.material = _make_gyro_material()
+	_use_parent_material_tree(card)
+	_step_card_gyro(card, Vector2.ZERO, 0.0)
+
+
+func _make_gyro_card_view(panel: PanelContainer) -> Control:
+	var view := Control.new()
+	view.size = Vector2(122, 165)
+	view.custom_minimum_size = view.size
+	view.mouse_filter = Control.MOUSE_FILTER_STOP
+	panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	view.add_child(panel)
+	view.set_meta("panel", panel)
+	_bind_card_gyro(view)
+	return view
+
+
+func _card_gyro_center(card: Control) -> Vector2:
+	return card.get_global_transform() * (card.size * 0.5)
+
+
+func _card_gyro_target(card: Control, mouse: Vector2, active: bool) -> Vector2:
+	if not active:
+		return Vector2.ZERO
+	var offset := mouse - _card_gyro_center(card)
+	return Vector2(clampf(offset.y * 0.0032, -0.32, 0.32), clampf(offset.x * 0.0042, -0.32, 0.32))
+
+
+func _step_card_gyro(card: Control, target: Vector2, delta: float) -> void:
+	var mat := card.material as ShaderMaterial
+	if mat == null:
+		return
+	var current := Vector2(float(card.get_meta("gyro_x", 0.0)), float(card.get_meta("gyro_y", 0.0)))
+	current = current.lerp(target, 1.0 - exp(-12.0 * delta))
+	card.set_meta("gyro_x", current.x)
+	card.set_meta("gyro_y", current.y)
+	mat.set_shader_parameter("tilt_x", current.x)
+	mat.set_shader_parameter("tilt_y", current.y)
+	mat.set_shader_parameter("card_center", _card_gyro_center(card))
 
 
 func _close_deck_viewer() -> void:
@@ -4588,7 +4638,7 @@ func _card_id_dict_less(a_id: String, b_id: String, by_category: bool) -> bool:
 
 
 # ==================== 牌库卡牌悬停 / 点击查看 ====================
-## 悬停：浮起放大 + 轻微漂浮 + 黄框；并记录为陀螺仪目标
+## 悬停：浮起放大 + 黄框；并记录为陀螺仪目标，不添加循环漂浮。
 func _on_viewer_card_hover(view: Control, _card: Dictionary) -> void:
 	_deck_gyro_view = view
 	_kill_card_tweens(view)
@@ -4604,17 +4654,6 @@ func _on_viewer_card_hover(view: Control, _card: Dictionary) -> void:
 	tw.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
 	tw.tween_property(view, "position:y", base.y - 16, 0.16)
 	tw.parallel().tween_property(view, "scale", Vector2(1.12, 1.12), 0.16)
-	# 四周轻微漂浮（幅度/速度都调小，避免和陀螺仪叠加显得像果冻）
-	var fx := view.create_tween().set_loops()
-	tweens.append(fx)
-	fx.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
-	fx.tween_property(view, "position:x", base.x + 2.5, 2.2).set_delay(0.16)
-	fx.tween_property(view, "position:x", base.x - 2.5, 2.2)
-	var fy := view.create_tween().set_loops()
-	tweens.append(fy)
-	fy.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
-	fy.tween_property(view, "position:y", base.y - 16 + 2, 2.0).set_delay(0.16)
-	fy.tween_property(view, "position:y", base.y - 16 - 2, 2.0)
 	view.set_meta("hover_tweens", tweens)
 	_apply_yellow_frame(view)
 
@@ -4649,7 +4688,7 @@ func _kill_card_tweens(view: Control) -> void:
 
 
 ## 牌库陀螺仪：只对鼠标悬停的那张牌做 3D 透视倾斜（绕 X/Y 轴），其余回正
-func _process_deck_gyro(delta: float) -> void:
+func _process_deck_gyro(delta: float, mouse_override: Vector2 = Vector2.INF) -> void:
 	# 三个网格（牌库 / 紧急调度 / 知识卡图鉴）任一开着就继续跑
 	var dispatch_open: bool = dispatch_panel != null and dispatch_panel.visible
 	var knowledge_open: bool = knowledge_viewer != null and knowledge_viewer.visible
@@ -4657,8 +4696,7 @@ func _process_deck_gyro(delta: float) -> void:
 		return
 	if deck_viewer_grid == null and dispatch_grid == null and knowledge_grid == null:
 		return
-	var mouse := get_viewport().get_mouse_position()
-	var k := 1.0 - exp(-12.0 * delta)
+	var mouse := mouse_override if mouse_override != Vector2.INF else get_viewport().get_mouse_position()
 	# 牌库与紧急调度面板用的是同一套卡牌网格与同一个 _deck_gyro_view，
 	# 所以这里按「当前开着哪个网格」选目标，两处都能有透视倾斜。
 	var grid: HFlowContainer = deck_viewer_grid
@@ -4671,35 +4709,14 @@ func _process_deck_gyro(delta: float) -> void:
 	for view in grid.get_children():
 		if not is_instance_valid(view):
 			continue
-		var mat: ShaderMaterial = view.material
-		if mat == null:
-			continue
-		var target_x := 0.0
-		var target_y := 0.0
-		if view == _deck_gyro_view:
-			var center: Vector2 = view.get_global_rect().get_center()
-			var d: Vector2 = mouse - center
-			# 鼠标在卡牌内的相对位置 → 俯仰/偏航角（±约 18°）
-			target_x = clampf(d.y * 0.0032, -0.32, 0.32)
-			target_y = clampf(d.x * 0.0042, -0.32, 0.32)
-			# 变换中心每帧跟着走（悬停时牌在浮动 + 放大，中心是动的）
-			mat.set_shader_parameter("card_center", center)
-		var cur_x: float = view.get_meta("gyro_x", 0.0)
-		var cur_y: float = view.get_meta("gyro_y", 0.0)
-		var nx := lerpf(cur_x, target_x, k)
-		var ny := lerpf(cur_y, target_y, k)
-		view.set_meta("gyro_x", nx)
-		view.set_meta("gyro_y", ny)
-		mat.set_shader_parameter("tilt_x", nx)
-		mat.set_shader_parameter("tilt_y", ny)
+		_step_card_gyro(view, _card_gyro_target(view, mouse, view == _deck_gyro_view), delta)
 
 
 ## 详情大牌的陀螺仪：鼠标压在**这张放大牌**上时，整张牌跟着做同样的 3D 倾斜 ——
 ## 与网格里悬停一张牌是同一种手感，只是牌已经放大展示在左边了。
 ##
 ## 大牌是静态展示（mouse_filter = IGNORE，事件不会到它），所以这里每帧自己算命中。
-## ⚠ 中心必须用 `transform * pivot_offset`：get_global_rect() 的 size 不含 scale，
-##   而大牌是 1.8 倍放大的，拿它的中心去算会让倾斜中心整体偏掉。
+## 命中用逆变换，兼容缩放后的详情卡。
 ## mouse_override 同 _update_card_hover，仅供自动化测试顶替真实鼠标。
 func _process_detail_gyro(delta: float, mouse_override: Vector2 = Vector2.INF) -> void:
 	var targets: Array = []
@@ -4710,26 +4727,10 @@ func _process_detail_gyro(delta: float, mouse_override: Vector2 = Vector2.INF) -
 	if targets.is_empty():
 		return
 	var mouse := mouse_override if mouse_override != Vector2.INF else get_viewport().get_mouse_position()
-	var k := 1.0 - exp(-12.0 * delta)
 	for big in targets:
-		var mat: ShaderMaterial = big.material
-		if mat == null:
-			continue
-		var center: Vector2 = big.get_global_transform() * big.pivot_offset
-		var half: Vector2 = big.size * 0.5 * big.scale
-		var tx := 0.0
-		var ty := 0.0
-		if absf(mouse.x - center.x) <= half.x and absf(mouse.y - center.y) <= half.y:
-			var d := mouse - center
-			tx = clampf(d.y * 0.0032, -0.32, 0.32)
-			ty = clampf(d.x * 0.0042, -0.32, 0.32)
-		var nx: float = lerpf(float(big.get_meta("gyro_x", 0.0)), tx, k)
-		var ny: float = lerpf(float(big.get_meta("gyro_y", 0.0)), ty, k)
-		big.set_meta("gyro_x", nx)
-		big.set_meta("gyro_y", ny)
-		mat.set_shader_parameter("tilt_x", nx)
-		mat.set_shader_parameter("tilt_y", ny)
-		mat.set_shader_parameter("card_center", center)
+		var local_mouse: Vector2 = big.get_global_transform().affine_inverse() * mouse
+		var active := Rect2(Vector2.ZERO, big.size).has_point(local_mouse)
+		_step_card_gyro(big, _card_gyro_target(big, mouse, active), delta)
 
 
 func _on_viewer_card_click(event: InputEvent, view: Control, card: Dictionary) -> void:
@@ -4767,9 +4768,7 @@ func _show_card_detail(view: Control, card: Dictionary) -> void:
 	var big: PanelContainer = made_big["panel"]
 	big.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	big.pivot_offset = Vector2(61, 82.5)
-	# 放大展示的这张也要会晃：材质挂在牌上、子树并到它，指针压上去就跟着倾斜
-	big.material = _make_gyro_material()
-	_use_parent_material_tree(big)
+	_bind_card_gyro(big)
 	big.set_meta("gyro_x", 0.0)
 	big.set_meta("gyro_y", 0.0)
 	_detail_big_card = big
@@ -4980,10 +4979,6 @@ func _open_knowledge_viewer() -> void:
 	for c in knowledge_grid.get_children():
 		knowledge_grid.remove_child(c)
 		c.queue_free()
-	for vp in _knowledge_viewports:
-		if is_instance_valid(vp):
-			vp.queue_free()
-	_knowledge_viewports.clear()
 	_deck_gyro_view = null
 
 	knowledge_count_label.text = "已收集 %d / %d" % [Knowledge.collected_count(), Knowledge.total_count()]
@@ -4991,27 +4986,11 @@ func _open_knowledge_viewer() -> void:
 	var views: Array = []
 	for kid in Knowledge.all_ids():
 		var collected: bool = Knowledge.is_collected(kid)
-		# 与牌库同一招：卡面放进 SubViewport 渲染成纹理，再挂到 TextureRect 上，
-		# 这样整张牌（面板 + 文字）是一个能被透视着色器整体倾斜的图元。
 		var panel: PanelContainer = _make_knowledge_card(kid, collected)
-		var vp := SubViewport.new()
-		vp.size = Vector2(122, 165)
-		vp.transparent_bg = true
-		vp.render_target_update_mode = SubViewport.UPDATE_WHEN_VISIBLE
-		vp.add_child(panel)
-		knowledge_viewer.add_child(vp)
-		_knowledge_viewports.append(vp)
-
-		var view := TextureRect.new()
-		view.texture = vp.get_texture()
-		view.custom_minimum_size = Vector2(122, 165)
-		view.stretch_mode = TextureRect.STRETCH_SCALE
-		view.mouse_filter = Control.MOUSE_FILTER_STOP
-		view.set_meta("panel", panel)
+		var view := _make_gyro_card_view(panel)
 		# 悬停 / 取消悬停要用「这张牌自己的」两套底色（未收集的是灰纸，不是行动卡那张纸卡）
 		view.set_meta("base_style", _knowledge_card_style(collected))
 		view.set_meta("hover_style", _knowledge_card_style(collected, true))
-		view.material = _make_gyro_material()
 		view.tooltip_text = _knowledge_tooltip(kid, collected)
 		view.scale = Vector2(0.3, 0.3)
 		view.modulate.a = 0.0
@@ -5093,6 +5072,7 @@ func _make_knowledge_card(kid: String, collected: bool) -> PanelContainer:
 		var name_l := _make_label(str(k.get("name", "")), 12, VisualTheme.INK)
 		name_l.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		name_l.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+		name_l.size = Vector2(108, 28)
 		name_l.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		name_l.custom_minimum_size.y = 28
 		name_l.size_flags_vertical = Control.SIZE_EXPAND_FILL
@@ -5170,8 +5150,7 @@ func _show_knowledge_detail(view: Control, kid: String) -> void:
 	var big: PanelContainer = _make_knowledge_card(kid, collected)
 	big.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	big.pivot_offset = Vector2(61, 82.5)
-	big.material = _make_gyro_material()
-	_use_parent_material_tree(big)
+	_bind_card_gyro(big)
 	big.set_meta("gyro_x", 0.0)
 	big.set_meta("gyro_y", 0.0)
 	_knowledge_big_card = big
@@ -5202,6 +5181,8 @@ func _knowledge_detail_text(kid: String, collected: bool) -> String:
 		return "[color=#8a8a8a]未收集[/color]\n\n这张知识卡还没有收集到。在游戏里触发它之后，这里会显示它的完整资料。\n\n[b]？[/b]"
 	var k: Dictionary = GameState.KNOWLEDGE_CARDS[kid]
 	var body := "[color=#8a8a8a]类别：%s[/color]\n\n" % str(k["category"])
+	if k.has("level"):
+		body += "[color=#8a8a8a]%s[/color]\n\n" % str(k["level"])
 	# 关联标签（与「危机 - 对策」同一套词表）：本回合打过带这些标签的牌，这张卡更容易出现
 	var ktags: Array = k.get("tags", [])
 	if not ktags.is_empty():
@@ -5210,7 +5191,22 @@ func _knowledge_detail_text(kid: String, collected: bool) -> String:
 	body += "[b]生态角色[/b]：%s\n\n" % str(k["ecology"])
 	body += "[b]当前威胁[/b]：%s\n\n" % str(k["threat"])
 	body += "[b]管理建议[/b]：%s" % str(k["management"])
+	body += _knowledge_source_text(k)
 	return body
+
+
+func _knowledge_source_text(card: Dictionary) -> String:
+	if not card.has("source_url"):
+		return ""
+	return "\n\n[b]资料来源[/b]：[url=%s]%s[/url]" % [card["source_url"], card["source_title"]]
+
+
+func _on_knowledge_source_clicked(meta: Variant) -> void:
+	var url := str(meta)
+	for card in GameState.KNOWLEDGE_CARDS.values():
+		if url.begins_with("https://") and url == str(card.get("source_url", "")):
+			OS.shell_open(url)
+			return
 
 
 func _close_knowledge_detail() -> void:
@@ -5259,13 +5255,16 @@ func _build_knowledge_detail() -> void:
 
 	knowledge_detail_title = _make_label("", 30, Color(1, 0.9, 0.55))
 	knowledge_detail_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	knowledge_detail_title.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	iv.add_child(knowledge_detail_title)
 
 	iv.add_child(HSeparator.new())
 
 	knowledge_detail_body = RichTextLabel.new()
 	knowledge_detail_body.bbcode_enabled = true
-	knowledge_detail_body.fit_content = true
+	knowledge_detail_body.fit_content = false
+	knowledge_detail_body.scroll_active = true
+	knowledge_detail_body.meta_clicked.connect(_on_knowledge_source_clicked)
 	knowledge_detail_body.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	knowledge_detail_body.add_theme_font_size_override("normal_font_size", _snap_px(16))
 	knowledge_detail_body.add_theme_color_override("default_color", Color(0.96, 0.94, 0.9))
@@ -5878,7 +5877,7 @@ func _close_dispatch_panel() -> void:
 
 
 ## 请卡面板 —— **直接照搬牌库查看器的 UI 与交互**：同一套
-## _make_card → SubViewport → 透视材质 TextureRect + 悬停黄框/浮起/陀螺仪，
+## 原始卡面子树共用透视材质 + 悬停黄框/浮起/陀螺仪，
 ## 连悬停处理器都是同一个（_on_viewer_card_hover）。差别只有两处：
 ##   ① 卡池限定为「当季可抽池」（不是全部 44 张）
 ##   ② 点一下 = **调度它**，而不是打开卡牌详情
@@ -5951,32 +5950,14 @@ func _fill_dispatch_grid() -> void:
 	for c in dispatch_grid.get_children():
 		dispatch_grid.remove_child(c)
 		c.queue_free()
-	for vp in _dispatch_viewports:
-		if is_instance_valid(vp):
-			vp.queue_free()
-	_dispatch_viewports.clear()
 	var pool: Array = GameState.season_pool()
 	pool.sort_custom(func(a, b): return _card_dict_less(a, b, _deck_sort_by_category))
 	var views: Array = []
 	for card in pool:
 		var made := _make_card(card, GameState.DISPATCH_TIER)
 		var panel: PanelContainer = made["panel"]
-		var vp := SubViewport.new()
-		vp.size = Vector2(122, 165)
-		vp.transparent_bg = true
-		vp.render_target_update_mode = SubViewport.UPDATE_WHEN_VISIBLE
-		vp.add_child(panel)
-		dispatch_panel.add_child(vp)
-		_dispatch_viewports.append(vp)
-
-		var view := TextureRect.new()
-		view.texture = vp.get_texture()
-		view.custom_minimum_size = Vector2(122, 165)
-		view.stretch_mode = TextureRect.STRETCH_SCALE
-		view.mouse_filter = Control.MOUSE_FILTER_STOP
+		var view := _make_gyro_card_view(panel)
 		view.set_meta("card", card)
-		view.set_meta("panel", panel)
-		view.material = _make_gyro_material()
 		view.tooltip_text = "%s\n\n调度后按「有效投入」档结算：%s" % [
 			str(card["desc"]), _tier_effects_text(card, GameState.DISPATCH_TIER)]
 		view.scale = Vector2(0.3, 0.3)
@@ -6027,6 +6008,7 @@ func _spawn_dispatched_cards(played: Array) -> void:
 		#   手牌那边也是这么取的（见 _build_hand_panel）。
 		var made: Dictionary = _make_card(card, str(d["tier"]))
 		var panel: PanelContainer = made["panel"]
+		_bind_card_gyro(panel)
 		# ⚠ 必须与手牌用**同一个 pivot**（牌底中点）：甩牌的落点是
 		#   slot - panel.pivot_offset，手牌的 pivot 是 (61,165)（_layout_fan 设的）。
 		#   这里若留着默认的 (0,0)，调度牌就会比同排的牌右下各偏 61/165px ——
@@ -6059,16 +6041,12 @@ func _build_hand_panel() -> void:
 	for card in current_hand:
 		var made := _make_card(card)
 		var panel: PanelContainer = made["panel"]
-		# 手牌也要有牌库同款陀螺仪：材质挂在 panel 上、子树全部 use_parent_material，
-		# 着色器按画布坐标统一变换 —— 整张牌（框 + 插图 + 文字）一起歪。
-		panel.material = _make_gyro_material()
-		_use_parent_material_tree(panel)
+		_bind_card_gyro(panel)
 		card_box.add_child(panel)
 		card_infos.append({
 			"panel": panel, "card_id": card["id"],
 			"base_pos": Vector2.ZERO, "theta": 0.0, "radial": Vector2.UP,
 			"selected": false, "shaking": false, "hovered": false,
-			"gyro_x": 0.0, "gyro_y": 0.0,
 			"tier": "",                                  # "" = 跟随拉杆；非空 = 选中时锁定的档位
 			"cost_label": made["cost_label"],
 		})
@@ -6448,6 +6426,7 @@ func _make_card(card: Dictionary, tier: String = "") -> Dictionary:
 	var name_l := _make_label(card["name"], 12, VisualTheme.INK)
 	name_l.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	name_l.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	name_l.size = Vector2(108, 28)
 	name_l.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	name_l.custom_minimum_size.y = 28
 	name_l.size_flags_vertical = Control.SIZE_EXPAND_FILL
@@ -6693,35 +6672,11 @@ func _update_card_hover(delta: float, mouse_override: Vector2 = Vector2.INF) -> 
 		panel.scale = panel.scale.lerp(Vector2(s, s), 1.0 - exp(-14.0 * delta))
 		var tilt: float = info["theta"]
 		if hovering:
-			var pointer_x := mouse_global.x - panel.get_global_rect().get_center().x
-			tilt = tilt * 0.65 + clampf(pointer_x * 0.0006, -0.045, 0.045)
+			tilt *= 0.65
 		panel.rotation = lerp_angle(panel.rotation, tilt, 1.0 - exp(-15.0 * delta))
 		# 陀螺仪：悬停那一张跟着鼠标做 3D 透视倾斜（与牌库 / 知识卡图鉴同一套系数）
-		var gyro_center := panel.get_global_rect().get_center()
-		var tx := 0.0
-		var ty := 0.0
-		if hovering:
-			var d := mouse_global - gyro_center
-			tx = clampf(d.y * 0.0032, -0.32, 0.32)
-			ty = clampf(d.x * 0.0042, -0.32, 0.32)
-		_update_card_gyro(info, panel, tx, ty, gyro_center, delta)
+		_step_card_gyro(panel, _card_gyro_target(panel, mouse_global, hovering), delta)
 	_update_card_stack()
-
-
-## 手牌陀螺仪：与牌库 / 知识卡图鉴同一套系数（±约 0.32 rad 的 3D 透视倾斜）。
-## 位置与缩放本来就有平滑，这里用同样的指数收敛，跟手且不抖。
-func _update_card_gyro(info: Dictionary, panel: PanelContainer, target_x: float, target_y: float, center: Vector2, delta: float) -> void:
-	var mat: ShaderMaterial = panel.material
-	if mat == null:
-		return
-	var k := 1.0 - exp(-12.0 * delta)
-	var nx: float = lerpf(float(info.get("gyro_x", 0.0)), target_x, k)
-	var ny: float = lerpf(float(info.get("gyro_y", 0.0)), target_y, k)
-	info["gyro_x"] = nx
-	info["gyro_y"] = ny
-	mat.set_shader_parameter("tilt_x", nx)
-	mat.set_shader_parameter("tilt_y", ny)
-	mat.set_shader_parameter("card_center", center)
 
 
 ## 手牌不在焦点 / 算分动画期间：把残留的倾斜平滑收回
@@ -6730,7 +6685,7 @@ func _decay_hand_gyro(delta: float) -> void:
 		var panel: PanelContainer = info.get("panel")
 		if not is_instance_valid(panel):
 			continue
-		_update_card_gyro(info, panel, 0.0, 0.0, panel.get_global_rect().get_center(), delta)
+		_step_card_gyro(panel, Vector2.ZERO, delta)
 
 
 ## 手牌分三层叠放（像斗地主那样，选中的牌整体浮起一排）：
@@ -7377,11 +7332,7 @@ func _show_knowledge(card_id: String) -> void:
 	Knowledge.unlock(card_id)
 	_current_phase = "popup_knowledge"
 	var k: Dictionary = GameState.KNOWLEDGE_CARDS[card_id]
-	var body := "[color=#7fd0ff]【%s】[/color]\n\n" % k["category"]
-	body += "%s\n\n" % k["short"]
-	body += "[b]生态角色[/b]：%s\n\n" % k["ecology"]
-	body += "[b]当前威胁[/b]：%s\n\n" % k["threat"]
-	body += "[b]管理建议[/b]：%s" % k["management"]
+	var body := _knowledge_detail_text(card_id, true)
 	_show_popup("知识卡 · %s" % k["name"], body, "收下（继续）", _on_resolve_continue)
 
 

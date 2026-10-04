@@ -932,6 +932,326 @@ const KNOWLEDGE_CARDS := {
 		"condition": "community < 40",
 		"tags": ["社区补偿", "产业转产"],
 	},
+	"geo_poyang": {
+		"name": "认识鄱阳湖", "category": "地理", "trigger": "observation",
+		"short": "鄱阳湖位于江西，是中国最大的淡水湖。",
+		"ecology": "它与长江相连，是许多水生生物和候鸟的家园。",
+		"threat": "污染和湿地破坏会影响湖泊中的生命。",
+		"management": "从认识家乡的河湖开始，参与保护水环境。",
+		"condition": "turn == 1", "tags": ["公众参与"],
+		"source_title": "中科院地理所：鄱阳湖",
+		"source_url": "https://igsnrr.cas.cn/cbkx/kpyd/zgdl/cnszy/202009/t20200910_5692411.html",
+	},
+	"geo_five_rivers": {
+		"name": "五河汇入一湖", "category": "地理", "trigger": "observation",
+		"short": "赣江、抚河、信江、饶河和修水汇入鄱阳湖。",
+		"ecology": "这些河流把流域里的来水送到湖中，再与长江相接。",
+		"threat": "上游污染可能沿河进入湖区。",
+		"management": "保护湖泊也要保护上游河流，治理需要多地合作。",
+		"condition": "", "tags": ["水体治理", "社区参与"], "action_ids": ["lake_chief", "nonpoint_intercept"],
+		"source_title": "中科院：科普湿地",
+		"source_url": "https://neigae.cas.cn/klwee/qt/kpsd/201604/t20160421_7562770.html",
+	},
+	"geo_hukou": {
+		"name": "湖口：江湖相连的通道", "category": "地理", "trigger": "observation",
+		"short": "鄱阳湖通过北部的湖口与长江相连。",
+		"ecology": "江湖之间的水流联系也是生物迁移的重要条件。",
+		"threat": "人为阻隔会改变水流与生物的通行条件。",
+		"management": "研究江湖联系后再开展水工程，保护必要的通道。",
+		"condition": "", "tags": ["水工调控", "增殖放流"], "action_ids": ["sluice_fry", "fishway", "water_replenish"],
+		"source_title": "中科院地理所：鄱阳湖",
+		"source_url": "https://igsnrr.cas.cn/cbkx/kpyd/zgdl/cnszy/202009/t20200910_5692411.html",
+	},
+	"geo_seasonal_lake": {
+		"name": "会变大小的湖", "category": "地理", "trigger": "observation",
+		"short": "鄱阳湖的湖面会随丰水期和枯水期发生变化。",
+		"ecology": "涨水时湖面扩大，退水时洲滩显露，生物利用的环境也随之改变。",
+		"threat": "把每次退水都当成灾害，会忽略自然的季节节律。",
+		"management": "连续观察水位与季节，分清正常变化和异常旱涝。",
+		"condition": "", "tags": ["补水调度", "科研监测"], "seasons": ["春", "夏", "秋", "冬"],
+		"source_title": "中科院地理所：鄱阳湖",
+		"source_url": "https://igsnrr.cas.cn/cbkx/kpyd/zgdl/cnszy/202009/t20200910_5692411.html",
+	},
+	"geo_saucer_lakes": {
+		"name": "碟形湖：大湖里的小湖", "category": "地理", "trigger": "observation",
+		"short": "湖区的部分浅洼地会在退水后成为相对独立的小湖。",
+		"ecology": "碟形湖与主湖的连接或分离，影响其中的水、植物和动物。",
+		"threat": "改变水文联系可能改变小湖原有的生态环境。",
+		"management": "因地制宜维护生态水位，保留不同类型的湿地生境。",
+		"condition": "", "tags": ["补水调度", "栖息地营造"], "action_ids": ["water_control", "water_comanage"], "seasons": ["秋"],
+		"source_title": "中科院：通江湖泊水文过程研究",
+		"source_url": "https://niglas.cas.cn/xwdt_1_1/yjjz/202005/t20200528_5599537.html",
+	},
+	"geo_flood_storage": {
+		"name": "湖泊如何调蓄洪水", "category": "地理", "trigger": "observation",
+		"short": "湖泊能容纳来水，参与调节河湖水量。",
+		"ecology": "鄱阳湖接纳五河来水，经过调蓄后与长江相接。",
+		"threat": "侵占湖泊空间会影响湖泊原有的功能。",
+		"management": "保护湖泊与湿地空间，防洪要考虑整个流域。",
+		"condition": "", "tags": ["生态修复", "补水调度"], "action_ids": ["wetland_restore", "water_storage"], "seasons": ["夏"],
+		"source_title": "中科院地理所：鄱阳湖",
+		"source_url": "https://igsnrr.cas.cn/cbkx/kpyd/zgdl/cnszy/202009/t20200910_5692411.html",
+	},
+	"animal_finless_porpoise": {
+		"name": "长江江豚", "category": "水生动物", "trigger": "observation",
+		"short": "江豚生活在水里，却是哺乳动物，幼豚靠母乳成长。",
+		"ecology": "鄱阳湖是长江江豚的重要家园，它需要安全的水域。",
+		"threat": "水下噪声和人类活动可能影响江豚及幼豚。",
+		"management": "保护栖息水域，支持巡护、监测和减少干扰。",
+		"condition": "", "tags": ["执法巡护", "科研监测"], "action_ids": ["patrol", "research"],
+		"source_title": "中科院水生所：新生长江江豚",
+		"source_url": "https://ihb.cas.cn/xwdt/zhxw/202406/t20240621_7193987.html",
+	},
+	"bird_white_naped_crane": {
+		"name": "白枕鹤", "category": "鸟类", "trigger": "observation",
+		"short": "白枕鹤身体多为灰色，喉部和枕部为白色。",
+		"ecology": "这种大型涉禽会迁徙，利用湿地和部分农田栖息觅食。",
+		"threat": "栖息地中的干扰会影响机警的鹤类。",
+		"management": "远距离观察外形，不为了拍照追赶鸟群。",
+		"condition": "", "tags": ["栖息地营造", "公众参与"], "action_ids": ["habitat_protect", "education"], "seasons": ["冬"],
+		"source_title": "国家林草局：白枕鹤",
+		"source_url": "https://www.forestry.gov.cn/c/www/xtq/26044.jhtml",
+	},
+	"bird_wintering_geese": {
+		"name": "鄱阳湖的雁类", "category": "鸟类", "trigger": "observation",
+		"short": "豆雁、鸿雁和白额雁等雁类会到鄱阳湖越冬。",
+		"ecology": "不同雁类在不同子湖活动，调查能帮助了解它们的分布。",
+		"threat": "只把所有雁记成一种，会遗漏物种之间的差异。",
+		"management": "借助图鉴与望远镜辨认，记录时间、地点和种类。",
+		"condition": "", "tags": ["科研监测", "栖息地营造"], "action_ids": ["research", "habitat_protect"], "seasons": ["冬"],
+		"source_title": "中科院：鄱阳湖越冬雁类研究",
+		"source_url": "https://igsnrr.cas.cn/sourcedb/zw/lw/202504/t20250409_7592059.html",
+	},
+	"plant_sedge": {
+		"name": "苔草：草洲上的绿色食堂", "category": "植物", "trigger": "observation",
+		"short": "洲滩上的嫩苔草是部分雁鸭类的重要食物。",
+		"ecology": "草的生长时间和嫩老程度会影响候鸟能否获得适口食物。",
+		"threat": "异常干旱可能让草提前生长、老化，错过候鸟的需求。",
+		"management": "监测草的生长与候鸟食性，由专业人员制定食源管理方案。",
+		"condition": "", "tags": ["生态修复", "栖息地营造"], "action_ids": ["seed_bank", "bird_canteen"], "seasons": ["秋", "冬"],
+		"source_title": "国家林草局：守护候鸟迁飞栖息地",
+		"source_url": "https://www.forestry.gov.cn/c/www/lcdt/77840.jhtml",
+	},
+	"plant_reeds": {
+		"name": "芦苇与南荻", "category": "植物", "trigger": "observation",
+		"short": "鄱阳湖较高的洲滩上分布着芦苇、荻等植物。",
+		"ecology": "它们与低处的苔草、水生植物组成不同的植被群落。",
+		"threat": "把不同高度的湿地改成同一种环境，会减少生境差异。",
+		"management": "修复时观察地势和水位，保留自然植被的分布带。",
+		"condition": "", "tags": ["生态修复", "科研监测"], "action_ids": ["veg_restore", "wetland_restore"],
+		"source_title": "生态学报：鄱阳湖湿地植被分布",
+		"source_url": "https://www.ecologica.cn/stxb/article/abstract/stxb201307301983?st=search",
+	},
+	"plant_lotus": {
+		"name": "莲与藕的秘密", "category": "植物", "trigger": "observation",
+		"short": "荷花、莲叶和藕属于同一种植物，藕是地下茎。",
+		"ecology": "莲是水生植物，膨大的地下茎也是它的植物器官。",
+		"threat": "只认识花和菜肴，容易忽略水生植物的完整结构。",
+		"management": "观察花、叶和茎的关系，在允许的地方开展自然学习。",
+		"condition": "", "tags": ["公众参与", "生态修复"], "action_ids": ["education", "bird_canteen"], "seasons": ["夏"],
+		"source_title": "中科院华南植物园：莲的心事",
+		"source_url": "https://scbg.cas.cn/hx/201908/t20190803_6734975.html",
+	},
+	"mech_fish_migration": {
+		"name": "鱼儿的江湖旅行", "category": "机制", "trigger": "observation",
+		"short": "部分鱼类在江里繁殖，再到湖泊里摄食和长大。",
+		"ecology": "青、草、鲢、鳙等江湖洄游性鱼类需要连通的河湖环境。",
+		"threat": "通道受阻会影响亲鱼迁移和鱼苗进入湖泊。",
+		"management": "保护江湖联系、产卵环境和育幼环境。",
+		"condition": "", "tags": ["增殖放流", "水工调控"], "action_ids": ["sluice_fry", "fishway", "spawning_ground"], "seasons": ["春"],
+		"source_title": "中科院水生所：鄱阳湖与鱼类资源",
+		"source_url": "https://www.ihb.cas.cn/kxcb_1/kxcb/202103/t20210325_5984541.html",
+	},
+	"mech_vegetation_zones": {
+		"name": "湿地植物的分布带", "category": "机制", "trigger": "observation",
+		"short": "不同地势和水分条件下，湿地植物的分布并不一样。",
+		"ecology": "从较低的湖区到较高的洲滩，可见水生植物、苔草和芦苇等群落。",
+		"threat": "忽略生长环境、盲目补种，可能不适合当地水文条件。",
+		"management": "先调查水位与地势，再选择适宜的植物和修复位置。",
+		"condition": "", "tags": ["生态修复", "科研监测"], "action_ids": ["submerged_planting", "veg_restore", "research"],
+		"source_title": "生态学报：鄱阳湖湿地植被分布",
+		"source_url": "https://www.ecologica.cn/stxb/article/abstract/stxb201307301983?st=search",
+	},
+	"mech_food_web": {
+		"name": "湿地里的食物联系", "category": "机制", "trigger": "observation",
+		"short": "水草、鱼虾和水鸟通过食物关系联系在一起。",
+		"ecology": "改善湿地生境、恢复食物供应，有助于水鸟栖息觅食。",
+		"threat": "只关注某一种动物，可能忽略它赖以生存的食物和环境。",
+		"management": "一起保护生境和食源，观察治理带来的连锁变化。",
+		"condition": "", "tags": ["生态修复", "栖息地营造"], "action_ids": ["veg_restore", "spawning_ground", "habitat_protect"],
+		"source_title": "国家林草局：多方协力守护候鸟家园",
+		"source_url": "https://www.forestry.gov.cn/c/www/dzbhdt/657022.jhtml",
+	},
+	"mech_feeding_depth": {
+		"name": "水鸟需要适宜的水深", "category": "机制", "trigger": "decision",
+		"short": "水里有食物，还要看鸟能不能够得着。",
+		"ecology": "浅水、湿泥滩和草洲为不同水鸟提供不同的觅食空间。",
+		"threat": "异常水位和退水时间会改变觅食环境与食物供给。",
+		"management": "依据水鸟需求科学调水，保留多样的觅食环境。",
+		"condition": "", "tags": ["补水调度", "栖息地营造"], "action_ids": ["water_control", "water_schedule", "habitat_protect"],
+		"source_title": "国家林草局：守护候鸟迁飞栖息地",
+		"source_url": "https://www.forestry.gov.cn/c/www/lcdt/77840.jhtml",
+	},
+	"case_extreme_drought": {
+		"name": "极端干旱的连锁影响", "category": "案例", "trigger": "consequence",
+		"short": "异常缺水会同时改变水面、植物和候鸟的食物。",
+		"ecology": "2022年的极端干旱让鄱阳湖部分传统越冬生境发生变化。",
+		"threat": "食源减少与栖息环境改变会给越冬候鸟带来困难。",
+		"management": "监测旱情，结合生态补水和补充食源开展应对。",
+		"condition": "water_level < 40", "tags": ["补水调度", "栖息地营造"], "action_ids": ["water_replenish", "water_storage"],
+		"source_title": "国家林草局：守护候鸟迁飞栖息地",
+		"source_url": "https://www.forestry.gov.cn/c/www/lcdt/77840.jhtml",
+	},
+	"mech_micro_wetlands": {
+		"name": "小微湿地帮助净水", "category": "机制", "trigger": "decision",
+		"short": "小水塘和河沟也能参与水环境保护。",
+		"ecology": "水生植物可帮助拦截、过滤污染物，增强水体自净能力。",
+		"threat": "持续排入污染物会给小微湿地增加负担。",
+		"management": "把源头减污、污水处理和湿地修复结合起来。",
+		"condition": "", "tags": ["水体治理", "社区参与"], "action_ids": ["floating_island", "sewage_comanage"],
+		"source_title": "国家林草局：一泓碧水润泽万物",
+		"source_url": "https://www.forestry.gov.cn/c/www/sdfc/598794.jhtml",
+	},
+	"mech_wetland_carbon": {
+		"name": "湿地也能储存碳", "category": "机制", "trigger": "observation",
+		"short": "湿地植被参与固碳，也是碳循环的一部分。",
+		"ecology": "鄱阳湖碟形湖研究发现，水文连通条件会影响植被固碳能力。",
+		"threat": "不能简单认为连通越强、固碳就一定越多。",
+		"management": "长期监测不同湿地，依据证据制定保护方案。",
+		"condition": "", "tags": ["科研监测", "生态修复"], "action_ids": ["research", "wetland_restore"], "level": "初中拓展",
+		"source_title": "中科院：水文连通性与湿地植被固碳",
+		"source_url": "https://www.niglas.cas.cn/xwdt_1_1/yjjz/202601/t20260126_8118721.html",
+	},
+	"mech_runoff_pollution": {
+		"name": "雨水带来的面源污染", "category": "机制", "trigger": "consequence",
+		"short": "污染不只来自排污口，也可能分散在农田等区域。",
+		"ecology": "肥料等物质可随径流进入水体，增加湖泊的污染负荷。",
+		"threat": "过量施肥及管理不当会加重农业面源污染。",
+		"management": "科学减量施肥，结合拦截带和流域治理减少污染输入。",
+		"condition": "", "tags": ["水体治理", "生态修复"], "action_ids": ["nonpoint_intercept", "lake_chief"], "seasons": ["夏"],
+		"source_title": "生态环境部：鄱阳湖保护修复问题",
+		"source_url": "https://www.mee.gov.cn/ywgz/zysthjbhdc/dcjl/202405/t20240517_1073473.shtml",
+	},
+	"manage_flyway": {
+		"name": "候鸟迁飞通道", "category": "管理策略", "trigger": "decision",
+		"short": "候鸟的一次迁徙，需要一路上许多地方共同守护。",
+		"ecology": "繁殖地、停歇地和越冬地构成迁徙生活中的不同环节。",
+		"threat": "其中一个环节受损，也可能影响整条迁徙路线。",
+		"management": "各地共享监测信息，协同保护迁徙沿线生境。",
+		"condition": "", "tags": ["栖息地营造", "执法巡护"], "action_ids": ["migration_corridor"], "seasons": ["春", "秋"],
+		"source_title": "国家林草局：多方协力守护候鸟家园",
+		"source_url": "https://www.forestry.gov.cn/c/www/dzbhdt/657022.jhtml",
+	},
+	"mech_bird_rings": {
+		"name": "鸟脚上的“身份证”", "category": "机制", "trigger": "observation",
+		"short": "科研人员给部分鸟佩戴脚环，用来识别个体。",
+		"ecology": "在鄱阳湖重新观察到带环白枕鹤，能为迁徙研究提供线索。",
+		"threat": "追赶、捕捉鸟类查看脚环，会干扰它们。",
+		"management": "远距离记录可见环号，向专业机构报告；环志由专业人员开展。",
+		"condition": "", "tags": ["科研监测", "公众参与"], "action_ids": ["research", "education"],
+		"source_title": "国家林草局：白枕鹤环志与协作保护",
+		"source_url": "https://www.forestry.gov.cn/c/www/dzbhdt/657022.jhtml",
+	},
+	"manage_bird_surveys": {
+		"name": "怎样调查候鸟", "category": "管理策略", "trigger": "decision",
+		"short": "连续调查比一次看到多少只鸟更能说明变化。",
+		"ecology": "定期调查、视频和声纹识别能帮助了解鸟类分布。",
+		"threat": "调查范围和记录方式不一致，会增加比较的困难。",
+		"management": "按规范记录时间、地点、种类与数量，使用科技手段辅助监测。",
+		"condition": "", "tags": ["科研监测", "执法巡护"], "action_ids": ["research", "smart_patrol"],
+		"source_title": "国家林草局：鄱阳湖候鸟保护工作",
+		"source_url": "https://www.forestry.gov.cn/c/www/dzbhdt/655834.jhtml",
+	},
+	"manage_fishing_ban": {
+		"name": "十年禁渔保护了什么", "category": "管理策略", "trigger": "decision",
+		"short": "禁渔为鱼类等水生生物恢复提供了机会。",
+		"ecology": "鄱阳湖禁捕后的监测记录到鱼类资源恢复，也关注江豚变化。",
+		"threat": "非法捕捞会损害恢复中的水生生物资源。",
+		"management": "支持禁捕巡护与长期监测，也帮助退捕渔民转产就业。",
+		"condition": "", "tags": ["执法巡护", "产业转型"], "action_ids": ["patrol", "fisher_retrain"],
+		"source_title": "国家林草局：一泓碧水润泽万物",
+		"source_url": "https://www.forestry.gov.cn/c/www/sdfc/598794.jhtml",
+	},
+	"protect_scientific_release": {
+		"name": "科学放流，拒绝随意放生", "category": "保护行动", "trigger": "decision",
+		"short": "把动物放进水里，不一定是在帮助自然。",
+		"ecology": "科学放流需要考虑物种与当地生态环境是否适宜。",
+		"threat": "向天然开放水域投放外来物种、杂交种等可能破坏生态。",
+		"management": "不自行放生宠物或外来鱼，参与由专业部门组织的科学活动。",
+		"condition": "", "tags": ["增殖放流", "物种防控"], "action_ids": ["fish_restock", "invasive_clear"],
+		"source_title": "农业农村部：推进长江十年禁渔工作",
+		"source_url": "https://yyj.moa.gov.cn/tzgg/202403/t20240322_6452083.htm",
+	},
+	"manage_bird_canteens": {
+		"name": "候鸟食堂怎样建", "category": "管理策略", "trigger": "decision",
+		"short": "保留稻谷、管理藕田等措施可提供候鸟补充食源。",
+		"ecology": "人工食源地可以帮助缓解候鸟食物不足。",
+		"threat": "候鸟进入农田觅食，也可能给农户带来损失。",
+		"management": "食源管理与生态补偿一起推进；游客不自行投喂。",
+		"condition": "", "tags": ["栖息地营造", "社区补偿"], "action_ids": ["bird_canteen", "bird_friendly"],
+		"source_title": "国家林草局：人鸟共处鄱阳湖",
+		"source_url": "https://www.forestry.gov.cn/c/www/dzbhdt/668059.jhtml",
+	},
+	"protect_birdwatching": {
+		"name": "文明观鸟", "category": "保护行动", "trigger": "decision",
+		"short": "欣赏鸟类，要把不打扰它们放在前面。",
+		"ecology": "远距离安静观察，能看到鸟类自然的生活状态。",
+		"threat": "追逐、投喂、无人机和闪光灯可能惊扰鸟群。",
+		"management": "遵守观鸟区规定，使用望远镜，不追鸟、不诱拍、不随意投喂。",
+		"condition": "", "tags": ["公众参与", "产业转产"], "action_ids": ["education", "ecotourism"],
+		"source_title": "吴城候鸟小镇：观鸟须知",
+		"source_url": "https://www.wchnxz.com/wap/notice.html?n=%E6%97%85%E6%B8%B8%E9%A1%BB%E7%9F%A5&num=4&pn=%E6%99%AF%E5%8C%BA%E5%AF%BC%E8%A7%88&ppn=%E9%A6%96%E9%A1%B5",
+	},
+	"protect_bird_rescue": {
+		"name": "发现伤病鸟怎么办", "category": "保护行动", "trigger": "decision",
+		"short": "发现伤病鸟，及时报告并联系专业救助人员。",
+		"ecology": "专业救助包括发现、响应、救治、康复和放归。",
+		"threat": "自行追捕、喂食或治疗，可能给鸟和自己带来风险。",
+		"management": "保持距离，告知监护人并记录位置，联系保护区或专业救助机构。",
+		"condition": "", "tags": ["应急救护", "公众参与"], "action_ids": ["rescue", "guard_team"],
+		"source_title": "国家林草局：鄱阳湖的候鸟救助",
+		"source_url": "https://www.forestry.gov.cn/c/www/dzbhdt/634206.jhtml",
+	},
+	"protect_wetland_tracks": {
+		"name": "草洲不是越野场", "category": "保护行动", "trigger": "decision",
+		"short": "湿地洲滩是生物的家园，不能当成随意行驶的空地。",
+		"ecology": "保护完整的湿地与安静的栖息环境，有助于候鸟越冬。",
+		"threat": "车辆碾压湿地等行为会破坏栖息环境。",
+		"management": "只在允许区域活动，不驾车进入草洲，支持保护区巡护。",
+		"condition": "", "tags": ["执法巡护", "公众参与"], "action_ids": ["patrol", "wetland_law", "obstruction_clear"],
+		"source_title": "国家林草局：鄱阳湖候鸟保护工作",
+		"source_url": "https://www.forestry.gov.cn/c/www/dzbhdt/655834.jhtml",
+	},
+	"case_entanglement": {
+		"name": "渔网和鱼线的隐患", "category": "案例", "trigger": "consequence",
+		"short": "水中的渔网和鱼线可能缠住江豚。",
+		"ecology": "鄱阳湖曾记录江豚因渔网和鱼线缠绕死亡的案例。",
+		"threat": "非法渔具不仅影响鱼类，也会伤害其他水生动物。",
+		"management": "发现可疑渔具及时报告，由专业巡护人员处理，不自行下水。",
+		"condition": "", "tags": ["执法巡护", "应急救护"], "action_ids": ["patrol", "obstruction_clear", "rescue"],
+		"source_title": "生态环境部：鄱阳湖保护修复问题",
+		"source_url": "https://www.mee.gov.cn/ywgz/zysthjbhdc/dcjl/202405/t20240517_1073473.shtml",
+	},
+	"manage_fisher_transition": {
+		"name": "从捕鱼人到护鱼员", "category": "管理策略", "trigger": "decision",
+		"short": "退捕渔民也可以成为水域的保护者。",
+		"ecology": "鄱阳湖周边有渔民转做巡护，原来的渔船成为巡护船。",
+		"threat": "保护措施如果忽略居民生计，会增加转型困难。",
+		"management": "结合培训、就业帮扶和管护岗位，让保护与生活相互支持。",
+		"condition": "", "tags": ["产业转型", "社区参与"], "action_ids": ["fisher_retrain", "eco_jobs", "industry_switch"],
+		"source_title": "国家林草局：一泓碧水润泽万物",
+		"source_url": "https://www.forestry.gov.cn/c/www/sdfc/598794.jhtml",
+	},
+	"mech_underwater_noise": {
+		"name": "水下也有噪声", "category": "机制", "trigger": "observation",
+		"short": "水下并不总是安静的，江豚依赖声音感知环境。",
+		"ecology": "江豚靠声音定位、寻找食物，听觉对它的生活很重要。",
+		"threat": "水下噪声可能影响江豚的健康和栖息地选择。",
+		"management": "开展声学监测，减少航运等活动对江豚的干扰。",
+		"condition": "", "tags": ["科研监测", "执法巡护"], "action_ids": ["research", "sand_mining"],
+		"source_title": "中科院水生所：江豚与水下噪声",
+		"source_url": "https://www.ihb.cas.cn/kxcb_1/cmsj/201211/t20121112_5735674.html",
+	},
 }
 
 # ==================== 危机事件池（肉鸽随机性核心）====================
@@ -2391,7 +2711,7 @@ func _check_knowledge_triggers() -> void:
 
 	var hit: Array = []
 	for card_id in candidates:
-		if _eval_condition(KNOWLEDGE_CARDS[card_id]["condition"]):
+		if _knowledge_condition_met(KNOWLEDGE_CARDS[card_id]):
 			hit.append(card_id)
 
 	var pick := ""
@@ -2406,6 +2726,20 @@ func _check_knowledge_triggers() -> void:
 	knowledge_unlocked.append(pick)
 	pending_knowledge.append(pick)
 	knowledge_last_turn = turn
+
+
+func _knowledge_condition_met(card: Dictionary) -> bool:
+	var condition := str(card.get("condition", ""))
+	if not condition.is_empty() and _eval_condition(condition):
+		return true
+	for action_id in card.get("action_ids", []):
+		if action_id in used_action_ids:
+			return true
+	if turn > 0:
+		var season_name: String = ["春", "夏", "秋", "冬"][(turn - 1) % 4]
+		if season_name in card.get("seasons", []):
+			return true
+	return false
 
 
 ## 本回合打过的行动卡带的所有标签（去重）
@@ -2425,6 +2759,13 @@ func _knowledge_turn_tags() -> Dictionary:
 func _pick_knowledge(candidates: Array, turn_tags: Dictionary) -> String:
 	if candidates.is_empty():
 		return ""
+	# 跨局优先补齐收藏；全部收集后仍可重温，但同局不重复。
+	var missing: Array = []
+	for card_id in candidates:
+		if not Knowledge.is_collected(str(card_id)):
+			missing.append(card_id)
+	if not missing.is_empty():
+		candidates = missing
 	var weights: Array = []
 	var total := 0.0
 	for card_id in candidates:
