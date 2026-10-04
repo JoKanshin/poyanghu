@@ -1,8 +1,17 @@
 extends Node
 
 const VisualTheme = preload("res://scripts/visual_theme.gd")
+const PixelCardArt = preload("res://scripts/pixel_card_art.gd")
 const PixelWetland = preload("res://scripts/pixel_wetland.gd")
 var wetland: Control
+var menu_art_test_btn: Button
+var card_art_preview: CanvasLayer
+
+func _open_card_art_preview() -> void:
+	if is_instance_valid(card_art_preview):
+		return
+	card_art_preview = preload("res://scripts/card_art_preview.gd").new()
+	add_child(card_art_preview)
 ## 《拯救鄱阳湖》主场景：2.5D 沙盘 + 四区 UI。逻辑在 GameState 单例。
 
 const METRIC_COLORS := {
@@ -466,6 +475,10 @@ func _ready() -> void:
 	# 窗口尺寸/全屏变化时自适应相机，避免全屏后沙盘被裁或留黑边
 	get_viewport().size_changed.connect(_fit_camera_to_window)
 	_fit_camera_to_window()
+	if "--card-art-test" in OS.get_cmdline_user_args():
+		_show_menu()
+		_open_card_art_preview()
+		return
 	# 首次游玩先放开场 PPT；老玩家直接进主菜单
 	if _is_first_play():
 		_show_intro()
@@ -2278,6 +2291,9 @@ func _build_menu() -> void:
 	kn_icon.offset_bottom = 11
 	menu_knowledge_btn.add_child(kn_icon)
 	menu_col.add_child(menu_knowledge_btn)
+	menu_art_test_btn = _make_button("美术测试卡", _open_card_art_preview, 18)
+	menu_art_test_btn.custom_minimum_size = Vector2(0, 44)
+	menu_col.add_child(menu_art_test_btn)
 
 	menu_quit_btn = _make_button("退出", _on_menu_quit, 18)
 	menu_quit_btn.custom_minimum_size = Vector2(0, 44)
@@ -3035,6 +3051,7 @@ func _menu_state(state: int) -> void:
 	# 更新日志 / 制作人员已移入设置面板，显隐由面板自己管，不在这里控制
 	menu_achievements_btn.visible = main_level
 	menu_knowledge_btn.visible = main_level
+	menu_art_test_btn.visible = main_level
 	menu_quit_btn.visible = main_level
 
 	menu_easy_btn.visible = state == 1
@@ -4303,36 +4320,11 @@ func _open_deck_viewer() -> void:
 		tw.parallel().tween_property(p, "modulate:a", 1.0, 0.18).set_delay(i * 0.03)
 
 
-## 卡牌的透视倾斜材质（绕 X/Y 轴 3D 旋转 + 透视投影）。
-## 使用队友放大知识卡的原始实现：整棵卡面子树共用同一画布中心。
-## card_center 由 _step_card_gyro 每帧写入，跟随卡牌的移动、旋转和缩放。
+## 整张卡作为刚性平面旋转，纹理使用透视正确采样，避免三角形接缝与扭曲。
+## 卡面、框线和闪箔共享同一中心与投影；鼠标角度和缓动保持原有手感。
 func _make_gyro_material() -> ShaderMaterial:
-	var shader := Shader.new()
-	shader.code = """shader_type canvas_item;
-uniform float tilt_x = 0.0;
-uniform float tilt_y = 0.0;
-uniform vec2 card_center = vec2(0.0);
-
-void vertex() {
-	mat4 m = MODEL_MATRIX;
-	vec2 c = (m * vec4(VERTEX, 0.0, 1.0)).xy - card_center;
-	float cy = cos(tilt_y);
-	float sy = sin(tilt_y);
-	float cx = cos(tilt_x);
-	float sx = sin(tilt_x);
-	// 绕 Y 轴（偏航）
-	vec3 q = vec3(c.x * cy, c.y, -c.x * sy);
-	// 绕 X 轴（俯仰）
-	vec3 r = vec3(q.x, q.y * cx - q.z * sx, q.y * sx + q.z * cx);
-	// 透视投影：越深越小
-	float f = 520.0;
-	float persp = f / (f + r.z);
-	vec2 w = vec2(r.x, r.y) * persp + card_center;
-	// 送回该节点自己的局部空间，剩余的交给常规管线
-	VERTEX = (inverse(m) * vec4(w, 0.0, 1.0)).xy;
-}"""
 	var mat := ShaderMaterial.new()
-	mat.shader = shader
+	mat.shader = preload("res://scripts/card_rigid.gdshader")
 	return mat
 
 
@@ -5058,70 +5050,9 @@ func _make_knowledge_card(kid: String, collected: bool) -> PanelContainer:
 	panel.size = Vector2(122, 165)
 	panel.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
 	panel.add_theme_stylebox_override("panel", _knowledge_card_style(collected))
-
-	var vb := VBoxContainer.new()
-	vb.add_theme_constant_override("separation", 3)
-	panel.add_child(vb)
-
 	var k: Dictionary = GameState.KNOWLEDGE_CARDS.get(kid, {})
-	var cat: String = str(k.get("category", ""))
-
-	var head := _make_label("◆ %s 知识卡" % (cat if collected else "未知"), 12,
-			VisualTheme.INK if collected else KNOWLEDGE_LOCKED_INK)
-	head.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	vb.add_child(head)
-
-	if collected:
-		var art := TextureRect.new()
-		art.texture = _knowledge_art(kid)
-		art.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
-		art.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-		art.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
-		if kid == "egg_dixinhu":
-			art.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
-		art.custom_minimum_size = Vector2(0, 58)
-		art.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		vb.add_child(art)
-
-		var stripe := ColorRect.new()
-		stripe.color = _knowledge_category_color(cat).darkened(0.16)
-		stripe.custom_minimum_size.y = 3
-		stripe.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		vb.add_child(stripe)
-
-		var name_l := _make_label(str(k.get("name", "")), 12, VisualTheme.INK)
-		name_l.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		name_l.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-		name_l.size = Vector2(108, 28)
-		name_l.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-		name_l.custom_minimum_size.y = 28
-		name_l.size_flags_vertical = Control.SIZE_EXPAND_FILL
-		vb.add_child(name_l)
-
-		var foot := _make_label("点击查看资料", 11, Color("6f542a"))
-		foot.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		vb.add_child(foot)
-	else:
-		# 未收集：一张灰卡 + 正中一个大「？」，不留任何线索。
-		# 高度对齐已收集那一版的「插图 58 + 色条 3」，否则网格会高低不齐。
-		var q_wrap := CenterContainer.new()
-		q_wrap.custom_minimum_size = Vector2(0, 61)
-		q_wrap.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		vb.add_child(q_wrap)
-		q_wrap.add_child(_make_icon(KNOWLEDGE_QUESTION_GRID, KNOWLEDGE_LOCKED_INK, 52))
-
-		var name_l2 := _make_label("？？？", 12, KNOWLEDGE_LOCKED_INK)
-		name_l2.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		name_l2.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-		name_l2.custom_minimum_size.y = 28
-		name_l2.size_flags_vertical = Control.SIZE_EXPAND_FILL
-		vb.add_child(name_l2)
-
-		var foot2 := _make_label("未收集", 11, KNOWLEDGE_LOCKED_INK)
-		foot2.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		vb.add_child(foot2)
-
-	_ignore_mouse(vb)
+	PixelCardArt.add_face(panel, str(k.get("name", "")) if collected else "？",
+		"知识卡" if collected else "未收集", not collected)
 	if collected and kid == "egg_dixinhu":
 		var rim := ColorRect.new()
 		rim.name = "KnowledgeFoil"
@@ -5136,21 +5067,9 @@ func _make_knowledge_card(kid: String, collected: bool) -> PanelContainer:
 	return panel
 
 
-## 卡面底色：已收集沿用行动卡那张「纸卡」，未收集换一张灰纸。
-## hovered = 悬停态（黄框 + 微亮）：灰卡也给同样的悬停反馈，只是底色依旧偏冷，
-## 不会因为被划过就"变成已收集的样子"。
-func _knowledge_card_style(collected: bool, hovered: bool = false) -> StyleBoxFlat:
-	if collected:
-		return VisualTheme.card_style(hovered)
-	if hovered:
-		var h := VisualTheme.box(Color("e7e3d7"), VisualTheme.GOLD, 7)
-		h.shadow_size = 9
-		h.shadow_color = Color(0.02, 0.10, 0.11, 0.55)
-		return h
-	var s := VisualTheme.box(Color("d9d6cc"), Color("9aa0a0"), 7)
-	s.shadow_size = 5
-	s.shadow_color = Color(0.02, 0.10, 0.11, 0.45)
-	return s
+## 测试皮肤的框线与行动卡共用；未收集状态由像素卡图的调暗保留。
+func _knowledge_card_style(_collected: bool, hovered: bool = false) -> StyleBoxFlat:
+	return VisualTheme.card_style(hovered)
 
 
 func _knowledge_category_color(cat: String) -> Color:
@@ -6437,46 +6356,17 @@ func _make_card(card: Dictionary, tier: String = "") -> Dictionary:
 	panel.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
 	panel.add_theme_stylebox_override("panel", VisualTheme.card_style())
 	panel.gui_input.connect(_on_card_gui_input.bind(panel))
-
-	var vb := VBoxContainer.new()
-	vb.add_theme_constant_override("separation", 3)
-	vb.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	panel.add_child(vb)
-	var cat: String = card["category"]
-	var cat_l := _make_label("◆ " + CATEGORY_NAMES[cat] + "行动", 12, VisualTheme.INK)
-	cat_l.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	vb.add_child(cat_l)
-	var art := TextureRect.new()
-	art.texture = VisualTheme.illustration(card)
-	art.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
-	art.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-	art.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
-	art.custom_minimum_size = Vector2(0, 58)
-	art.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	vb.add_child(art)
-	var stripe := ColorRect.new()
-	stripe.color = CATEGORY_COLORS[cat].darkened(0.16)
-	stripe.custom_minimum_size.y = 3
-	stripe.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	vb.add_child(stripe)
-	var name_l := _make_label(card["name"], 12, VisualTheme.INK)
-	name_l.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	name_l.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	name_l.size = Vector2(108, 28)
-	name_l.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	name_l.custom_minimum_size.y = 28
-	name_l.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	vb.add_child(name_l)
-	var cost_l := _make_label("", 12, Color("6f542a"))
-	cost_l.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	vb.add_child(cost_l)
-	_ignore_mouse(vb)
-
 	var use_tier: String = tier if tier != "" else play_tier
 	if not card["tiers"].has(use_tier):
 		use_tier = "effective"
 	var cost: int = GameState.tier_cost(str(card["id"]), use_tier)
-	cost_l.text = "%d 万" % cost
+	PixelCardArt.add_face(panel, str(card["name"]), str(cost))
+	# Preserve the existing price-state interface; this Label never draws the card text.
+	var cost_l := Label.new()
+	cost_l.name = "PriceState"
+	cost_l.visible = false
+	cost_l.text = str(cost)
+	panel.add_child(cost_l)
 	panel.tooltip_text = "%s\n\n%s（%d 万）：%s" % [card["desc"], GameState.TIER_NAMES[use_tier],
 		cost, _tier_effects_text(card, use_tier)]
 	return {"panel": panel, "cost_label": cost_l}
@@ -6530,7 +6420,9 @@ func _update_card_face(info: Dictionary) -> void:
 	var locked: bool = str(info.get("tier", "")) != ""
 	var tag: String = ("%s " % str(GameState.TIER_NAMES[tier]).substr(0, 2)) if locked else ""
 	var cost_l: Label = info["cost_label"]
-	cost_l.text = "%s%d 万" % [tag, cost]
+	cost_l.text = "%s%d" % [tag, cost]
+	var face: TextureRect = info["panel"].get_meta("pixel_face")
+	face.texture = PixelCardArt.texture(str(card["name"]), str(cost))
 	# 锁定的牌用更亮的金色，一眼看出「这张是按哪个档锁住的」
 	cost_l.add_theme_color_override("font_color",
 		Color("956523") if locked else Color("6f542a"))

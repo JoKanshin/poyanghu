@@ -1,31 +1,33 @@
-# Unified Card Gyro
+# Rigid Card Gyro
 
-The reference is the teammate's enlarged knowledge-card panel in commit
-`67e9359` (the gyro was introduced in `5cb16a0`). All card contexts now use that
-original rendering path: the panel, illustration and glyphs remain separate
-canvas primitives, sharing one parent material and one canvas-space center.
-No complete card face is flattened to a four-vertex viewport texture.
+Every card face, selection frame and knowledge-card foil rotates as one planar
+surface around the same canvas-space center. The original pointer angle limits,
+frame-rate-independent damping, hover lift and return motion are preserved.
 
-`_bind_card_gyro()` binds the reference shader and propagates the parent material
-through the card subtree. `_make_gyro_card_view()` puts original panels in fixed
-122 x 165 grid controls. Hand selection, live prices, sorting and score animations
-continue to operate on the original panels and labels. Detail views create original
-panels just like the reference knowledge-card detail.
+`scripts/card_rigid_projection.gdshaderinc` contains the shared rigid rotation and
+perspective projection. `scripts/card_rigid.gdshader` samples the card image with
+perspective-correct UV coordinates: interpolate UV/depth and 1/depth, then divide
+in the fragment shader. This removes texture deformation across the two canvas
+triangles. The foil shader includes the same projection and uses the same corrected
+coordinates for its foil pattern and edge mask.
 
-All contexts use
-`_card_gyro_target()` and `_step_card_gyro()` for the same angle limits,
-frame-rate-independent damping and transformed center, including return motion.
-Grid hover lifts and scales the card once without continuous floating loops.
-Hand hover no longer adds a second pointer-driven 2D twist.
+`_bind_card_gyro()` propagates the material through the card subtree. Hand, deck,
+dispatch and enlarged details all use the same shader. Bitmap names, numeral fees
+and their one-pixel shadows remain part of the original pixel card texture; no
+viewport rasterization or additional physics bodies are needed.
 
 ## Verification
 
-Run `tests/prepare_visual_test.py card_gyro` to create a project with isolated saves.
-Import it with Godot, then run `tests/card_gyro.tscn`. The test checks every gyro
-context, rendered pixels, live prices, selection borders, return motion and
-small-window framing. It compares the production shader verbatim against
-`tests/fixtures/teammate_card_gyro.gdshader`, extracted from the teammate's commit,
-and verifies parent-material inheritance throughout every card subtree.
-Set `POYANG_SCREENSHOT_DIR` to an existing directory for
-rendered screenshots. `tests/knowledge_cards.tscn` covers the 40-card collection
-and long knowledge-card names; `tests/visual_smoke.tscn` covers the complete UI flow.
+Create an isolated project with `tests/prepare_visual_test.py card_gyro`, import
+it with Godot, then run `tests/card_gyro.tscn` with a graphical renderer. The test
+samples a projected checker pattern against an independently inverted planar
+camera projection. At a 0.32-radian tilt on both axes, all 1665 interior samples
+match; the former affine shader disagrees at 1434 samples of the same pattern.
+The old teammate shader is retained as a regression fixture.
+
+The remaining checks cover hand selection, locked prices, material inheritance,
+hover and return motion, deck and dispatch grids, action and knowledge details,
+and small-window framing. Set `POYANG_SCREENSHOT_DIR` to an existing output
+directory to capture the real viewport. `tests/pixel_cards.tscn` separately
+checks all card names, tiers, original paper pixels and exact RGB(150,150,150)
+shadows in the source bitmap.

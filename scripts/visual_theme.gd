@@ -21,7 +21,9 @@ static func box(bg: Color, edge: Color, margin: int = 12) -> StyleBoxFlat:
 	return s
 
 static func card_style(selected: bool = false) -> StyleBoxFlat:
-	var s := box(PAPER, GOLD if selected else Color("b5c6a9"), 7)
+	var s := box(Color.TRANSPARENT, GOLD, 0)
+	s.set_border_width_all(2 if selected else 0)
+	s.set_corner_radius_all(0)
 	s.shadow_size = 9 if selected else 5
 	s.shadow_color = Color(0.02, 0.10, 0.11, 0.55)
 	return s

@@ -5,7 +5,73 @@ var checks := 0
 var failures: Array[String] = []
 var shader_code := ""
 var output_dir := OS.get_environment("POYANG_SCREENSHOT_DIR")
-const TeammateShader = preload("res://tests/fixtures/teammate_card_gyro.gdshader")
+const RigidShader = preload("res://scripts/card_rigid.gdshader")
+const AffineShader = preload("res://tests/fixtures/teammate_card_gyro.gdshader")
+
+func projection_errors(shader: Shader) -> Vector2i:
+	var pattern := Image.create(256, 256, false, Image.FORMAT_RGBA8)
+	var colors: Array[Color] = [Color8(220, 40, 60), Color8(30, 190, 80), Color8(40, 80, 220)]
+	for y in 256:
+		for x in 256:
+			pattern.set_pixel(x, y, colors[(int(x / 16.0) + int(y / 16.0)) % 3])
+	var layer := CanvasLayer.new()
+	layer.layer = 100
+	add_child(layer)
+	var sprite := Sprite2D.new()
+	sprite.texture = ImageTexture.create_from_image(pattern)
+	sprite.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+	var center := get_viewport().get_visible_rect().size * 0.5
+	sprite.position = center
+	var material := ShaderMaterial.new()
+	material.shader = shader
+	material.set_shader_parameter("tilt_x", 0.32)
+	material.set_shader_parameter("tilt_y", -0.32)
+	material.set_shader_parameter("card_center", center)
+	sprite.material = material
+	layer.add_child(sprite)
+	await settle(0.2)
+	RenderingServer.force_draw()
+	var rendered := get_viewport().get_texture().get_image()
+	var samples := 0
+	var errors := 0
+	var cx := cos(0.32)
+	var sx := sin(0.32)
+	var cy := cos(-0.32)
+	var sy := sin(-0.32)
+	for y in range(int(center.y) - 110, int(center.y) + 110, 4):
+		for x in range(int(center.x) - 110, int(center.x) + 110, 4):
+			# Invert the analytic planar camera projection at this pixel center.
+			var screen := Vector2(x + 0.5, y + 0.5) - center
+			var a := cy + screen.x * cx * sy / 520.0
+			var b := -screen.x * sx / 520.0
+			var c := sx * sy + screen.y * cx * sy / 520.0
+			var d := cx - screen.y * sx / 520.0
+			var det := a * d - b * c
+			var source := Vector2((screen.x * d - b * screen.y) / det,
+				(a * screen.y - screen.x * c) / det) + Vector2(128, 128)
+			if not Rect2(4, 4, 248, 248).has_point(source):
+				continue
+			# Ignore grid boundaries, where nearest-pixel sampling can alias.
+			if fmod(source.x, 16.0) < 2.0 or fmod(source.x, 16.0) > 14.0 or fmod(source.y, 16.0) < 2.0 or fmod(source.y, 16.0) > 14.0:
+				continue
+			var expected := pattern.get_pixel(int(source.x), int(source.y))
+			var actual := rendered.get_pixel(x, y)
+			samples += 1
+			if absf(actual.r - expected.r) + absf(actual.g - expected.g) + absf(actual.b - expected.b) > 0.02:
+				errors += 1
+	layer.queue_free()
+	await get_tree().process_frame
+	return Vector2i(samples, errors)
+
+func verify_rigid_projection() -> void:
+	if DisplayServer.get_name() == "headless":
+		return
+	var old_errors := await projection_errors(AffineShader)
+	var rigid_errors := await projection_errors(RigidShader)
+	check(rigid_errors.x > 500, "Rigid projection sampled enough interior pixels")
+	check(rigid_errors.y < rigid_errors.x * 0.01, "Rigid-plane texture agrees with analytical projection")
+	check(old_errors.y > rigid_errors.y + rigid_errors.x * 0.02, "Projection test detects the previous affine texture deformation")
+	print("RIGID_PROJECTION: samples=%d old_errors=%d rigid_errors=%d" % [rigid_errors.x, old_errors.y, rigid_errors.y])
 
 func check(ok: bool, message: String) -> void:
 	checks += 1
@@ -19,13 +85,13 @@ func settle(seconds: float = 0.3) -> void:
 func capture(label: String) -> void:
 	if output_dir.is_empty() or DisplayServer.get_name() == "headless":
 		return
-	await RenderingServer.frame_post_draw
+	RenderingServer.force_draw()
 	get_viewport().get_texture().get_image().save_png(output_dir.path_join(label + ".png"))
 
 func card_pixels(card: Control) -> int:
 	if DisplayServer.get_name() == "headless":
 		return -1
-	await RenderingServer.frame_post_draw
+	RenderingServer.force_draw()
 	var img := get_viewport().get_texture().get_image()
 	var colors := {}
 	var bounds := card.get_global_rect().intersection(get_viewport().get_visible_rect())
@@ -55,7 +121,7 @@ func check_tilt(card: Control, label: String) -> void:
 	if shader_code.is_empty():
 		shader_code = material.shader.code
 	check(material.shader.code == shader_code, label + " uses the shared projection")
-	check(material.shader.code.replace("\r", "").strip_edges() == TeammateShader.code.replace("\r", "").strip_edges(), label + " exactly matches teammate knowledge-detail shader")
+	check(material.shader == RigidShader, label + " uses the shared rigid-plane shader")
 	check_material_tree(card)
 	check(absf(float(material.get_shader_parameter("tilt_x"))) > 0.02, label + " tilts vertically")
 	check(absf(float(material.get_shader_parameter("tilt_y"))) > 0.02, label + " tilts horizontally")
@@ -100,6 +166,7 @@ func _ready() -> void:
 	add_child(scene)
 	game = scene.get_node("Game")
 	await settle(0.4)
+	await verify_rigid_projection()
 	if game._intro_playing:
 		game._finish_intro()
 	await settle(1.0)
@@ -123,12 +190,14 @@ func _ready() -> void:
 		await get_tree().process_frame
 		var face: PanelContainer = made.panel
 		check(face.size.x <= 122.1 and face.size.y <= 165.1, "%s keeps its fixed card dimensions" % action.id)
-		check(made.cost_label.get_parent().get_parent() == face, "%s price remains in the original panel" % action.id)
+		check(face.is_ancestor_of(made.cost_label) and not made.cost_label.visible, "%s price state belongs to its panel without drawing text" % action.id)
+		var bitmap: TextureRect = face.get_meta("pixel_face")
+		check(bitmap.texture == game.PixelCardArt.texture(action.name, str(GameState.tier_cost(action.id, game.play_tier))), "%s price is written into the pixel face" % action.id)
 		made.panel.queue_free()
 	for info in game.card_infos:
 		var panel: PanelContainer = info.panel
-		check(not panel.has_meta("card_face"), "Hand card is not flattened to a texture")
-		check(panel.get_theme_stylebox("panel") is StyleBoxFlat, "Hand card draws its original frame")
+		check(panel.get_meta("pixel_face") is TextureRect, "Hand card uses the shared pixel face")
+		check(panel.get_theme_stylebox("panel") is StyleBoxFlat, "Hand card preserves the selection frame")
 		check(panel.size.is_equal_approx(Vector2(122, 165)), "Hand card keeps its fixed footprint")
 		check_material_tree(panel)
 	var info: Dictionary = game.card_infos.back()
