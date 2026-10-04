@@ -860,6 +860,15 @@ const ACTION_CARDS := [
 
 # ==================== 知识卡数据 ====================
 const KNOWLEDGE_CARDS := {
+	"egg_dixinhu": {
+		"name": "狄鑫斛", "category": "彩蛋", "trigger": "random_only",
+		"random_only": true, "condition": "", "tags": [], "action_ids": [], "seasons": [],
+		"short": "碟形湖讲解图里的小人，悄悄走进了知识卡。",
+		"ecology": "名字取自“碟形湖”，是制作组的创作彩蛋，并非真实物种。",
+		"threat": "别把这个小人的名字当成地理术语哦！",
+		"management": "想了解真正的碟形湖，请翻阅“碟形湖：大湖里的小湖”。",
+		"creator": "Oliveira", "origin": "开发者 Oliveira 为制作组成员绘制的碟形湖讲解图",
+	},
 	"plant_kucao": {
 		"name": "苦草", "category": "植物", "trigger": "observation",
 		"short": "鄱阳湖湖区分布面积最大的沉水植物。",
@@ -2687,6 +2696,9 @@ const KNOWLEDGE_TAG_BOOST := 3.0
 ## 0.0 = 关掉随机赠送（只剩条件触发）。
 const KNOWLEDGE_RANDOM_CHANCE := 0.25
 
+## 独立随机彩蛋：每个允许掉卡的回合 3%，不受季节、行动、标签或收藏补齐影响。
+const DIXINHU_RANDOM_CHANCE := 0.03
+
 
 ## 回合末的知识卡检查 —— **每回合最多挑一张**，压入待弹出队列。
 ##
@@ -2701,9 +2713,12 @@ func _check_knowledge_triggers() -> void:
 
 	var candidates: Array = []
 	for card_id in KNOWLEDGE_CARDS:
+		if KNOWLEDGE_CARDS[card_id].get("random_only", false):
+			continue
 		if not (card_id in knowledge_unlocked):
 			candidates.append(card_id)
-	if candidates.is_empty():
+	var egg_available := not ("egg_dixinhu" in knowledge_unlocked)
+	if candidates.is_empty() and not egg_available:
 		return
 
 	# 本回合打过的行动卡带的标签 —— 决定「哪张更容易被抽中」
@@ -2715,7 +2730,9 @@ func _check_knowledge_triggers() -> void:
 			hit.append(card_id)
 
 	var pick := ""
-	if not hit.is_empty():
+	if egg_available and _knowledge_rng.randf() < DIXINHU_RANDOM_CHANCE:
+		pick = "egg_dixinhu"
+	elif not hit.is_empty():
 		# 条件命中优先，但一次只出一张：同时踩线时，与本回合出牌同标签的那张更容易被挑中
 		pick = _pick_knowledge(hit, turn_tags)
 	elif KNOWLEDGE_RANDOM_CHANCE > 0.0 and _knowledge_rng.randf() < KNOWLEDGE_RANDOM_CHANCE:
@@ -2729,6 +2746,8 @@ func _check_knowledge_triggers() -> void:
 
 
 func _knowledge_condition_met(card: Dictionary) -> bool:
+	if card.get("random_only", false):
+		return false
 	var condition := str(card.get("condition", ""))
 	if not condition.is_empty() and _eval_condition(condition):
 		return true

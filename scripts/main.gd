@@ -218,6 +218,7 @@ var popup_root: Control
 var dim: ColorRect
 var popup_center: CenterContainer
 var popup_panel: PanelContainer
+var _knowledge_egg_reveal: Control
 var popup_title: Label
 var popup_body: RichTextLabel
 var popup_button: Button
@@ -4335,16 +4336,22 @@ void vertex() {
 	return mat
 
 
-func _use_parent_material_tree(node: Node) -> void:
+func _use_parent_material_tree(node: Node, overlays: Array) -> void:
 	for child in node.get_children():
 		if child is CanvasItem:
-			child.use_parent_material = true
-		_use_parent_material_tree(child)
+			if child.get_meta("card_gyro_overlay", false):
+				child.use_parent_material = false
+				overlays.append(child.material)
+			else:
+				child.use_parent_material = true
+		_use_parent_material_tree(child, overlays)
 
 
 func _bind_card_gyro(card: Control) -> void:
 	card.material = _make_gyro_material()
-	_use_parent_material_tree(card)
+	var overlays: Array = []
+	_use_parent_material_tree(card, overlays)
+	card.set_meta("gyro_overlays", overlays)
 	_step_card_gyro(card, Vector2.ZERO, 0.0)
 
 
@@ -4382,6 +4389,11 @@ func _step_card_gyro(card: Control, target: Vector2, delta: float) -> void:
 	mat.set_shader_parameter("tilt_x", current.x)
 	mat.set_shader_parameter("tilt_y", current.y)
 	mat.set_shader_parameter("card_center", _card_gyro_center(card))
+	# 独立的闪箔膜保留片元材质，同时与卡面共用倾斜和透视中心。
+	for overlay: ShaderMaterial in card.get_meta("gyro_overlays", []):
+		overlay.set_shader_parameter("tilt_x", current.x)
+		overlay.set_shader_parameter("tilt_y", current.y)
+		overlay.set_shader_parameter("card_center", _card_gyro_center(card))
 
 
 func _close_deck_viewer() -> void:
@@ -5065,6 +5077,8 @@ func _make_knowledge_card(kid: String, collected: bool) -> PanelContainer:
 		art.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
 		art.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 		art.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
+		if kid == "egg_dixinhu":
+			art.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 		art.custom_minimum_size = Vector2(0, 58)
 		art.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		vb.add_child(art)
@@ -5108,6 +5122,17 @@ func _make_knowledge_card(kid: String, collected: bool) -> PanelContainer:
 		vb.add_child(foot2)
 
 	_ignore_mouse(vb)
+	if collected and kid == "egg_dixinhu":
+		var rim := ColorRect.new()
+		rim.name = "KnowledgeFoil"
+		rim.set_meta("card_gyro_overlay", true)
+		rim.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+		rim.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		var foil := ShaderMaterial.new()
+		foil.shader = preload("res://scripts/knowledge_foil.gdshader")
+		rim.material = foil
+		panel.add_child(rim)
+		rim.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	return panel
 
 
@@ -5134,7 +5159,9 @@ func _knowledge_category_color(cat: String) -> Color:
 
 ## 按 KNOWLEDGE_ART_TILE 取一格图集片。行动卡用的是 VisualTheme.illustration（按类别列 + id hash），
 ## 知识卡的类别和行动卡三分法对不上，所以直接自己拼 AtlasTexture。
-func _knowledge_art(kid: String) -> AtlasTexture:
+func _knowledge_art(kid: String) -> Texture2D:
+	if kid == "egg_dixinhu":
+		return preload("res://assets/dixinhu.jpg")
 	var tile_pos: Vector2i = KNOWLEDGE_ART_TILE.get(kid, Vector2i(0, 0))
 	var art: Texture2D = VisualTheme.ART
 	var tile := Vector2(art.get_width() / 3.0, art.get_height() / 2.0)
@@ -5186,6 +5213,8 @@ func _knowledge_detail_text(kid: String, collected: bool) -> String:
 	if not collected:
 		return "[color=#8a8a8a]未收集[/color]\n\n这张知识卡还没有收集到。在游戏里触发它之后，这里会显示它的完整资料。\n\n[b]？[/b]"
 	var k: Dictionary = GameState.KNOWLEDGE_CARDS[kid]
+	if kid == "egg_dixinhu":
+		return "[color=#e9b9ff]制作组彩蛋 · 狄鑫斛[/color]\n\n%s\n\n[b]画作作者[/b]：Oliveira\n[b]创作来源[/b]：%s\n\n%s\n%s" % [k["short"], k["origin"], k["ecology"], k["management"]]
 	var body := "[color=#8a8a8a]类别：%s[/color]\n\n" % str(k["category"])
 	if k.has("level"):
 		body += "[color=#8a8a8a]%s[/color]\n\n" % str(k["level"])
@@ -7342,6 +7371,24 @@ func _show_knowledge(card_id: String) -> void:
 	var k: Dictionary = GameState.KNOWLEDGE_CARDS[card_id]
 	var body := _knowledge_detail_text(card_id, true)
 	_show_popup("知识卡 · %s" % k["name"], body, "收下（继续）", _on_resolve_continue)
+	if card_id == "egg_dixinhu":
+		var reveal := CenterContainer.new()
+		reveal.custom_minimum_size.y = 176
+		reveal.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		popup_body.get_parent().add_child(reveal)
+		popup_body.get_parent().move_child(reveal, 1)
+		_knowledge_egg_reveal = reveal
+		var card := _make_knowledge_card(card_id, true)
+		reveal.add_child(card)
+		card.pivot_offset = Vector2(61, 82.5)
+		card.scale = Vector2(0.65, 0.65)
+		card.rotation = -0.12
+		card.modulate.a = 0.0
+		var arrival := card.create_tween().set_parallel(true)
+		arrival.set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+		arrival.tween_property(card, "scale", Vector2.ONE, 0.65)
+		arrival.tween_property(card, "rotation", 0.0, 0.65)
+		arrival.tween_property(card, "modulate:a", 1.0, 0.35)
 
 
 func _advance_to_next() -> void:
@@ -7456,6 +7503,10 @@ func _restart() -> void:
 
 # ==================== 通用弹窗 ====================
 func _show_popup(title: String, body: String, button_text: String, on_continue: Callable) -> void:
+	if is_instance_valid(_knowledge_egg_reveal):
+		_knowledge_egg_reveal.get_parent().remove_child(_knowledge_egg_reveal)
+		_knowledge_egg_reveal.queue_free()
+		_knowledge_egg_reveal = null
 	if _popup_reveal and _popup_reveal.is_valid(): _popup_reveal.kill()
 	popup_title.text = title
 	popup_body.text = body
