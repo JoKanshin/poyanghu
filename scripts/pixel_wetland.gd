@@ -4,6 +4,9 @@ extends Control
 const LANDSCAPE := preload("res://assets/art/poyang-terrain-base.png")
 const SHORE_DISTANCE := preload("res://assets/art/lake-shore-distance.png")
 const GROUND_SHADER := preload("res://scripts/wetland_ground.gdshader")
+const CONTACT_SHADOW_SHADER := preload("res://scripts/wetland_contact_shadow.gdshader")
+const YANGTZE_HALF_WIDTH := 0.017
+const GAN_HALF_WIDTH := 0.010
 const LAND_COLOR := Color("829666")
 ## 相机方位角转正后，地面在屏幕上的投影宽度从 GROUND_SIZE*(sin45+cos45)=1.414 倍
 ## 变成 GROUND_SIZE*1.0 倍；把 MAP_ZOOM 按同样比例缩回来，视野才跟转正前一致。
@@ -36,14 +39,7 @@ const SHADOWS := {
 	"tree": true,        # 树 / 沿岸植被
 	"island": false,     # 浮岛
 }
-## 月牙"逐栋调"的地方：每张贴图一个椭圆半径（76px 方框里的像素单位）。
-## 四张房子外形差得远（高矮、宽窄、脚点都不同），共用一条公式必然要么矮房露多了像浮空、
-## 要么高楼露少了看着别扭。数值：前伸深度 / 房子视觉高 ≈ 19% / 20% / 23% / 24%。
-## 逐栋调：椭圆半径 + 影子中心相对房子视觉脚点的下推量（都是 76px 方框里的像素单位）。
-## 高楼（house1/2，视觉高 66/64）—— 房子本身高、底边窄，影子要**多藏进房子下面**：
-##   半径收一点、下推量给 0（中心正好压在脚点上，只露前半）。
-## 矮房（house3/4，视觉高 41/42）—— 房子矮，影子露出来才好看：
-##   半径放大一圈、再往前推 6px，露出的前半更完整。
+## Per-art radius caps, further limited by the opaque sprite footprint.
 const HOUSE_SHADOW_RADIUS := [30.0, 31.0, 34.0, 36.0]
 const HOUSE_SHADOW_FOOT := [0.0, 0.0, 6.0, 6.0]
 ## 空地（只有一株芦苇标记）的接触阴影：草本植物，给小一号的。
@@ -121,6 +117,15 @@ var map_camera: Camera3D
 var creeper_mesh: MeshInstance3D
 var camera_zoom_factor := GAME_CAMERA_ZOOM
 var camera_tween: Tween
+var hand_view_tween: Tween
+var hand_view_state := Vector2(0.0, 1.0)
+var _screen_projection := Transform2D.IDENTITY
+var _shadow_projection := Transform2D.IDENTITY
+var _overlay_inverse := Transform2D.IDENTITY
+var _shadow_unit_rings: Dictionary = {}
+var _render_items: Array[Dictionary] = []
+var _render_shadow_specs: Array[Dictionary] = []
+var _river_distance_cache: Dictionary = {}
 var water_material: ShaderMaterial
 var ground_material: ShaderMaterial
 var river_bank_material: ShaderMaterial
@@ -147,7 +152,7 @@ var yangtze_route: Array[Vector2] = []
 var gan_route: Array[Vector2] = []
 var scenery_props: Array[Dictionary] = []
 var prop_textures: Array[ImageTexture] = []
-## 每栋房子贴图的不透明外形（_ready 里量一次）：月牙要按"这栋房子实际多宽、多高、脚在哪"给。
+## Opaque sprite footprints keep contact shadows under the actual feet.
 var house_art_shape: Array[Dictionary] = []
 
 func _ready() -> void:
@@ -210,6 +215,17 @@ void fragment() {
 	backdrop.texture = terrain_viewport.get_texture()
 	add_child(backdrop)
 	_layout_map()
+	# Contact shadows are ground decals, always below all upright scenery.
+	var shadows := Control.new()
+	shadows.name = "GroundShadows"
+	shadows.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	shadows.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	var shadow_material := ShaderMaterial.new()
+	shadow_material.shader = CONTACT_SHADOW_SHADER
+	shadow_material.set_shader_parameter("ground_texture", terrain_viewport.get_texture())
+	shadows.material = shadow_material
+	shadows.draw.connect(_draw_contact_shadows.bind(shadows))
+	add_child(shadows)
 	# Wildlife stays separate from the terrain-only texture.
 	var wildlife := Control.new()
 	wildlife.name = "Wildlife"
@@ -217,8 +233,8 @@ void fragment() {
 	wildlife.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	wildlife.draw.connect(_draw_wildlife.bind(wildlife))
 	add_child(wildlife)
+	_layout_map()
 	resized.connect(_layout_map)
-	resized.connect(func(): wildlife.queue_redraw())
 	sync_state()
 
 func _build_terrain_viewport() -> void:
@@ -243,8 +259,8 @@ func _build_terrain_viewport() -> void:
 	ground.material_override = ground_material
 	world.add_child(ground)
 	river_bank_material = _make_river_bank_material()
-	_build_river_mesh(world, yangtze_route, 0.017)
-	_build_river_mesh(world, gan_route, 0.010)
+	_build_river_mesh(world, yangtze_route, YANGTZE_HALF_WIDTH)
+	_build_river_mesh(world, gan_route, GAN_HALF_WIDTH)
 	map_camera = Camera3D.new()
 	map_camera.name = "WetlandCamera"
 	map_camera.projection = Camera3D.PROJECTION_ORTHOGONAL
@@ -292,18 +308,32 @@ void fragment() {
 
 func _layout_map() -> void:
 	var viewport_size := Vector2i(maxi(1, roundi(size.x)), maxi(1, roundi(size.y)))
-	terrain_viewport.size = viewport_size
+	if terrain_viewport.size != viewport_size:
+		terrain_viewport.size = viewport_size
 	var aspect := float(viewport_size.x) / float(viewport_size.y)
 	var ground_width := GROUND_SIZE * (sin(VIEW_AZIMUTH) + cos(VIEW_AZIMUTH))
 	var ground_height := ground_width * sin(VIEW_PITCH)
-	map_camera.size = maxf(ground_height, ground_width / aspect) / MAP_ZOOM * camera_zoom_factor
+	var view_zoom := camera_zoom_factor * hand_view_state.y
+	map_camera.size = maxf(ground_height, ground_width / aspect) / MAP_ZOOM * view_zoom
+	map_camera.v_offset = -hand_view_state.x * map_camera.size
 	backdrop.position = Vector2.ZERO
 	backdrop.size = Vector2(viewport_size)
+	for layer_name in ["Wildlife", "GroundShadows"]:
+		var layer := get_node_or_null(layer_name) as Control
+		if layer:
+			layer.scale = Vector2.ONE / view_zoom
+			layer.position = size * 0.5 * (1.0 - 1.0 / view_zoom)
+	# Orthographic ground projection is affine. Compute it once per camera or
+	# window change instead of asking Camera3D for every sprite/shadow vertex.
+	var origin := map_camera.unproject_position(_ground_position(Vector2.ZERO))
+	_screen_projection = Transform2D(
+		map_camera.unproject_position(_ground_position(Vector2.RIGHT)) - origin,
+		map_camera.unproject_position(_ground_position(Vector2.DOWN)) - origin, origin)
 	var wildlife := get_node_or_null("Wildlife") as Control
 	if wildlife:
-		wildlife.scale = Vector2.ONE / camera_zoom_factor
-		wildlife.position = size * 0.5 * (1.0 - 1.0 / camera_zoom_factor)
-		wildlife.queue_redraw()
+		_overlay_inverse = wildlife.get_transform().affine_inverse()
+		_shadow_projection = _overlay_inverse * _screen_projection
+	_redraw_scenery()
 
 func set_menu_camera(far: bool, menu_zoom: float = 1.3) -> void:
 	if camera_tween and camera_tween.is_valid(): camera_tween.kill()
@@ -314,6 +344,20 @@ func set_menu_camera(far: bool, menu_zoom: float = 1.3) -> void:
 
 func _set_camera_zoom(value: float) -> void:
 	camera_zoom_factor = value
+	_layout_map()
+
+func set_hand_view(focus_fraction: float, zoom_multiplier: float, animate: bool = true) -> void:
+	var target := Vector2(focus_fraction, zoom_multiplier)
+	if hand_view_tween and hand_view_tween.is_valid(): hand_view_tween.kill()
+	if not animate or reduced_motion:
+		_set_hand_view_state(target)
+		return
+	hand_view_tween = create_tween()
+	hand_view_tween.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+	hand_view_tween.tween_method(_set_hand_view_state, hand_view_state, target, 0.28)
+
+func _set_hand_view_state(value: Vector2) -> void:
+	hand_view_state = value
 	_layout_map()
 
 func roll_creeper_visibility() -> void:
@@ -353,7 +397,7 @@ func sync_state(state: Dictionary = {}, animate: bool = true, duration: float = 
 		transition_age = 0.0
 		transition_duration = maxf(0.05, duration)
 	_apply_terrain_state()
-	get_node("Wildlife").queue_redraw()
+	_redraw_scenery()
 
 func _lake_offset() -> float:
 	var level := float(displayed_metrics.get("water_level", 50))
@@ -398,17 +442,26 @@ func _process(delta: float) -> void:
 	clock_accum += delta
 	if clock_accum < 1.0 / 24.0: return
 	clock_accum = 0.0
-	get_node("Wildlife").queue_redraw()
+	_redraw_scenery()
+
+func _redraw_scenery() -> void:
+	if not has_node("Wildlife"): return
+	# Both draw callbacks use the same snapshot, including moving birds and
+	# interpolated growth. Refresh on every existing redraw, not only on turns.
+	_render_items = _scenery_draw_order()
+	_render_shadow_specs = _contact_shadow_specs(_render_items)
+	for layer_name in ["Wildlife", "GroundShadows"]:
+		var layer := get_node_or_null(layer_name) as Control
+		if layer: layer.queue_redraw()
 
 func _point(uv: Vector2) -> Vector2:
 	# Camera projection keeps upright screen sprites attached to the 3D ground.
-	return map_camera.unproject_position(_ground_position(uv)).round()
+	return (_screen_projection * uv).round()
 
 func _wildlife_point(uv: Vector2) -> Vector2:
 	# Undo the overlay's camera zoom for local coordinates; its scale then makes
 	# every sprite and ripple zoom in sync with the ground and Creeper decal.
-	var wildlife := get_node("Wildlife") as Control
-	return (wildlife.get_transform().affine_inverse() * _point(uv)).round()
+	return (_overlay_inverse * _point(uv)).round()
 
 func _ground_position(uv: Vector2) -> Vector3:
 	return Vector3((uv.x - 0.5) * GROUND_SIZE, 0.0, (uv.y - 0.5) * GROUND_SIZE)
@@ -416,8 +469,7 @@ func _ground_position(uv: Vector2) -> Vector3:
 func _bird_facing(bird: Dictionary) -> float:
 	# Heading is stored in map coordinates; facing must follow screen motion.
 	var direction := Vector2.from_angle(float(bird["angle"]))
-	var center := Vector2(0.5, 0.5)
-	var screen_direction := map_camera.unproject_position(_ground_position(center + direction * 0.01)) - map_camera.unproject_position(_ground_position(center))
+	var screen_direction := (_screen_projection.x * direction.x + _screen_projection.y * direction.y) * 0.01
 	return -1.0 if screen_direction.x < -0.0001 else 1.0
 
 func _terrain_color(uv: Vector2) -> Color:
@@ -426,7 +478,8 @@ func _terrain_color(uv: Vector2) -> Color:
 	return terrain_image.get_pixel(x, y)
 
 func _is_water(uv: Vector2, baseline: bool = false) -> bool:
-	if _in_river_corridor(uv, 0.012): return true
+	var river_distance := _river_distances_squared(uv)
+	if river_distance.x <= YANGTZE_HALF_WIDTH * YANGTZE_HALF_WIDTH or river_distance.y <= GAN_HALF_WIDTH * GAN_HALF_WIDTH: return true
 	if not baseline and Rect2(Vector2.ZERO, Vector2.ONE).has_point(uv):
 		var mask := shore_image.get_pixel(clampi(int(uv.x * shore_image.get_width()), 0, shore_image.get_width() - 1), clampi(int(uv.y * shore_image.get_height()), 0, shore_image.get_height() - 1))
 		if mask.g > 0.0 and absf(_lake_offset()) > 0.01:
@@ -641,6 +694,7 @@ func _px(c: Control, p: Vector2, rect: Rect2, color: Color, scale_px: float = 2.
 	c.draw_rect(Rect2(p + rect.position * scale_px, rect.size * scale_px), color)
 
 func _build_river_routes() -> void:
+	_river_distance_cache.clear()
 	yangtze_route.assign(RiverRoutes.YANGTZE)
 	gan_route.assign(RiverRoutes.GAN)
 	# Carry the boundary tangents well past every supported window's view.
@@ -651,12 +705,30 @@ func _build_river_routes() -> void:
 	var south := (gan_route[0] - gan_route[5]).normalized()
 	gan_route.push_front(gan_route[0] + south * 2.5)
 
+func _near_route(uv: Vector2, route: Array[Vector2], radius: float) -> bool:
+	for i in range(1, route.size()):
+		var closest := Geometry2D.get_closest_point_to_segment(uv, route[i - 1], route[i])
+		if uv.distance_squared_to(closest) <= radius * radius: return true
+	return false
+
 func _in_river_corridor(uv: Vector2, radius: float) -> bool:
-	for route in [yangtze_route, gan_route]:
+	var distances := _river_distances_squared(uv)
+	return minf(distances.x, distances.y) <= radius * radius
+
+func _river_distances_squared(uv: Vector2) -> Vector2:
+	# River geometry is fixed; only the animated lake mask changes with water
+	# level. Cache exact distances, so every existing corridor radius still works.
+	if _river_distance_cache.has(uv): return _river_distance_cache[uv]
+	var distances := Vector2(INF, INF)
+	for route_index in 2:
+		var route: Array[Vector2] = yangtze_route if route_index == 0 else gan_route
 		for i in range(1, route.size()):
 			var closest := Geometry2D.get_closest_point_to_segment(uv, route[i - 1], route[i])
-			if uv.distance_squared_to(closest) < radius * radius: return true
-	return false
+			distances[route_index] = minf(distances[route_index], uv.distance_squared_to(closest))
+	# Bound memory when animated agents query new positions over a long session.
+	if _river_distance_cache.size() >= 8192: _river_distance_cache.clear()
+	_river_distance_cache[uv] = distances
+	return distances
 
 func _make_river_bank_material() -> ShaderMaterial:
 	return _make_ground_material(true)
@@ -764,83 +836,93 @@ func _build_meadow_scenery() -> void:
 			scenery_props.append({"pos": uv, "kind": kind, "scale": rng.randf_range(1.9, 3.0)})
 	scenery_props.sort_custom(func(a: Dictionary, b: Dictionary): return a["pos"].x + a["pos"].y < b["pos"].x + b["pos"].y)
 
-func _draw_meadow_scenery(c: Control) -> void:
+func _scenery_draw_order() -> Array[Dictionary]:
+	var items: Array[Dictionary] = []
 	for prop in scenery_props:
-		if _is_water(prop["pos"]): continue
-		if prop["kind"] == 5:
-			_draw_tree(c, _wildlife_point(prop["pos"]), float(prop["scale"]) * 0.55, prop["pos"])
-			continue
-		var texture: Texture2D = prop_textures[prop["kind"]]
-		var extent := texture.get_size() * float(prop["scale"])
-		var p := _wildlife_point(prop["pos"])
-		c.draw_texture_rect(texture, Rect2((p - extent * Vector2(0.5, 0.9)).round(), extent.round()), false)
-
-func _draw_wildlife(c: Control) -> void:
-	_draw_meadow_scenery(c)
-	_draw_yangtze_boats(c)
-	# Frame the playable shore lightly; keep the secret Creeper's clearing open.
+		if not _is_water(prop["pos"]): items.append({"kind": "prop", "uv": prop["pos"], "prop": prop})
 	for uv in EDGE_TREE_TARGETS:
 		var clear := uv.distance_to(CREEPER_ANCHOR) > 0.13
 		for home in house_sites:
-			if uv.distance_to(home) < 0.065:
-				clear = false
-				break
-		if clear and _is_land(uv):
-			_draw_tree(c, _wildlife_point(uv), 0.78, uv)
-	# Ripples occupy open water, keeping the HUD readable.
+			if uv.distance_to(home) < 0.065: clear = false; break
+		if clear and _is_land(uv): items.append({"kind": "tree", "uv": uv})
+	for pid in GameState.PLANTS:
+		var sites: Array = plant_sites.get(pid, [])
+		for i in mini(_visual_count("plants", str(pid), 7.0), sites.size()):
+			var growth := _visual_weight("plants", str(pid), i, 7.0)
+			if growth > 0.001: items.append({"kind": "plant", "uv": sites[i], "pid": str(pid), "growth": growth})
+	for i in mini(ISLAND_ANCHORS.size(), ceili(displayed_islands)):
+		items.append({"kind": "island", "uv": ISLAND_ANCHORS[i], "index": i})
+	for i in house_sites.size(): items.append({"kind": "house", "uv": house_sites[i], "index": i})
+	for bird in bird_agents:
+		if int(bird["slot"]) < _bird_count(str(bird["sid"])) and not int(bird["state"]) in [3, 5]:
+			items.append({"kind": "bird", "uv": bird["pos"], "bird": bird})
+	items.append({"kind": "boat", "uv": BOAT_ANCHOR})
+	# Use continuous camera depth, not uv.x+uv.y or species draw order.
+	# Explicit insertion indices break equal-depth ties deterministically.
+	for index in items.size():
+		items[index]["depth"] = _shadow_point(items[index]["uv"]).y
+		items[index]["order"] = index
+	items.sort_custom(func(a: Dictionary, b: Dictionary):
+		return int(a["order"]) < int(b["order"]) if float(a["depth"]) == float(b["depth"]) else float(a["depth"]) < float(b["depth"]))
+	return items
+
+func _draw_wildlife(c: Control) -> void:
+	_draw_yangtze_boats(c)
 	for i in 28:
-		var p := _wildlife_point(WATER_ANCHORS[i % WATER_ANCHORS.size()])
+		var uv: Vector2 = WATER_ANCHORS[i % WATER_ANCHORS.size()]
+		if not _is_water(uv): continue
+		var p := _wildlife_point(uv)
 		var alpha := 0.10 + 0.13 * (sin(elapsed * 1.5 + i * 2.0) + 1.0)
 		c.draw_rect(Rect2(p, Vector2(8 + i % 4 * 3, 2)), Color(0.77, 0.94, 0.83, alpha))
 	for i in mini(12, _visual_count("metrics", "fish", 12.0)):
-		var p := _wildlife_point(WATER_ANCHORS[i % WATER_ANCHORS.size()])
+		var uv: Vector2 = WATER_ANCHORS[i % WATER_ANCHORS.size()]
+		if not _is_water(uv): continue
+		var p := _wildlife_point(uv)
 		p.x += round(sin(elapsed * 0.35 + i) * 4)
 		_draw_sprite(c, p, 3, Vector2(15, 24), Color(0.6, 0.85, 0.8, 0.45 * _visual_weight("metrics", "fish", i, 12.0)))
-	# The old scene used plant populations / 7. Keep those visual thresholds and
-	# scatter each kind only on its matching terrain color.
-	for pid in GameState.PLANTS:
-		var sites: Array = plant_sites.get(pid, [])
-		var count := mini(_visual_count("plants", str(pid), 7.0), sites.size())
-		for i in count:
-			var p := _wildlife_point(sites[i])
-			var growth := _visual_weight("plants", str(pid), i, 7.0)
-			if growth <= 0.001: continue
-			# 赤山树是立着的，先给它垫影子 —— 影子多边形走绝对屏幕坐标，
-			# 必须赶在下面这行缩放变换之前画，否则会被 growth 再缩一次。
-			if str(pid) == "chishan":
-				_draw_shadow(c, sites[i], _px_to_uv(TREE_SHADOW_RADIUS * growth), 0.24, TREE_SHADOW_FOOT, "tree")
-			c.draw_set_transform(p, 0.0, Vector2.ONE * growth)
-			p = Vector2.ZERO
-			match str(pid):
-				"lian":
-					c.draw_texture_rect(bird_sprites[5], Rect2(p - Vector2(19, 21), Vector2(38, 38)), false)
-				"luwei":
-					_draw_sprite(c, p, 4, Vector2(36, 48))
-				"chishan":
-					_draw_tree(c, p)
-				"kucao":
-					c.draw_line(p + Vector2(-4, 3), p + Vector2(-1, -4), Color("7aa980"), 2, false)
-					c.draw_line(p + Vector2(3, 3), p + Vector2(1, -5), Color("89b68c"), 2, false)
-				_:
-					_draw_marsh(c, p, str(pid))
-			c.draw_set_transform(Vector2.ZERO)
-	for i in mini(ISLAND_ANCHORS.size(), ceili(displayed_islands)):
-		var p := _wildlife_point(ISLAND_ANCHORS[i % ISLAND_ANCHORS.size()])
-		var growth := clampf(displayed_islands - float(i), 0.0, 1.0)
-		p.y += round(sin(elapsed + i) * 1.0)
-		if growth < 0.99:
-			c.draw_arc(p, 9 + (1.0 - growth) * 15, 0, TAU, 16, Color(0.72, 0.93, 0.98, 1.0 - growth), 2.0)
-		var extent := Vector2(48, 48) * maxf(0.08, growth)
-		p.y += (1.0 - growth) * 14.0
-		c.draw_texture_rect(FLOATING_ISLAND, Rect2((p - extent * Vector2(0.5, 0.65)).round(), extent), false, Color(1, 1, 1, growth))
-	_draw_houses(c)
+	for item in _render_items:
+		var p := _wildlife_point(item["uv"])
+		match str(item["kind"]):
+			"prop":
+				var prop: Dictionary = item["prop"]
+				if prop["kind"] == 5: _draw_tree(c, p, float(prop["scale"]) * 0.55)
+				else:
+					var texture: Texture2D = prop_textures[prop["kind"]]
+					var extent := texture.get_size() * float(prop["scale"])
+					c.draw_texture_rect(texture, Rect2((p - extent * Vector2(0.5, 0.9)).round(), extent.round()), false)
+			"tree": _draw_tree(c, p, 0.78)
+			"plant": _draw_plant(c, p, str(item["pid"]), float(item["growth"]))
+			"island": _draw_island(c, int(item["index"]))
+			"house": _draw_house(c, int(item["index"]))
+			"bird": _draw_bird_actor(c, item["bird"])
+			"boat":
+				p.x += round(sin(elapsed * 0.06) * 4)
+				_draw_sprite(c, p, 7, Vector2(60, 62))
+	# Flying birds occupy the air layer; walking/feeding birds obey ground depth.
 	for bird in bird_agents:
-		if int(bird["slot"]) < _bird_count(str(bird["sid"])):
-			_draw_bird_actor(c, bird)
-	var boat_pos := _wildlife_point(BOAT_ANCHOR)
-	boat_pos.x += round(sin(elapsed * 0.06) * 4)
-	_draw_sprite(c, boat_pos, 7, Vector2(60, 62))
+		if int(bird["slot"]) < _bird_count(str(bird["sid"])) and int(bird["state"]) in [3, 5]: _draw_bird_actor(c, bird)
 	_draw_action_effects(c)
+
+func _draw_plant(c: Control, p: Vector2, pid: String, growth: float) -> void:
+	c.draw_set_transform(p, 0.0, Vector2.ONE * growth)
+	match pid:
+		"lian": c.draw_texture_rect(bird_sprites[5], Rect2(Vector2(-19, -21), Vector2(38, 38)), false)
+		"luwei": _draw_sprite(c, Vector2.ZERO, 4, Vector2(36, 48))
+		"chishan": _draw_tree(c, Vector2.ZERO)
+		"kucao":
+			c.draw_line(Vector2(-4, 3), Vector2(-1, -4), Color("7aa980"), 2, false)
+			c.draw_line(Vector2(3, 3), Vector2(1, -5), Color("89b68c"), 2, false)
+		_: _draw_marsh(c, Vector2.ZERO, pid)
+	c.draw_set_transform(Vector2.ZERO)
+
+func _draw_island(c: Control, i: int) -> void:
+	var p := _wildlife_point(ISLAND_ANCHORS[i])
+	var growth := clampf(displayed_islands - float(i), 0.0, 1.0)
+	p.y += round(sin(elapsed + i) * 1.0)
+	if growth < 0.99: c.draw_arc(p, 9 + (1.0 - growth) * 15, 0, TAU, 16, Color(0.72, 0.93, 0.98, 1.0 - growth), 2.0)
+	var extent := Vector2(48, 48) * maxf(0.08, growth)
+	p.y += (1.0 - growth) * 14.0
+	c.draw_texture_rect(FLOATING_ISLAND, Rect2((p - extent * Vector2(0.5, 0.65)).round(), extent), false, Color(1, 1, 1, growth))
 
 func _draw_action_effects(c: Control) -> void:
 	for effect in action_effects:
@@ -884,9 +966,7 @@ func _house_shape(art_index: int) -> Dictionary:
 ## 76px 房框里的像素长度 → 地图 uv 长度。屏幕像素与 uv 的比例由当前相机决定
 ## （菜单拉远 / 对局推近时会变，所以每次都现算，不写死）。
 func _px_to_uv(px: float) -> float:
-	var origin := _wildlife_point(Vector2(0.5, 0.5))
-	var step := _wildlife_point(Vector2(0.51, 0.5))
-	var px_per_uv := origin.distance_to(step) / 0.01
+	var px_per_uv := _shadow_projection.x.length()
 	if px_per_uv <= 0.0001:
 		return 0.0
 	return px / px_per_uv
@@ -894,18 +974,26 @@ func _px_to_uv(px: float) -> float:
 ## 影子的顶点不能走 _wildlife_point —— 那函数里的两次 round() 是为了让贴图/物件像素对齐，
 ## 拿来连多边形会把每个顶点都吸到整数格，半径一大就显出锯齿和棱角（看起来"崩"）。这里保留浮点。
 func _shadow_point(uv: Vector2) -> Vector2:
-	var wildlife := get_node("Wildlife") as Control
-	return wildlife.get_transform().affine_inverse() * map_camera.unproject_position(_ground_position(uv))
+	return _shadow_projection * uv
 
 ## 立着的东西要在地面上留下压扁的影子，"立"才读得出来。
 ## 正交相机下，地面上的圆投影到屏幕是个椭圆（长轴方向由相机方位角决定），
 ## 所以不写死屏幕轴向 —— 把一圈地图坐标投影出来连成多边形，方位角 / 俯角 / 缩放全都自动对上。
 func _shadow_polygon(uv: Vector2, radius_uv: float, segments: int = 40) -> PackedVector2Array:
+	if not _shadow_unit_rings.has(segments):
+		var ring := PackedVector2Array()
+		for k in segments:
+			var a := TAU * float(k) / float(segments)
+			ring.append(Vector2(cos(a), sin(a) * SHADOW_FLATTEN))
+		_shadow_unit_rings[segments] = ring
+	var unit_ring: PackedVector2Array = _shadow_unit_rings[segments]
 	var pts := PackedVector2Array()
+	pts.resize(segments)
+	var center := _shadow_point(uv)
+	var axis_x := _shadow_projection.x * radius_uv
+	var axis_y := _shadow_projection.y * radius_uv
 	for k in segments:
-		var a := TAU * float(k) / float(segments)
-		# 在地面平面上先按 SHADOW_FLATTEN 压扁，交给相机投影后才是最终形状。
-		pts.append(_shadow_point(uv + Vector2(cos(a), sin(a) * SHADOW_FLATTEN) * radius_uv))
+		pts[k] = center + axis_x * unit_ring[k].x + axis_y * unit_ring[k].y
 	return pts
 
 ## foot = 影子中心相对落点再往下推多少像素（贴图底边 ≠ 落点，影子要比脚点再低一点才露得出来）。
@@ -914,52 +1002,96 @@ func _draw_shadow(c: Control, uv: Vector2, radius_uv: float, alpha: float = 0.22
 		return
 	if radius_uv <= 0.0:
 		return
-	var pts := _shadow_polygon(uv, radius_uv)
-	if not is_zero_approx(foot):
-		for i in pts.size():
-			pts[i] += Vector2(0.0, foot)
-	c.draw_colored_polygon(pts, Color(0.05, 0.10, 0.09, alpha))
+	var pixel_radius := _shadow_point(uv + Vector2(radius_uv, 0)).distance_to(_shadow_point(uv))
+	# Very small growth/fade decals collapse below the polygon triangulator's
+	# precision. Fade them in only after they have a visible pixel footprint.
+	if pixel_radius < 1.0: return
+	alpha *= clampf((pixel_radius - 1.0) / 3.0, 0.0, 1.0)
+	# Keep the center on the sprite's snapped foot, while preserving continuous
+	# radii. Three faint bands give a soft contact edge without a blur dependency.
+	var center_offset := _wildlife_point(uv) - _shadow_point(uv) + Vector2(0.0, foot)
+	for band in [[1.05, 0.18], [0.90, 0.32], [0.70, 0.45]]:
+		var pts := _shadow_polygon(uv, radius_uv * float(band[0]))
+		for i in pts.size(): pts[i] += center_offset
+		c.draw_colored_polygon(pts, Color(0.08, 0.13, 0.11, alpha * float(band[1])))
+
+func _contact_shadow_specs(items: Array[Dictionary] = []) -> Array[Dictionary]:
+	var specs: Array[Dictionary] = []
+	if items.is_empty(): items = _scenery_draw_order()
+	for item in items:
+		var radius := 0.0
+		var foot := 0.0
+		var alpha := 0.20
+		var kind := "tree"
+		match str(item["kind"]):
+			"prop":
+				if int(item["prop"]["kind"]) != 5: continue
+				var scale_factor := float(item["prop"]["scale"]) * 0.55
+				radius = TREE_SHADOW_RADIUS * scale_factor
+				foot = TREE_SHADOW_FOOT * scale_factor
+			"tree":
+				radius = TREE_SHADOW_RADIUS * 0.78
+				foot = TREE_SHADOW_FOOT * 0.78
+			"plant":
+				if item["pid"] != "chishan": continue
+				radius = TREE_SHADOW_RADIUS * float(item["growth"])
+				foot = TREE_SHADOW_FOOT * float(item["growth"])
+			"house":
+				kind = "building"
+				var index := int(item["index"])
+				var phase: float = house_progress[index]
+				if phase <= 0.01:
+					radius = PLOT_SHADOW_RADIUS * 0.65
+					foot = PLOT_SHADOW_FOOT
+					alpha = 0.12
+				else:
+					var sc := maxf(0.12, phase * phase * (3.0 - 2.0 * phase))
+					var art_index := index % HOUSE_ART.size()
+					var shape := _house_shape(art_index)
+					radius = minf(float(HOUSE_SHADOW_RADIUS[art_index]), float(shape["half_w"]) * 1.12) * sc
+					foot = (float(shape["bottom"]) + float(HOUSE_SHADOW_FOOT[art_index]) * 0.5) * sc
+					alpha = 0.25
+			_: continue
+		if not _is_water(item["uv"]): specs.append({"uv": item["uv"], "radius": radius, "foot": foot, "alpha": alpha, "kind": kind})
+	return specs
+
+func _draw_contact_shadows(c: Control) -> void:
+	for spec in _render_shadow_specs:
+		_draw_shadow(c, spec["uv"], _px_to_uv(float(spec["radius"])), float(spec["alpha"]), float(spec["foot"]), str(spec["kind"]))
 
 func _draw_houses(c: Control) -> void:
-	var lit := roundi(float(metrics.get("community", 50)) / 100.0 * float(house_target_count))
-	for i in house_sites.size():
-		var uv: Vector2 = house_sites[i]
-		var p := _wildlife_point(uv)
-		var phase: float = house_progress[i]
-		# 空地：村子还没盖到这里，只有一个芦苇标记。它看着就是一株草本植物，所以影子也只能按
-		# 草本给小的 —— 挂一整块建筑月牙，看起来就是"草丛带着一个大影子"。
-		if phase <= 0.01:
-			_draw_shadow(c, uv, _px_to_uv(PLOT_SHADOW_RADIUS), 0.26, PLOT_SHADOW_FOOT, "building")
-			_draw_sprite(c, p, 4, Vector2(30, 40))
-			continue
-		var eased := phase * phase * (3.0 - 2.0 * phase)
-		var sc := maxf(0.12, eased)
-		var art_index := i % HOUSE_ART.size()
-		# 影子：椭圆半径**每张贴图一个数**（表格里逐栋调），随建造进度缩放；
-		# 中心压在房子贴图的视觉前底边上 → 后半个被房子挡住、前半个露在房前（竖直方向一半一半）。
-		var radius_px: float = float(HOUSE_SHADOW_RADIUS[art_index % HOUSE_SHADOW_RADIUS.size()]) * sc
-		var lift_px: float = float(HOUSE_SHADOW_FOOT[art_index % HOUSE_SHADOW_FOOT.size()]) * sc
-		var shape: Dictionary = _house_shape(art_index)
-		var foot: float = float(shape["bottom"]) * sc + lift_px
-		_draw_shadow(c, uv, _px_to_uv(radius_px), 0.36, foot, "building")
-		if phase < 0.99:
-			# Foundation and scaffold make both construction and wetland retreat legible.
-			c.draw_rect(Rect2(p + Vector2(-19, -7), Vector2(38, 8)), Color("6f6949"))
-			c.draw_rect(Rect2(p + Vector2(-20, -8), Vector2(3, 19)), Color("bca173"))
-			c.draw_rect(Rect2(p + Vector2(17, -8), Vector2(3, 19)), Color("bca173"))
-			for dust in 4:
-				var offset := Vector2(-23 + dust * 13, -12 - int(elapsed * 15.0 + float(i + dust)) % 8)
-				c.draw_rect(Rect2((p + offset).round(), Vector2(3, 3)), Color("e4ce9b"))
-		var extent := Vector2(HOUSE_BOX, HOUSE_BOX) * sc
-		var tint := Color.WHITE if i < lit else Color(0.66, 0.63, 0.56)
-		c.draw_texture_rect(HOUSE_ART[art_index], Rect2((p - extent * Vector2(0.5, HOUSE_ANCHOR_Y)).round(), extent.round()), false, tint)
-		if phase < 0.22 and i >= house_target_count:
-			_draw_sprite(c, p + Vector2(7, 0), 4, Vector2(16, 23))
+	for i in house_sites.size(): _draw_house(c, i)
 
-func _draw_tree(c: Control, p: Vector2, scale_factor: float = 1.0, uv: Vector2 = Vector2.INF) -> void:
-	# 树也要在地面上留影子，"立着"才读得出来。必须传 uv —— 屏幕点反推不出地形坐标。
-	if uv != Vector2.INF:
-		_draw_shadow(c, uv, _px_to_uv(TREE_SHADOW_RADIUS * scale_factor), 0.24, TREE_SHADOW_FOOT * scale_factor, "tree")
+func _draw_house(c: Control, i: int) -> void:
+	var lit := roundi(float(metrics.get("community", 50)) / 100.0 * float(house_target_count))
+	var uv: Vector2 = house_sites[i]
+	var p := _wildlife_point(uv)
+	var phase: float = house_progress[i]
+	# 空地：村子还没盖到这里，只有一个芦苇标记。它看着就是一株草本植物，所以影子也只能按
+	# 草本给小的 —— 挂一整块建筑月牙，看起来就是"草丛带着一个大影子"。
+	if phase <= 0.01:
+		_draw_sprite(c, p, 4, Vector2(30, 40))
+		return
+	var eased := phase * phase * (3.0 - 2.0 * phase)
+	var sc := maxf(0.12, eased)
+	var art_index := i % HOUSE_ART.size()
+	if phase < 0.99:
+		# Foundation and scaffold make both construction and wetland retreat legible.
+		c.draw_rect(Rect2(p + Vector2(-19, -7), Vector2(38, 8)), Color("6f6949"))
+		c.draw_rect(Rect2(p + Vector2(-20, -8), Vector2(3, 19)), Color("bca173"))
+		c.draw_rect(Rect2(p + Vector2(17, -8), Vector2(3, 19)), Color("bca173"))
+		for dust in 4:
+			var offset := Vector2(-23 + dust * 13, -12 - int(elapsed * 15.0 + float(i + dust)) % 8)
+			c.draw_rect(Rect2((p + offset).round(), Vector2(3, 3)), Color("e4ce9b"))
+	var extent := Vector2(HOUSE_BOX, HOUSE_BOX) * sc
+	var tint := Color.WHITE if i < lit else Color(0.66, 0.63, 0.56)
+	c.draw_texture_rect(HOUSE_ART[art_index], Rect2((p - extent * Vector2(0.5, HOUSE_ANCHOR_Y)).round(), extent.round()), false, tint)
+	if phase < 0.22 and i >= house_target_count:
+		_draw_sprite(c, p + Vector2(7, 0), 4, Vector2(16, 23))
+
+
+func _draw_tree(c: Control, p: Vector2, scale_factor: float = 1.0, _uv: Vector2 = Vector2.INF) -> void:
+	# GroundShadows renders its contact decal below every upright sprite.
 	var extent := Vector2(40, 44) * scale_factor
 	c.draw_texture_rect(SHORE_TREE, Rect2((p - extent * Vector2(0.5, 0.9)).round(), extent.round()), false)
 

@@ -21,6 +21,9 @@ func capture(label: String) -> void:
 
 func close_popups() -> void:
 	for i in 12:
+		if game.has_method("_on_expedition_selected") and game.expedition_panel.visible:
+			if GameState.expedition.direction.is_empty(): game._on_expedition_selected("habitat")
+			elif GameState.expedition.needs_reward(GameState.turn): game._on_expedition_selected(GameState.expedition.reward_offers()[0])
 		if not game.popup_root.visible: break
 		game._on_popup_button()
 		await settle(0.1)
@@ -169,6 +172,10 @@ func _ready() -> void:
 	check(game.card_infos.size() > 0, "Starting a run must deal cards")
 	check(is_equal_approx(game.wetland.camera_zoom_factor, game.wetland.GAME_CAMERA_ZOOM), "Game camera zoom must settle at its closer scale")
 	check(not get_viewport().get_visible_rect().intersects(creeper_screen_rect()), "Entire Creeper must be beyond the gameplay viewport")
+	# Allocation now pans away from the hand. Check all three original water
+	# junctions in the explicit full-view mode, including the northern offscreen one.
+	game.sandpan_view.toggle_view()
+	await settle(0.4)
 	await RenderingServer.frame_post_draw
 	var terrain_frame: Image = game.wetland.terrain_viewport.get_texture().get_image()
 	# These mapped-water points used to be covered by sand from the added river banks.
@@ -176,6 +183,8 @@ func _ready() -> void:
 		var pixel: Vector2 = game.wetland.map_camera.unproject_position(game.wetland._ground_position(junction) + Vector3(0, 0.01, 0)).round()
 		var color := terrain_frame.get_pixel(int(pixel.x), int(pixel.y))
 		check(color.b > color.g and color.g > color.r, "River/lake junction must render water blue instead of a sand divider")
+	game.sandpan_view.toggle_view()
+	await settle(0.4)
 	var wildlife: Control = game.wetland.get_node("Wildlife")
 	var habitat := Vector2(0.4, 0.6)
 	var screen_anchor: Vector2 = wildlife.get_transform() * game.wetland._wildlife_point(habitat)

@@ -193,6 +193,7 @@ var metric_tip_body: RichTextLabel = null
 var _tip_metric: String = ""       # 当前小窗显示的是哪一项（"" = 没显示）
 var _tip_last_text: String = ""    # 上次写入的正文，内容没变就不重复塞（省得每帧重排版）
 var hand_panel: PanelContainer
+var sandpan_view: Node
 var end_turn_btn: Button
 var bottom_right: VBoxContainer
 var card_box: Control
@@ -2044,6 +2045,9 @@ func _build_ui() -> void:
 	_build_metric_tip(canvas)   # 最后加：小窗要画在 HUD 所有面板之上
 	_build_score_layer()        # 算分动画层：独立 CanvasLayer，盖在 HUD 之上
 	_build_achievement_popup()  # 成就解锁提示层：盖在最上面
+	sandpan_view = preload("res://scripts/sandpan_view.gd").new()
+	add_child(sandpan_view)
+	sandpan_view.configure(self, canvas)
 
 
 ## 算分动画层。独立 CanvasLayer(layer=7)：盖在 UICanvas(0) 之上，
@@ -3390,6 +3394,7 @@ func _toggle_pause() -> void:
 
 func _pause_game() -> void:
 	_paused = true
+	if sandpan_view: sandpan_view.set_paused(true)
 	if wetland: wetland.set_process(false)
 	pause_hint.text = ""
 	pause_settings_panel.visible = false
@@ -3399,6 +3404,7 @@ func _pause_game() -> void:
 
 func _resume_game() -> void:
 	_paused = false
+	if sandpan_view: sandpan_view.set_paused(false)
 	if wetland: wetland.set_process(true)
 	pause_root.visible = false
 
@@ -6122,6 +6128,7 @@ func _layout_fan() -> void:
 		card_infos[i]["theta"] = thetas[i]
 		card_infos[i]["radial"] = Vector2(sin(thetas[i]), -cos(thetas[i]))
 	_fan_layout_size = area_size
+	if sandpan_view: sandpan_view.invalidate_layout()
 	# 发牌入场动画（从下方滑入 + 逐张错开）
 	if play_deal_anim:
 		play_deal_anim = false
@@ -6773,6 +6780,7 @@ func _remove_gold_frame(panel: PanelContainer) -> void:
 func _finish_turn() -> void:
 	if _score_animating or _sort_animating:
 		return      # 算分动画 / 手牌排序进行中，忽略连点
+	if sandpan_view: sandpan_view.prepare_settlement()
 
 	# 执行所有选中的卡（防御：资金/行动位不足的记录为失败，不静默吞掉）
 	GameState.clear_score_ledger()
