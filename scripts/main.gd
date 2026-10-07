@@ -1783,7 +1783,7 @@ func _build_ui() -> void:
 	scrim.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	scrim.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	var shader := Shader.new()
-	shader.code = "shader_type canvas_item; void fragment(){ float a = smoothstep(0.57, 1.0, UV.y) * 0.83 + (1.0-smoothstep(0.0, 0.16, UV.y))*0.40; COLOR = vec4(0.025, 0.09, 0.10, a); }"
+	shader.code = "shader_type canvas_item; void fragment(){ float a = smoothstep(0.57, 1.0, UV.y) * 0.72 + (1.0-smoothstep(0.0, 0.16, UV.y))*0.32; COLOR = vec4(0.16, 0.21, 0.25, a); }"
 	var material := ShaderMaterial.new()
 	material.shader = shader
 	scrim.material = material
@@ -2116,7 +2116,7 @@ func _build_menu() -> void:
 	bg.color = Color.WHITE
 	var shade := Shader.new()
 	bg.name = "MenuShade"
-	shade.code = "shader_type canvas_item; void fragment(){ float a = 0.82 * (1.0 - smoothstep(0.12, 0.40, UV.x)); COLOR = vec4(0.025, 0.095, 0.105, a); }"
+	shade.code = "shader_type canvas_item; void fragment(){ float a = 0.78 * (1.0 - smoothstep(0.12, 0.40, UV.x)); COLOR = vec4(0.16, 0.21, 0.25, a); }"
 	var shade_mat := ShaderMaterial.new()
 	shade_mat.shader = shade
 	bg.material = shade_mat
@@ -2124,7 +2124,7 @@ func _build_menu() -> void:
 	menu_root.add_child(bg)
 
 	# --- 右上角：标题 ---
-	var title := _make_label("保卫鄱阳湖", 48, Color(1, 0.9, 0.55))
+	var title := _make_label("保卫鄱阳湖", 48, VisualTheme.GOLD)
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
 	title.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	title.anchor_left = 0.0
@@ -2133,7 +2133,7 @@ func _build_menu() -> void:
 	title.offset_right = 620.0
 	title.offset_top = 64.0
 	title.offset_bottom = 140.0
-	title.add_theme_color_override("font_shadow_color", Color("0b242a"))
+	title.add_theme_color_override("font_shadow_color", VisualTheme.INK)
 	title.add_theme_constant_override("shadow_offset_y", 5)
 	menu_root.add_child(title)
 	var eyebrow := _make_label("P O Y A N G   /   W E T L A N D S", 12, VisualTheme.MINT)
@@ -4327,6 +4327,8 @@ func _make_gyro_material() -> ShaderMaterial:
 
 func _use_parent_material_tree(node: Node, overlays: Array) -> void:
 	for child in node.get_children():
+		if child.get_meta("card_projected_shadow", false):
+			continue
 		if child is CanvasItem:
 			if child.get_meta("card_gyro_overlay", false):
 				child.use_parent_material = false
@@ -4341,11 +4343,21 @@ func _bind_card_gyro(card: Control) -> void:
 	var overlays: Array = []
 	_use_parent_material_tree(card, overlays)
 	card.set_meta("gyro_overlays", overlays)
+	if not card.has_meta("projected_shadow"):
+		var shadow := Node2D.new()
+		shadow.set_script(preload("res://scripts/card_projected_shadow.gd"))
+		shadow.name = "ProjectedCardShadow"
+		shadow.set_meta("card_projected_shadow", true)
+		shadow.show_behind_parent = true
+		shadow.use_parent_material = false
+		card.add_child(shadow)
+		card.set_meta("projected_shadow", shadow)
 	_step_card_gyro(card, Vector2.ZERO, 0.0)
 
 
 func _make_gyro_card_view(panel: PanelContainer) -> Control:
 	var view := Control.new()
+	view.set_script(preload("res://scripts/card_hit_view.gd"))
 	view.size = Vector2(122, 165)
 	view.custom_minimum_size = view.size
 	view.mouse_filter = Control.MOUSE_FILTER_STOP
@@ -4373,16 +4385,40 @@ func _step_card_gyro(card: Control, target: Vector2, delta: float) -> void:
 		return
 	var current := Vector2(float(card.get_meta("gyro_x", 0.0)), float(card.get_meta("gyro_y", 0.0)))
 	current = current.lerp(target, 1.0 - exp(-12.0 * delta))
+	var poke_age: float = minf(1.0, float(card.get_meta("poke_age", 1.0)) + delta)
+	card.set_meta("poke_age", poke_age)
+	var poke_scale := 1.0
+	if poke_age < 0.28 and wetland and not wetland.reduced_motion:
+		var decay := 1.0 - poke_age / 0.28
+		current += Vector2(sin(poke_age * 105.0), sin(poke_age * 83.0)) * 0.035 * decay
+		poke_scale = 1.0 - sin(poke_age / 0.28 * PI) * 0.07
+	card.set_meta("poke_scale", poke_scale)
 	card.set_meta("gyro_x", current.x)
 	card.set_meta("gyro_y", current.y)
 	mat.set_shader_parameter("tilt_x", current.x)
 	mat.set_shader_parameter("tilt_y", current.y)
 	mat.set_shader_parameter("card_center", _card_gyro_center(card))
+	mat.set_shader_parameter("poke_scale", poke_scale)
+	var face: TextureRect = preload("res://scripts/card_geometry.gd").face_of(card)
+	if face != null:
+		var face_rect: Rect2 = preload("res://scripts/card_geometry.gd").face_rect(face)
+		for child in face.get_parent().get_children():
+			if child is Control and child.get_meta("card_gyro_overlay", false):
+				child.position = face.position + face_rect.position
+				child.size = face_rect.size
+	if card.has_meta("projected_shadow"):
+		card.get_meta("projected_shadow").update_projection(card, current)
 	# 独立的闪箔膜保留片元材质，同时与卡面共用倾斜和透视中心。
 	for overlay: ShaderMaterial in card.get_meta("gyro_overlays", []):
 		overlay.set_shader_parameter("tilt_x", current.x)
 		overlay.set_shader_parameter("tilt_y", current.y)
 		overlay.set_shader_parameter("card_center", _card_gyro_center(card))
+		overlay.set_shader_parameter("poke_scale", poke_scale)
+
+func _poke_card(card: Control) -> void:
+	if card == null or not is_instance_valid(card): return
+	card.set_meta("poke_age", 0.0)
+	card.set_meta("poke_count", int(card.get_meta("poke_count", 0)) + 1)
 
 
 func _close_deck_viewer() -> void:
@@ -4444,6 +4480,8 @@ func _update_sort_cooldown() -> void:
 	var remaining := SORT_COOLDOWN_MS - (Time.get_ticks_msec() - _sort_cooldown_ms)
 	_apply_sort_cooldown(deck_sort_btn, remaining)
 	_apply_sort_cooldown(hand_sort_btn, remaining)
+	if sandpan_view and sandpan_view.collapsed and hand_sort_btn:
+		hand_sort_btn.disabled = true
 
 
 ## 冷却期间按钮禁用并显示倒计时。冷却也是两边共用的。
@@ -4541,6 +4579,7 @@ func _sort_deck_cards(by_category: bool) -> void:
 
 ## 出牌阶段的排序：与牌库共用一个模式、一套冷却，只是作用对象换成在场手牌。
 func _toggle_hand_sort() -> void:
+	if sandpan_view and sandpan_view.collapsed: return
 	var now := Time.get_ticks_msec()
 	if now - _sort_cooldown_ms < SORT_COOLDOWN_MS:
 		return
@@ -4735,13 +4774,13 @@ func _process_detail_gyro(delta: float, mouse_override: Vector2 = Vector2.INF) -
 		return
 	var mouse := mouse_override if mouse_override != Vector2.INF else get_viewport().get_mouse_position()
 	for big in targets:
-		var local_mouse: Vector2 = big.get_global_transform().affine_inverse() * mouse
-		var active := Rect2(Vector2.ZERO, big.size).has_point(local_mouse)
+		var active := preload("res://scripts/card_geometry.gd").contains(big, mouse)
 		_step_card_gyro(big, _card_gyro_target(big, mouse, active), delta)
 
 
 func _on_viewer_card_click(event: InputEvent, view: Control, card: Dictionary) -> void:
 	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
+		_poke_card(view)
 		_show_card_detail(view, card)
 
 
@@ -4768,6 +4807,7 @@ func _remove_yellow_frame(view: Control) -> void:
 ## 卡牌详情：左大牌 + 右介绍框（打字机）；大牌从被点击处平移放大投射到左侧展示位
 func _show_card_detail(view: Control, card: Dictionary) -> void:
 	card_detail.visible = true
+	card_detail.set_meta("closing", false)
 	if _detail_big_card != null and is_instance_valid(_detail_big_card):
 		_detail_big_card.queue_free()
 		_detail_big_card = null
@@ -4779,6 +4819,8 @@ func _show_card_detail(view: Control, card: Dictionary) -> void:
 	big.set_meta("gyro_x", 0.0)
 	big.set_meta("gyro_y", 0.0)
 	_detail_big_card = big
+	big.set_meta("source_view", view)
+	_poke_card(big)
 	# 起始：被点击卡牌的屏幕中心；终点：左侧展示区中心
 	var src_center := view.get_global_rect().get_center()
 	var dst_center := card_detail_card.get_global_rect().get_center()
@@ -4790,6 +4832,7 @@ func _show_card_detail(view: Control, card: Dictionary) -> void:
 	card_detail.add_child(big)
 	# 投射动画：平移 + 放大
 	var fly := big.create_tween()
+	big.set_meta("fly_tween", fly)
 	fly.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
 	fly.tween_property(big, "position", dst_local, 0.4)
 	fly.parallel().tween_property(big, "scale", Vector2(1.8, 1.8), 0.4)
@@ -4829,7 +4872,32 @@ func _close_card_detail() -> void:
 
 func _on_card_detail_dim_input(event: InputEvent) -> void:
 	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
-		_close_card_detail()
+		_handle_detail_click(event, card_detail, _detail_big_card, _close_card_detail)
+
+func _handle_detail_click(event: InputEventMouseButton, detail: Control, big: Control, close: Callable) -> void:
+	if detail.get_meta("closing", false): return
+	var point := detail.get_global_transform() * event.position
+	if big and is_instance_valid(big) and preload("res://scripts/card_geometry.gd").contains(big, point):
+		_poke_card(big)
+		return
+	var info: Control = detail.get_meta("info")
+	if info.get_global_rect().has_point(point): return
+	if big == null or not is_instance_valid(big) or (wetland and wetland.reduced_motion):
+		close.call()
+		return
+	detail.set_meta("closing", true)
+	var old: Tween = big.get_meta("fly_tween", null)
+	if old and old.is_valid(): old.kill()
+	var source: Control = big.get_meta("source_view", null)
+	var position := big.position
+	if source and is_instance_valid(source):
+		position = detail.get_global_transform().affine_inverse() * _card_gyro_center(source) - big.pivot_offset
+	var fly := big.create_tween()
+	big.set_meta("fly_tween", fly)
+	fly.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_IN_OUT)
+	fly.tween_property(big, "position", position, 0.22)
+	fly.parallel().tween_property(big, "scale", Vector2.ONE, 0.22)
+	fly.tween_callback(close)
 
 
 ## 卡牌详情弹层（覆盖在牌库查看器之上）
@@ -4862,6 +4930,8 @@ func _build_card_detail() -> void:
 	info.anchor_bottom = 0.92
 	_panel_style(info, Color(0.24, 0.17, 0.11, 0.96))
 	card_detail.add_child(info)
+	card_detail.set_meta("info", info)
+	info.mouse_filter = Control.MOUSE_FILTER_STOP
 
 	var iv := VBoxContainer.new()
 	iv.add_theme_constant_override("separation", 10)
@@ -4882,9 +4952,7 @@ func _build_card_detail() -> void:
 	card_detail_body.add_theme_color_override("default_color", Color(0.96, 0.94, 0.9))
 	iv.add_child(card_detail_body)
 
-	var close := _make_button("返回", _close_card_detail, 18)
-	close.custom_minimum_size = Vector2(0, 44)
-	iv.add_child(close)
+	iv.add_child(_make_label("点击牌面和解说栏之外的背景返回", 12, Color("8eaaa8")))
 
 
 # ==================== 知识卡图鉴（主页入口）====================
@@ -5029,6 +5097,7 @@ func _close_knowledge_viewer() -> void:
 
 func _on_knowledge_card_click(event: InputEvent, view: Control, kid: String) -> void:
 	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
+		_poke_card(view)
 		_show_knowledge_detail(view, kid)
 
 
@@ -5043,6 +5112,7 @@ func _knowledge_tooltip(kid: String, collected: bool) -> String:
 ## 与 _make_card 同规格的 122×165；未收集时整张走灰调、内容只留「？」。
 func _make_knowledge_card(kid: String, collected: bool) -> PanelContainer:
 	var panel := PanelContainer.new()
+	panel.set_script(preload("res://scripts/card_hit_panel.gd"))
 	panel.custom_minimum_size = Vector2(122, 165)
 	panel.size = Vector2(122, 165)
 	panel.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
@@ -5058,6 +5128,7 @@ func _make_knowledge_card(kid: String, collected: bool) -> PanelContainer:
 		rim.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		var foil := ShaderMaterial.new()
 		foil.shader = preload("res://scripts/knowledge_foil.gdshader")
+		foil.set_shader_parameter("card_mask", PixelCardArt.PAPER)
 		rim.material = foil
 		panel.add_child(rim)
 		rim.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -5093,6 +5164,7 @@ func _knowledge_art(kid: String) -> Texture2D:
 func _show_knowledge_detail(view: Control, kid: String) -> void:
 	var collected: bool = Knowledge.is_collected(kid)
 	knowledge_detail.visible = true
+	knowledge_detail.set_meta("closing", false)
 	if _knowledge_big_card != null and is_instance_valid(_knowledge_big_card):
 		_knowledge_big_card.queue_free()
 		_knowledge_big_card = null
@@ -5103,6 +5175,8 @@ func _show_knowledge_detail(view: Control, kid: String) -> void:
 	big.set_meta("gyro_x", 0.0)
 	big.set_meta("gyro_y", 0.0)
 	_knowledge_big_card = big
+	big.set_meta("source_view", view)
+	_poke_card(big)
 	# 起始：被点击卡牌的屏幕中心；终点：左侧展示区中心
 	var src_center := view.get_global_rect().get_center()
 	var dst_center := knowledge_detail_card.get_global_rect().get_center()
@@ -5113,6 +5187,7 @@ func _show_knowledge_detail(view: Control, kid: String) -> void:
 	big.scale = Vector2.ONE
 	knowledge_detail.add_child(big)
 	var fly := big.create_tween()
+	big.set_meta("fly_tween", fly)
 	fly.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
 	fly.tween_property(big, "position", dst_local, 0.4)
 	fly.parallel().tween_property(big, "scale", Vector2(1.8, 1.8), 0.4)
@@ -5166,7 +5241,7 @@ func _close_knowledge_detail() -> void:
 
 func _on_knowledge_detail_dim_input(event: InputEvent) -> void:
 	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
-		_close_knowledge_detail()
+		_handle_detail_click(event, knowledge_detail, _knowledge_big_card, _close_knowledge_detail)
 
 
 ## 知识卡详情弹层（覆盖在图鉴查看器之上）
@@ -5199,6 +5274,8 @@ func _build_knowledge_detail() -> void:
 	info.anchor_bottom = 0.92
 	_panel_style(info, Color(0.24, 0.17, 0.11, 0.96))
 	knowledge_detail.add_child(info)
+	knowledge_detail.set_meta("info", info)
+	info.mouse_filter = Control.MOUSE_FILTER_STOP
 
 	var iv := VBoxContainer.new()
 	iv.add_theme_constant_override("separation", 10)
@@ -5221,9 +5298,7 @@ func _build_knowledge_detail() -> void:
 	knowledge_detail_body.add_theme_color_override("default_color", Color(0.96, 0.94, 0.9))
 	iv.add_child(knowledge_detail_body)
 
-	var close := _make_button("返回", _close_knowledge_detail, 18)
-	close.custom_minimum_size = Vector2(0, 44)
-	iv.add_child(close)
+	iv.add_child(_make_label("点击牌面和解说栏之外的背景返回", 12, Color("8eaaa8")))
 
 
 func _on_start_pressed() -> void:
@@ -5329,6 +5404,8 @@ func _make_metric_row(metric: String) -> VBoxContainer:
 	vb.add_child(head)
 	# 图标留引用：算分动画要让它放大 + 抖动（原来这里是匿名创建的，拿不到节点）
 	var icon := _make_icon(_icon_grid_for(metric), METRIC_COLORS[metric], 14)
+	icon.set_script(preload("res://scripts/metric_icon_effect.gd"))
+	icon.effects_owner = self
 	head.add_child(icon)
 	head.add_child(_make_label(GameState.METRIC_NAMES[metric], 12, Color(0.95, 0.95, 0.95)))
 	var val := _make_label("0", 12, METRIC_COLORS[metric])
@@ -5351,6 +5428,17 @@ func _make_metric_row(metric: String) -> VBoxContainer:
 	bar.set_anchors_preset(Control.PRESET_FULL_RECT)
 	bar.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	wrap.add_child(bar)
+	var ripple := ColorRect.new()
+	ripple.set_script(preload("res://scripts/metric_bar_ripple.gd"))
+	ripple.name = "MetricRipple"
+	ripple.bar = bar
+	ripple.effects_owner = self
+	ripple.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	ripple.offset_left = 2
+	ripple.offset_right = -2
+	ripple.offset_top = 2
+	ripple.offset_bottom = -2
+	wrap.add_child(ripple)
 
 	var band: ColorRect
 	var high_line: ColorRect
@@ -5389,7 +5477,7 @@ func _make_metric_row(metric: String) -> VBoxContainer:
 		vb.add_child(reference_label)
 
 	metric_bars[metric] = {"bar": bar, "val": val, "line": line, "row": vb, "icon": icon,
-		"band": band, "high_line": high_line, "reference_label": reference_label}
+		"band": band, "high_line": high_line, "reference_label": reference_label, "ripple": ripple}
 	return vb
 
 
@@ -6436,6 +6524,7 @@ func _refresh_lever_visuals(animate: bool) -> void:
 ## tier 传空则用当前拉杆档位。手牌那边之后还会由 _update_card_face() 反复重填。
 func _make_card(card: Dictionary, tier: String = "") -> Dictionary:
 	var panel := PanelContainer.new()
+	panel.set_script(preload("res://scripts/card_hit_panel.gd"))
 	panel.custom_minimum_size = Vector2(122, 165)
 	panel.size = Vector2(122, 165)
 	panel.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
@@ -6628,6 +6717,7 @@ func _flash_hint(text: String) -> void:
 ## mouse_override 仅供自动化测试顶替真实鼠标（与 _update_metric_tip 同一个套路），
 ## 正常游戏不传 —— 但手牌陀螺仪要拍证据，就必须能凭空指定一个悬停点。
 func _update_card_hover(delta: float, mouse_override: Vector2 = Vector2.INF) -> void:
+	if sandpan_view and sandpan_view.collapsed: return
 	if hand_panel.visible == false or card_infos.is_empty():
 		return
 	if _score_animating:
@@ -6637,8 +6727,8 @@ func _update_card_hover(delta: float, mouse_override: Vector2 = Vector2.INF) -> 
 		return
 	var mouse_global := mouse_override if mouse_override != Vector2.INF else get_viewport().get_mouse_position()
 	var box_tf := card_box.get_global_transform()
-	# 1) 命中判定：用「静止位置」base_pos，牌弹起后会整体上移，
-	#    若用实时 position 判定，鼠标停在牌底附近会「弹起→落回→再弹起」地抖。
+	# 用稳定素材轮廓进入悬停，悬停后保留初始轮廓与当前卡面的并集。
+	# 视觉抬起不能自行撤销鼠标命中；点击仍由实际透视卡面单独判断。
 	var hits: Array = []   # 命中的 card_infos 下标
 	for i in card_infos.size():
 		var info: Dictionary = card_infos[i]
@@ -6649,7 +6739,13 @@ func _update_card_hover(delta: float, mouse_override: Vector2 = Vector2.INF) -> 
 		if info.get("shaking", false) or info.get("flying", false):
 			info["hovered"] = false
 			continue
-		if _point_in_card(panel, info["base_pos"], mouse_global, box_tf):
+		var rest: Vector2 = info["base_pos"] + info["radial"] * (CARD_RAISE if info["selected"] else 0.0)
+		var angle: float = info["theta"]
+		var origin := rest + panel.pivot_offset - panel.pivot_offset.rotated(angle)
+		var stable := box_tf * Transform2D(angle, Vector2.ONE, 0.0, origin)
+		var base_hit: bool = preload("res://scripts/card_geometry.gd").contains(panel, mouse_global, stable, true)
+		var held_hit: bool = info.get("hovered", false) and _point_in_card(panel, info["base_pos"], mouse_global, box_tf)
+		if base_hit or held_hit:
 			hits.append(i)
 	# 2) 重叠时只留最上层那张：从子列表末尾（最后绘制 = 最上层）往前找第一个命中的
 	var hovered_idx: int = -1
@@ -6676,6 +6772,7 @@ func _update_card_hover(delta: float, mouse_override: Vector2 = Vector2.INF) -> 
 			continue  # 抖动 / 飞行期间不要抢它的 position
 		var hovering: bool = (i == hovered_idx)
 		info["hovered"] = hovering
+		panel.get_theme_stylebox("panel").set_meta("card_outline", hovering or info["selected"])
 		# 抬起：鼠标悬停的牌 + 已选定的牌（已选牌保持"抬起来挂在那儿"的状态）
 		var raised: bool = hovering or info["selected"]
 		# 弹起方向：沿径向向外（远离圆心，即向上弹出）
@@ -6742,22 +6839,9 @@ func _update_card_stack() -> void:
 		card_box.move_child(want[i], i)
 
 
-## 判断全局坐标点是否在旋转后的卡牌矩形内（按「静止位置」base_pos 判定，见 _update_card_hover）
-func _point_in_card(panel: PanelContainer, base_pos: Vector2, mouse_global: Vector2, box_tf: Transform2D) -> bool:
-	# 鼠标 → card_box 局部坐标
-	var local: Vector2 = box_tf.affine_inverse() * mouse_global
-	# 相对牌底中心(pivot)的向量
-	var offset: Vector2 = local - (base_pos + panel.pivot_offset)
-	# 逆旋转到卡牌自身坐标系
-	var ang := -panel.rotation
-	var rotated := Vector2(
-		offset.x * cos(ang) - offset.y * sin(ang),
-		offset.x * sin(ang) + offset.y * cos(ang)
-	)
-	var hx: float = panel.pivot_offset.x
-	var hy: float = panel.pivot_offset.y
-	return rotated.x >= -hx and rotated.x <= panel.size.x - hx \
-		and rotated.y >= -hy and rotated.y <= panel.size.y - hy
+## 判断鼠标是否落在当前可见卡面；包含扇形旋转、缩放与陀螺仪透视。
+func _point_in_card(panel: PanelContainer, _base_pos: Vector2, mouse_global: Vector2, _box_tf: Transform2D) -> bool:
+	return preload("res://scripts/card_geometry.gd").contains(panel, mouse_global)
 
 
 ## 金色闪光框（选中标记，呼吸发光）
@@ -7558,8 +7642,8 @@ func _wood_button(bg: Color, border: Color) -> StyleBoxFlat:
 
 
 func _panel_style(p: PanelContainer, color: Color) -> void:
-	# An opaque lake-green surface keeps small Chinese text legible over the map.
-	var bg := Color("503333") if color.r > color.g * 1.8 else VisualTheme.PANEL
+	# Slate surfaces and warm paper keep small text legible over the meadow.
+	var bg := Color("765653") if color.r > color.g * 1.8 else VisualTheme.PANEL
 	bg.a = 0.97 if color.a < 0.9 else 0.99
 	p.add_theme_stylebox_override("panel", VisualTheme.box(bg, VisualTheme.EDGE))
 

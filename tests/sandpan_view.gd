@@ -96,6 +96,13 @@ func _ready() -> void:
 	view.view_button.pressed.emit()
 	await settle()
 	check(view.collapsed and not view.hand_layer.visible, "View mode must completely hide hand")
+	check(not view.hud_layer.visible, "Full view must hide every persistent HUD control")
+	check(not game.left_panel.is_visible_in_tree() and not game.right_panel.is_visible_in_tree(), "Full view must hide metrics and status panels")
+	check(not game.bottom_right.is_visible_in_tree() and not game.tier_lever.is_visible_in_tree() and not game.deck_root.is_visible_in_tree(), "Full view must hide sorting, dispatch, refresh, execution, tiers and deck entry")
+	check(game.hand_sort_btn.disabled, "Full view must disable hand sorting")
+	var previous_sort: bool = game._deck_sort_by_category
+	game._toggle_hand_sort()
+	check(game._deck_sort_by_category == previous_sort and not game._sort_animating, "Hidden sort callback must not modify or animate the hand")
 	check(view.view_button.text == "展开手牌" and view.view_button.visible, "Must retain restore entry")
 	check(hand_matches(expected_hand), "View mode changed cards, selection, tier, fan layout or card size")
 	check(GameState.metrics == expected_metrics and GameState.funds == expected_funds, "View mode changed gameplay state")
@@ -118,6 +125,8 @@ func _ready() -> void:
 	game._resume_game()
 	await settle()
 	check(not view.collapsed and view.hand_layer.visible and view.hand_layer.position.is_zero_approx(), "Restore must return exact hand origin")
+	check(view.hud_layer.visible and view.hud_layer.position.is_zero_approx(), "Restore must return exact HUD origin")
+	check(game.left_panel.is_visible_in_tree() and game.right_panel.is_visible_in_tree() and game.bottom_right.is_visible_in_tree(), "Restoring must recover HUD visibility")
 	check(hand_matches(expected_hand), "Restoring hand changed locked tier/selection")
 	var normal_focus: Vector2 = game.wetland.hand_view_state
 	game._open_deck_viewer()

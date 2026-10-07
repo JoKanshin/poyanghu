@@ -2,12 +2,13 @@
 uniform float tilt_x = 0.0;
 uniform float tilt_y = 0.0;
 uniform vec2 card_center = vec2(0.0);
+uniform float poke_scale = 1.0;
 varying vec3 rigid_uv;
 varying vec4 rigid_tint;
 
 void vertex() {
 	mat4 m = MODEL_MATRIX;
-	vec2 c = (m * vec4(VERTEX, 0.0, 1.0)).xy - card_center;
+	vec2 c = ((m * vec4(VERTEX, 0.0, 1.0)).xy - card_center) * poke_scale;
 	float cy = cos(tilt_y);
 	float sy = sin(tilt_y);
 	float cx = cos(tilt_x);

@@ -108,6 +108,9 @@ func card_pixels(card: Control) -> int:
 
 func check_material_tree(node: Node) -> void:
 	for child in node.get_children():
+		if child.get_meta("card_projected_shadow", false):
+			check(not child.use_parent_material and child.material == null, "Projected shadow must be independent of card shader")
+			continue
 		check(not child is SubViewport, "No flattened card viewport remains")
 		if child is CanvasItem:
 			check(child.use_parent_material, "Each card primitive uses the reference parent material")
@@ -123,6 +126,24 @@ func check_tilt(card: Control, label: String) -> void:
 	check(material.shader.code == shader_code, label + " uses the shared projection")
 	check(material.shader == RigidShader, label + " uses the shared rigid-plane shader")
 	check_material_tree(card)
+	var geometry = preload("res://scripts/card_geometry.gd")
+	var face: TextureRect = geometry.face_of(card)
+	var rect: Rect2 = geometry.face_rect(face)
+	for uv in [Vector2(0.5, 0.5), Vector2(0.03, 0.5), Vector2(0.97, 0.5)]:
+		var point: Vector2 = geometry.project(card, face.get_global_transform() * (rect.position + uv * rect.size))
+		check(geometry.contains(card, point), label + " visible artwork must be clickable through perspective")
+	for uv in [Vector2(-0.01, 0.5), Vector2(1.01, 0.5), Vector2(0, 0)]:
+		var point: Vector2 = geometry.project(card, face.get_global_transform() * (rect.position + uv * rect.size))
+		check(not geometry.contains(card, point), label + " letterbox and transparent corners must not be clickable")
+	var shadow: Node2D = card.get_meta("projected_shadow")
+	check(shadow.show_behind_parent, label + " projects behind the card")
+	shadow.update_projection(card, Vector2(0.25, 0.25))
+	var right: PackedVector2Array = shadow.points.duplicate()
+	shadow.update_projection(card, Vector2(-0.25, -0.25))
+	var left: PackedVector2Array = shadow.points.duplicate()
+	check(right.size() == 4 and left.size() == 4, label + " shadow projects four card corners")
+	check(right[0].distance_to(left[0]) > 2.0, label + " opposite gyro directions change shadow projection")
+	shadow.update_projection(card, Vector2(float(card.get_meta("gyro_x")), float(card.get_meta("gyro_y"))))
 	check(absf(float(material.get_shader_parameter("tilt_x"))) > 0.02, label + " tilts vertically")
 	check(absf(float(material.get_shader_parameter("tilt_y"))) > 0.02, label + " tilts horizontally")
 	check(Vector2(material.get_shader_parameter("card_center")).distance_to(game._card_gyro_center(card)) < 0.1, label + " follows the transformed center")
@@ -156,6 +177,11 @@ func probe_detail(card: Control, label: String) -> void:
 	await capture(label)
 	check_tilt(card, label)
 	check(get_viewport().get_visible_rect().encloses(card.get_global_rect()), label + " fits the window")
+	if label == "gyro-action-detail":
+		for direction in [Vector2(-0.30, -0.30), Vector2(0.30, 0.30)]:
+			for i in 24: game._step_card_gyro(card, direction, 0.05)
+			await capture("shadow-upper-left" if direction.x < 0 else "shadow-lower-right")
+		for i in 24: game._step_card_gyro(card, Vector2.ZERO, 0.05)
 
 func _ready() -> void:
 	if not ProjectSettings.get_setting("application/config/use_custom_user_dir", false):
@@ -202,6 +228,7 @@ func _ready() -> void:
 		check_material_tree(panel)
 	var info: Dictionary = game.card_infos.back()
 	var hand: PanelContainer = info.panel
+	verify_hand_edge_stability(info)
 	var center: Vector2 = game._card_gyro_center(hand)
 	for i in 24:
 		game._update_card_hover(0.05, center + Vector2(35, -25))
@@ -226,6 +253,7 @@ func _ready() -> void:
 	game._show_card_detail(action_view, action_view.get_meta("card"))
 	await settle(0.6)
 	await probe_detail(game._detail_big_card, "gyro-action-detail")
+	await verify_detail_clicks(game.card_detail, game._detail_big_card, game._on_card_detail_dim_input)
 	game._close_card_detail()
 	game._close_deck_viewer()
 	await settle(0.5)
@@ -248,5 +276,82 @@ func _ready() -> void:
 	game._show_knowledge_detail(knowledge_view, "geo_poyang")
 	await settle(0.6)
 	await probe_detail(game._knowledge_big_card, "gyro-knowledge-small")
+	await verify_detail_clicks(game.knowledge_detail, game._knowledge_big_card, game._on_knowledge_detail_dim_input)
 	print("CARD_GYRO: %d checks, %d failures" % [checks, failures.size()])
 	get_tree().quit(0 if failures.is_empty() else 1)
+
+func verify_detail_clicks(detail: Control, big: Control, handler: Callable) -> void:
+	var click := InputEventMouseButton.new()
+	click.button_index = MOUSE_BUTTON_LEFT
+	click.pressed = true
+	var inverse := detail.get_global_transform().affine_inverse()
+	click.position = inverse * game._card_gyro_center(big)
+	var previous: int = big.get_meta("poke_count", 0)
+	handler.call(click)
+	check(detail.visible and not detail.get_meta("closing", false), "Clicking enlarged artwork must keep detail open")
+	check(int(big.get_meta("poke_count", 0)) == previous + 1, "Clicking enlarged artwork must poke the card")
+	game._step_card_gyro(big, Vector2.ZERO, 0.05)
+	check(float(big.get_meta("poke_scale")) < 1.0, "Poke must visibly compress the card")
+	for i in 24: game._step_card_gyro(big, Vector2.ZERO, 0.05)
+	check(is_equal_approx(float(big.get_meta("poke_scale")), 1.0), "Poke must return to normal size")
+	var actual := click.duplicate() as InputEventMouseButton
+	actual.position = game._card_gyro_center(big)
+	actual.global_position = actual.position
+	previous = int(big.get_meta("poke_count", 0))
+	get_viewport().push_input(actual, true)
+	await settle(0.05)
+	actual.pressed = false
+	get_viewport().push_input(actual, true)
+	check(detail.visible and int(big.get_meta("poke_count", 0)) == previous + 1, "Real GUI card click must poke without falling through to close")
+	var info: Control = detail.get_meta("info")
+	for point in [info.get_global_rect().get_center(), info.get_global_rect().position + Vector2(4, 4)]:
+		click.position = inverse * point
+		handler.call(click)
+		check(detail.visible and not detail.get_meta("closing", false), "Explanation and its padding must never close detail")
+	actual.position = info.get_global_rect().get_center()
+	actual.global_position = actual.position
+	actual.pressed = true
+	get_viewport().push_input(actual, true)
+	await settle(0.05)
+	actual.pressed = false
+	get_viewport().push_input(actual, true)
+	check(detail.visible and not detail.get_meta("closing", false), "Real GUI explanation click must stay in detail")
+	click.position = Vector2(10, 10)
+	handler.call(click)
+	check(detail.visible and detail.get_meta("closing", false), "Outside click must start shrink-back animation")
+	handler.call(click)
+	await settle(0.3)
+	check(not detail.visible, "Outside click must return to the parent grid after shrinking")
+
+func verify_hand_edge_stability(info: Dictionary) -> void:
+	var panel: PanelContainer = info.panel
+	var geometry = preload("res://scripts/card_geometry.gd")
+	var face: TextureRect = geometry.face_of(panel)
+	var rect: Rect2 = geometry.face_rect(face)
+	var relative := panel.get_global_transform().affine_inverse() * face.get_global_transform()
+	var theta: float = info.theta
+	var origin: Vector2 = info.base_pos + panel.pivot_offset - panel.pivot_offset.rotated(theta)
+	var stable: Transform2D = game.card_box.get_global_transform() * Transform2D(theta, Vector2.ONE, 0.0, origin)
+	for uv in [Vector2(0.5, 0.985), Vector2(0.5, 0.015), Vector2(0.015, 0.5), Vector2(0.985, 0.5)]:
+		for i in 90: game._update_card_hover(1.0 / 60.0, Vector2(-1000, -1000))
+		var mouse: Vector2 = stable * relative * (rect.position + uv * rect.size)
+		var previous := -1
+		var switches := 0
+		var last_positions: Dictionary = {}
+		var max_movement := 0.0
+		for frame in 120:
+			game._update_card_hover(1.0 / 60.0, mouse)
+			var hovered := -1
+			for index in game.card_infos.size():
+				var entry: Dictionary = game.card_infos[index]
+				if entry.get("hovered", false): hovered = index
+				if frame >= 90 and last_positions.has(index):
+					max_movement = maxf(max_movement, entry.panel.position.distance_to(last_positions[index]))
+				last_positions[index] = entry.panel.position
+			if hovered != previous: switches += 1
+			previous = hovered
+		check(previous >= 0 and switches == 1, "Stationary edge mouse must keep exactly one hover activation")
+		check(max_movement < 0.1, "Hand edge position must converge without bouncing")
+	for i in 120: game._update_card_hover(1.0 / 60.0, Vector2(-1000, -1000))
+	check(game.card_infos.all(func(entry): return not entry.get("hovered", false)), "Mouse outside both regions must release hover")
+	check(panel.position.distance_to(info.base_pos) < 0.01, "Card must settle to base position after mouse leaves")

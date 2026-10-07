@@ -2156,7 +2156,8 @@ func draw_cards(n: int, guarantee_season: bool = false) -> Array:
 
 ## 当前季节（spring / summer / autumn / winter）
 func current_season() -> String:
-	return SEASONS[(turn - 1) % 4]
+	# Before the first turn, the title landscape previews spring.
+	return SEASONS[(maxi(1, turn) - 1) % SEASONS.size()]
 
 
 ## 本回合是不是「本季的第 1 回合」（一局只有 4 次：第 1 / 5 / 9 / 13 回合）

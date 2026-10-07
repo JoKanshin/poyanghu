@@ -46,6 +46,18 @@ func _ready() -> void:
 	await capture("01-normal-map")
 	var saved: Dictionary = GameState.serialize()
 	if not baseline:
+		for ship in 10:
+			for time in range(0, 240, 12):
+				var sample: Dictionary = game.wetland._yangtze_boat_sample(ship, float(time))
+				var next: Dictionary = game.wetland._yangtze_boat_sample(ship, float(time + 1))
+				check(game.wetland._near_route(sample["pos"], game.wetland.yangtze_route, game.wetland.YANGTZE_HALF_WIDTH - 0.008), "River boats must leave room between their lane and the shore")
+				var movement: float = game.wetland._point(sample["pos"]).distance_to(game.wetland._point(next["pos"]))
+				check(movement < 5.0, "River boats must move gently without sudden jumps")
+				var direction: Vector2 = (game.wetland._point(sample["pos"] + sample["direction"] * 0.01) - game.wetland._point(sample["pos"])).normalized()
+				var mirror: float = -sample["heading"]
+				var forward := Vector2(game.wetland.FISHING_BOAT_FORWARD.x * mirror, game.wetland.FISHING_BOAT_FORWARD.y).rotated(game.wetland._river_boat_rotation(direction, mirror)).normalized()
+				check(forward.dot(direction) > 0.999, "Boat bow must face along its projected sailing direction")
+				check(sample["heading"] == (1.0 if ship % 2 == 0 else -1.0), "Opposite river lanes must retain their travel direction")
 		check(game.wetland.get_node_or_null("GroundShadows") != null, "Contact shadows must be on an independent ground layer")
 		var units: Array = game.wetland._scenery_draw_order()
 		var last_y := -INF
@@ -95,6 +107,9 @@ func _ready() -> void:
 				check(game.wetland._is_water(uv) and color.b > color.g and color.g > color.r, "CPU water mask disagrees with rendered river junction")
 			# Suppress scenery to test shadow clipping directly against the same terrain texture.
 			game.wetland.get_node("Wildlife").hide()
+			# Airborne seasonal particles move independently of contact shadows.
+			var weather: Control = game.wetland.get_node_or_null("SeasonWeather")
+			if weather: weather.hide()
 			await settle()
 			await RenderingServer.frame_post_draw
 			var with_shadows: Image = get_viewport().get_texture().get_image()
@@ -114,6 +129,7 @@ func _ready() -> void:
 			print("WATER_SHADOW_CLIP: ", water_samples, " water samples, ", polluted, " altered")
 			game.wetland.get_node("GroundShadows").show()
 			game.wetland.get_node("Wildlife").show()
+			if weather: weather.show()
 	check(GameState.metrics.water_level in [50,85], "Rendering mutated gameplay state")
 	GameState.load_state(saved)
 	print("MAP_RENDER: ", "PASS" if failures.is_empty() else "FAIL", " (", checks, " checks, ", failures.size(), " failures)")

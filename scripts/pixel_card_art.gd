@@ -79,4 +79,9 @@ static func add_face(panel: PanelContainer, title: String, footer: String = "", 
 		face.modulate = Color(0.68, 0.68, 0.68)
 	panel.add_child(face)
 	panel.set_meta("pixel_face", face)
+	var outline := Node2D.new()
+	outline.set_script(preload("res://scripts/card_outline.gd"))
+	outline.name = "CardArtOutline"
+	outline.use_parent_material = true
+	panel.add_child(outline)
 	return face

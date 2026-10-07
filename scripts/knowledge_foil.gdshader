@@ -1,5 +1,6 @@
 shader_type canvas_item;
 #include "res://scripts/card_rigid_projection.gdshaderinc"
+uniform sampler2D card_mask : filter_nearest;
 // Continuous translucent foil over the complete card, preserving readable ink.
 vec3 spectrum(float phase) {
 	return 0.58 + 0.42 * cos(6.283185 * (phase + vec3(0.0, 0.33, 0.67)));
@@ -28,5 +29,5 @@ void fragment() {
 	float border = 1.0 - smoothstep(0.009, 0.024, edge);
 	vec2 q = abs(card_uv - 0.5) - vec2(0.47, 0.48);
 	float rounded = 1.0 - smoothstep(0.017, 0.025, length(max(q, vec2(0.0))));
-	COLOR = vec4(clamp(foil, vec3(0.0), vec3(1.0)) * tint.rgb, (0.30 + diagonal * 0.14 + border * 0.40) * rounded * tint.a);
+	COLOR = vec4(clamp(foil, vec3(0.0), vec3(1.0)) * tint.rgb, (0.30 + diagonal * 0.14 + border * 0.40) * rounded * tint.a * texture(card_mask, card_uv).a);
 }

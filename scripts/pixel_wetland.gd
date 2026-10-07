@@ -1,13 +1,21 @@
 extends Control
+const VisualTheme := preload("res://scripts/visual_theme.gd")
 ## Orthographic 45-degree wetland view, with upright scenery and wildlife.
 ## All decorative placement is deterministic; never consume gameplay RNG.
 const LANDSCAPE := preload("res://assets/art/poyang-terrain-base.png")
 const SHORE_DISTANCE := preload("res://assets/art/lake-shore-distance.png")
 const GROUND_SHADER := preload("res://scripts/wetland_ground.gdshader")
 const CONTACT_SHADOW_SHADER := preload("res://scripts/wetland_contact_shadow.gdshader")
-const YANGTZE_HALF_WIDTH := 0.017
+const YANGTZE_HALF_WIDTH := 0.030
+const RIVER_BOAT_SPEED := 0.00035
+const RIVER_BOAT_LANE := 0.010
+const FISHING_BOAT_EXTENT := Vector2(60, 62)
+# Bow-to-stern axis in the existing diagonal artwork at its rendered aspect.
+const FISHING_BOAT_FORWARD := Vector2(-0.78, 0.62)
 const GAN_HALF_WIDTH := 0.010
-const LAND_COLOR := Color("829666")
+const LAND_COLOR := VisualTheme.MEADOW
+const SEASON_CHANGE_DURATION := 1.15
+const MAX_WEATHER_PARTICLES := 180
 ## 相机方位角转正后，地面在屏幕上的投影宽度从 GROUND_SIZE*(sin45+cos45)=1.414 倍
 ## 变成 GROUND_SIZE*1.0 倍；把 MAP_ZOOM 按同样比例缩回来，视野才跟转正前一致。
 const MAP_ZOOM := 1.12
@@ -109,6 +117,9 @@ var plants: Dictionary = {}
 var islands := 0
 var settlement := 50.0
 var season := 0
+var previous_season := 0
+var season_progress := 1.0
+var tree_season_age := 4.0
 var elapsed := 0.0
 var clock_accum := 0.0
 var backdrop: TextureRect
@@ -128,6 +139,8 @@ var _render_shadow_specs: Array[Dictionary] = []
 var _river_distance_cache: Dictionary = {}
 var water_material: ShaderMaterial
 var ground_material: ShaderMaterial
+var ground_plane: PlaneMesh
+var clearing_material: ShaderMaterial
 var river_bank_material: ShaderMaterial
 var reduced_motion := false
 var terrain_image: Image
@@ -152,6 +165,13 @@ var yangtze_route: Array[Vector2] = []
 var gan_route: Array[Vector2] = []
 var scenery_props: Array[Dictionary] = []
 var prop_textures: Array[ImageTexture] = []
+var exterior_image: Image
+var exterior_texture: ImageTexture
+var seasonal_trees: Array[Texture2D] = []
+var tree_frames: Array = []
+var pine_seasons: Array[Texture2D] = []
+var summer_flowers: Array[Vector2] = []
+var snow_sites: Array[Vector2] = []
 ## Opaque sprite footprints keep contact shadows under the actual feet.
 var house_art_shape: Array[Dictionary] = []
 
@@ -175,6 +195,7 @@ func _ready() -> void:
 	_build_river_routes()
 	_make_house_sites()
 	_measure_house_art()
+	_build_exterior_seasons()
 	_build_meadow_scenery()
 	easter_rng.randomize()
 	var land_margin := ColorRect.new()
@@ -208,8 +229,7 @@ void fragment() {
 }"""
 	water_material = ShaderMaterial.new()
 	water_material.shader = shader
-	# Share the same ecology and season tint across map land and empty margins.
-	land_margin.material = water_material
+	# The terrain viewport fills the view with seasonal ground, including margins.
 	backdrop.material = water_material
 	_build_terrain_viewport()
 	backdrop.texture = terrain_viewport.get_texture()
@@ -229,10 +249,19 @@ void fragment() {
 	# Wildlife stays separate from the terrain-only texture.
 	var wildlife := Control.new()
 	wildlife.name = "Wildlife"
+	var scenery_material := ShaderMaterial.new()
+	scenery_material.shader = preload("res://scripts/wetland_scenery.gdshader")
+	wildlife.material = scenery_material
 	wildlife.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	wildlife.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	wildlife.draw.connect(_draw_wildlife.bind(wildlife))
 	add_child(wildlife)
+	var weather := Control.new()
+	weather.name = "SeasonWeather"
+	weather.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	weather.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	weather.draw.connect(_draw_season_weather.bind(weather))
+	add_child(weather)
 	_layout_map()
 	resized.connect(_layout_map)
 	sync_state()
@@ -252,9 +281,9 @@ func _build_terrain_viewport() -> void:
 	world.add_child(environment)
 	var ground := MeshInstance3D.new()
 	ground.name = "WetlandGround"
-	var plane := PlaneMesh.new()
-	plane.size = Vector2.ONE * GROUND_SIZE
-	ground.mesh = plane
+	ground_plane = PlaneMesh.new()
+	ground_plane.size = Vector2.ONE * GROUND_SIZE
+	ground.mesh = ground_plane
 	ground_material = _make_ground_material(false)
 	ground.material_override = ground_material
 	world.add_child(ground)
@@ -276,9 +305,8 @@ func _build_terrain_viewport() -> void:
 	clearing_plane.size = Vector2(30, 30)
 	clearing.mesh = clearing_plane
 	clearing.position = _ground_position(CREEPER_ANCHOR)
-	var clearing_material := StandardMaterial3D.new()
-	clearing_material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	clearing_material.albedo_color = LAND_COLOR
+	clearing_material = _make_ground_material(false)
+	clearing_material.set_shader_parameter("meadow_only", true)
 	clearing.material_override = clearing_material
 	clearing.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	world.add_child(clearing)
@@ -329,6 +357,14 @@ func _layout_map() -> void:
 	_screen_projection = Transform2D(
 		map_camera.unproject_position(_ground_position(Vector2.RIGHT)) - origin,
 		map_camera.unproject_position(_ground_position(Vector2.DOWN)) - origin, origin)
+	# Cover every camera corner during menu zoom, hand focus and window resizing.
+	# Artwork UVs retain their original scale as the surrounding meadow expands.
+	var screen_to_map := _screen_projection.affine_inverse()
+	var half_extent := Vector2.ONE * GROUND_SIZE * 0.5
+	for corner in [Vector2.ZERO, Vector2(size.x, 0), size, Vector2(0, size.y)]:
+		var uv: Vector2 = screen_to_map * corner
+		half_extent = half_extent.max((uv - Vector2.ONE * 0.5).abs() * GROUND_SIZE)
+	ground_plane.size = (half_extent + Vector2.ONE) * 2.0
 	var wildlife := get_node_or_null("Wildlife") as Control
 	if wildlife:
 		_overlay_inverse = wildlife.get_transform().affine_inverse()
@@ -380,7 +416,16 @@ func sync_state(state: Dictionary = {}, animate: bool = true, duration: float = 
 	plants = state["plants"].duplicate()
 	islands = int(state["islands"])
 	settlement = float(state["settlement"])
-	season = int(state["season"])
+	var next_season := int(state["season"])
+	if new_seed or not animate or reduced_motion or displayed_metrics.is_empty():
+		previous_season = next_season
+		season_progress = 1.0
+		tree_season_age = 4.0
+	elif next_season != season:
+		previous_season = season
+		season_progress = 0.0
+		tree_season_age = 0.0
+	season = next_season
 	if new_seed:
 		_reset_scenery()
 	sync_community_targets()
@@ -406,14 +451,17 @@ func _lake_offset() -> float:
 	return (level - 50.0) / 50.0 * (22.0 if level >= 50.0 else 18.0)
 
 func _apply_terrain_state() -> void:
-	for material in [ground_material, river_bank_material]:
-		if material: material.set_shader_parameter("lake_offset", _lake_offset())
+	for material in [ground_material, river_bank_material, clearing_material]:
+		if material:
+			material.set_shader_parameter("lake_offset", _lake_offset())
+			material.set_shader_parameter("season", season)
+			material.set_shader_parameter("previous_season", previous_season)
+			material.set_shader_parameter("season_progress", season_progress)
 	if water_material:
 		water_material.set_shader_parameter("quality", float(displayed_metrics.get("water_quality", 65)) / 100.0)
 		water_material.set_shader_parameter("vegetation", float(displayed_metrics.get("vegetation", 50)) / 100.0)
 		water_material.set_shader_parameter("level", float(displayed_metrics.get("water_level", 50)) / 100.0)
-		var tints := [Color.WHITE, Color(1.03, 1.02, 0.96), Color(1.06, 0.94, 0.80), Color(0.87, 0.95, 1.05)]
-		water_material.set_shader_parameter("season_tint", tints[season])
+		water_material.set_shader_parameter("season_tint", Color.WHITE)
 
 func _advance_presentation(delta: float) -> void:
 	if transition_age >= transition_duration or transition_from.is_empty(): return
@@ -425,6 +473,30 @@ func _advance_presentation(delta: float) -> void:
 	displayed_islands = lerpf(float(transition_from["islands"]), float(islands), fraction)
 	_apply_terrain_state()
 
+func _advance_season(delta: float) -> void:
+	tree_season_age = 4.0 if reduced_motion else minf(4.0, tree_season_age + delta)
+	if season_progress >= 1.0: return
+	season_progress = 1.0 if reduced_motion else minf(1.0, season_progress + delta / SEASON_CHANGE_DURATION)
+	for material in [ground_material, river_bank_material, clearing_material]:
+		if material: material.set_shader_parameter("season_progress", season_progress)
+
+func _season_blend_for_y(screen_y: float) -> float:
+	if season_progress >= 1.0: return 1.0
+	var edge := lerpf(-0.10, 1.10, season_progress)
+	return 1.0 - smoothstep(edge - 0.08, edge + 0.08, screen_y)
+
+func _season_blend_at(uv: Vector2) -> float:
+	return _season_blend_for_y(_point(uv).y / maxf(1.0, size.y))
+
+func _flower_amount(uv: Vector2, season_index: int) -> float:
+	if season_index == 1: return 1.0
+	# Spring opens a sparse first flush; summer fills in the other patches.
+	if season_index == 0 and int(absf(uv.x * 1307 + uv.y * 791)) % 3 == 0: return 0.70
+	return 0.0
+
+func _flower_amount_at(uv: Vector2) -> float:
+	return lerpf(_flower_amount(uv, previous_season), _flower_amount(uv, season), _season_blend_at(uv))
+
 func play_action(card_id: String, state: Dictionary, duration: float) -> void:
 	sync_state(state, true, duration)
 	if not reduced_motion:
@@ -432,6 +504,7 @@ func play_action(card_id: String, state: Dictionary, duration: float) -> void:
 
 func _process(delta: float) -> void:
 	_advance_presentation(delta)
+	_advance_season(delta)
 	for i in range(action_effects.size() - 1, -1, -1):
 		action_effects[i]["age"] += delta
 		if action_effects[i]["age"] >= action_effects[i]["duration"]: action_effects.remove_at(i)
@@ -452,7 +525,7 @@ func _redraw_scenery() -> void:
 	# interpolated growth. Refresh on every existing redraw, not only on turns.
 	_render_items = _scenery_draw_order()
 	_render_shadow_specs = _contact_shadow_specs(_render_items)
-	for layer_name in ["Wildlife", "GroundShadows"]:
+	for layer_name in ["Wildlife", "GroundShadows", "SeasonWeather"]:
 		var layer := get_node_or_null(layer_name) as Control
 		if layer: layer.queue_redraw()
 
@@ -475,6 +548,7 @@ func _bird_facing(bird: Dictionary) -> float:
 	return -1.0 if screen_direction.x < -0.0001 else 1.0
 
 func _terrain_color(uv: Vector2) -> Color:
+	if uv.x < 0.0 or uv.x > 1.0 or uv.y < 0.0 or uv.y > 1.0: return LAND_COLOR
 	var x := clampi(int(uv.x * terrain_image.get_width()), 0, terrain_image.get_width() - 1)
 	var y := clampi(int(uv.y * terrain_image.get_height()), 0, terrain_image.get_height() - 1)
 	return terrain_image.get_pixel(x, y)
@@ -759,10 +833,18 @@ func _make_ground_material(bank: bool) -> ShaderMaterial:
 	var material := ShaderMaterial.new()
 	material.shader = GROUND_SHADER
 	material.set_shader_parameter("terrain_texture", LANDSCAPE)
+	material.set_shader_parameter("exterior_mask", exterior_texture)
 	material.set_shader_parameter("shore_distance", SHORE_DISTANCE)
 	material.set_shader_parameter("river_bank", bank)
 	material.set_shader_parameter("ground_size", GROUND_SIZE)
-	material.set_shader_parameter("bank_color", Color("d8c68d"))
+	material.set_shader_parameter("bank_color", VisualTheme.SAND)
+	material.set_shader_parameter("meadow_color", LAND_COLOR)
+	# The artwork's base grass drives brightness on both sides of its boundary.
+	material.set_shader_parameter("meadow_basis", Color("829666"))
+	for entry in [["summer_meadow", VisualTheme.SUMMER_MEADOW], ["autumn_meadow", VisualTheme.AUTUMN_MEADOW],
+		["snow_color", VisualTheme.SNOW], ["water_deep", VisualTheme.WATER_DEEP], ["water_mid", VisualTheme.WATER_MID],
+		["water_shallow", VisualTheme.WATER_SHALLOW], ["sand_color", VisualTheme.SAND], ["soil_color", VisualTheme.SOIL]]:
+		material.set_shader_parameter(entry[0], entry[1])
 	return material
 
 func _build_river_mesh(parent: Node3D, route: Array[Vector2], half_width: float) -> void:
@@ -790,7 +872,7 @@ func _build_river_mesh(parent: Node3D, route: Array[Vector2], half_width: float)
 		var material := StandardMaterial3D.new()
 		material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 		material.cull_mode = BaseMaterial3D.CULL_DISABLED
-		material.albedo_color = [Color("d8c68d"), Color("63afcb"), Color("176783")][band]
+		material.albedo_color = [VisualTheme.SAND, VisualTheme.WATER_MID, VisualTheme.WATER_DEEP][band]
 		mesh.material_override = river_bank_material if band == 0 else material
 		mesh.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		parent.add_child(mesh)
@@ -807,21 +889,39 @@ func _river_sample(route: Array[Vector2], phase: float) -> Dictionary:
 		remaining -= distance
 	return {"pos": route[-1], "direction": Vector2.RIGHT}
 
+func _yangtze_boat_sample(index: int, time: float) -> Dictionary:
+	var heading := 1.0 if index % 2 == 0 else -1.0
+	var phase := time * RIVER_BOAT_SPEED * heading + float(index) / 10.0
+	var sample := _river_sample(yangtze_route, phase)
+	# Average across bends so lanes and facing do not snap at short OSM segments.
+	var before: Vector2 = _river_sample(yangtze_route, phase - 0.001)["pos"]
+	var after: Vector2 = _river_sample(yangtze_route, phase + 0.001)["pos"]
+	var tangent := (after - before).normalized()
+	var normal := Vector2(-tangent.y, tangent.x)
+	return {"pos": sample["pos"] + normal * RIVER_BOAT_LANE * heading, "heading": heading, "direction": tangent * heading}
+
+func _river_boat_rotation(direction: Vector2, mirror: float) -> float:
+	var artwork_forward := Vector2(FISHING_BOAT_FORWARD.x * mirror, FISHING_BOAT_FORWARD.y)
+	return direction.angle() - artwork_forward.angle()
+
+func _draw_fishing_boat(c: Control, p: Vector2, heading: float = 1.0, direction: Vector2 = Vector2.ZERO) -> void:
+	if direction == Vector2.ZERO:
+		c.draw_set_transform(p, 0.0, Vector2(heading, 1.0))
+		_draw_sprite(c, Vector2.ZERO, 7, FISHING_BOAT_EXTENT)
+	else:
+		# Account for the artwork's diagonal bow; rotate around the hull, not its feet.
+		var mirror := -heading
+		c.draw_set_transform(p, _river_boat_rotation(direction, mirror), Vector2(mirror, 1.0))
+		c.draw_texture_rect(sprites[7], Rect2(-FISHING_BOAT_EXTENT * Vector2(0.5, 0.60), FISHING_BOAT_EXTENT), false)
+	c.draw_set_transform(Vector2.ZERO)
+
 func _draw_yangtze_boats(c: Control) -> void:
 	for i in 10:
-		var sample := _river_sample(yangtze_route, elapsed * 0.007 + float(i) / 10.0)
-		var uv: Vector2 = sample["pos"]
-		var p := _wildlife_point(uv)
-		var direction: Vector2 = (_wildlife_point(uv + sample["direction"] * 0.015) - p).normalized()
-		c.draw_set_transform(p, direction.angle())
-		# Small original pixel launches, with a hull, cabin and trailing wake.
-		c.draw_line(Vector2(-24, -3), Vector2(-14, -2), Color("97d3cc"), 1.0)
-		c.draw_line(Vector2(-24, 3), Vector2(-14, 2), Color("97d3cc"), 1.0)
-		c.draw_colored_polygon(PackedVector2Array([Vector2(-13,-4), Vector2(8,-4), Vector2(14,0), Vector2(8,4), Vector2(-13,4)]), Color("694d36"))
-		c.draw_rect(Rect2(-10, -3, 17, 6), Color("c79959"))
-		c.draw_rect(Rect2(-6, -3, 8, 6), Color("f0dcaa"))
-		c.draw_rect(Rect2(-4, -2, 4, 4), Color("4c7f83"))
-		c.draw_set_transform(Vector2.ZERO)
+		var sample := _yangtze_boat_sample(i, elapsed)
+		var p := _wildlife_point(sample["pos"])
+		p.y += sin(elapsed * 0.65 + float(i)) * 0.6 if not reduced_motion else 0.0
+		var direction := (_wildlife_point(sample["pos"] + sample["direction"] * 0.01) - _wildlife_point(sample["pos"])).normalized()
+		_draw_fishing_boat(c, p, sample["heading"], direction)
 
 func _build_meadow_scenery() -> void:
 	# Original code-drawn pixel props: grass, flowers, shrubs, stones and pines.
@@ -842,6 +942,7 @@ func _build_meadow_scenery() -> void:
 			for x in rows[y].length():
 				if palette.has(rows[y][x]): image.set_pixel(x, y, palette[rows[y][x]])
 		prop_textures.append(ImageTexture.create_from_image(image))
+	pine_seasons = preload("res://scripts/seasonal_tree_art.gd").build_pine(prop_textures[4].get_image())
 	var rng := RandomNumberGenerator.new()
 	rng.seed = 20261002
 	for y in range(-12, 33):
@@ -862,6 +963,9 @@ func _scenery_draw_order() -> Array[Dictionary]:
 	var items: Array[Dictionary] = []
 	for prop in scenery_props:
 		if not _is_water(prop["pos"]): items.append({"kind": "prop", "uv": prop["pos"], "prop": prop})
+	if season in [0, 1] or (season_progress < 1.0 and previous_season in [0, 1]):
+		for uv in summer_flowers:
+			if _is_exterior_land(uv) and _flower_amount_at(uv) > 0.01: items.append({"kind": "flower", "uv": uv})
 	for uv in EDGE_TREE_TARGETS:
 		var clear := uv.distance_to(CREEPER_ANCHOR) > 0.13
 		for home in house_sites:
@@ -907,30 +1011,37 @@ func _draw_wildlife(c: Control) -> void:
 		match str(item["kind"]):
 			"prop":
 				var prop: Dictionary = item["prop"]
-				if prop["kind"] == 5: _draw_tree(c, p, float(prop["scale"]) * 0.55)
+				if prop["kind"] == 5: _draw_tree(c, p, float(prop["scale"]) * 0.55, item["uv"])
 				else:
 					var texture: Texture2D = prop_textures[prop["kind"]]
+					if prop["kind"] == 4: texture = pine_seasons[season]
 					var extent := texture.get_size() * float(prop["scale"])
-					c.draw_texture_rect(texture, Rect2((p - extent * Vector2(0.5, 0.9)).round(), extent.round()), false)
-			"tree": _draw_tree(c, p, 0.78)
-			"plant": _draw_plant(c, p, str(item["pid"]), float(item["growth"]))
+					var rect := Rect2((p - extent * Vector2(0.5, 0.9)).round(), extent.round())
+					if prop["kind"] == 4:
+						var amount := _tree_season_blend(item["uv"])
+						c.draw_texture_rect(pine_seasons[previous_season], rect, false)
+						c.draw_texture_rect(texture, rect, false, Color(1, 1, 1, amount))
+					else: c.draw_texture_rect(texture, rect, false, _season_prop_tint(item["uv"]))
+			"flower": _draw_summer_flower(c, p, item["uv"])
+			"tree": _draw_tree(c, p, 0.78, item["uv"])
+			"plant": _draw_plant(c, p, str(item["pid"]), float(item["growth"]), item["uv"])
 			"island": _draw_island(c, int(item["index"]))
 			"house": _draw_house(c, int(item["index"]))
 			"bird": _draw_bird_actor(c, item["bird"])
 			"boat":
 				p.x += round(sin(elapsed * 0.06) * 4)
-				_draw_sprite(c, p, 7, Vector2(60, 62))
+				_draw_fishing_boat(c, p)
 	# Flying birds occupy the air layer; walking/feeding birds obey ground depth.
 	for bird in bird_agents:
 		if int(bird["slot"]) < _bird_count(str(bird["sid"])) and int(bird["state"]) in [3, 5]: _draw_bird_actor(c, bird)
 	_draw_action_effects(c)
 
-func _draw_plant(c: Control, p: Vector2, pid: String, growth: float) -> void:
+func _draw_plant(c: Control, p: Vector2, pid: String, growth: float, uv: Vector2 = Vector2.INF) -> void:
 	c.draw_set_transform(p, 0.0, Vector2.ONE * growth)
 	match pid:
 		"lian": c.draw_texture_rect(bird_sprites[5], Rect2(Vector2(-19, -21), Vector2(38, 38)), false)
 		"luwei": _draw_sprite(c, Vector2.ZERO, 4, Vector2(36, 48))
-		"chishan": _draw_tree(c, Vector2.ZERO)
+		"chishan": _draw_tree(c, Vector2.ZERO, 1.0, uv)
 		"kucao":
 			c.draw_line(Vector2(-4, 3), Vector2(-1, -4), Color("7aa980"), 2, false)
 			c.draw_line(Vector2(3, 3), Vector2(1, -5), Color("89b68c"), 2, false)
@@ -1112,10 +1223,33 @@ func _draw_house(c: Control, i: int) -> void:
 		_draw_sprite(c, p + Vector2(7, 0), 4, Vector2(16, 23))
 
 
+func _tree_season_blend(uv: Vector2) -> float:
+	if reduced_motion or uv == Vector2.INF: return 1.0
+	var delay := clampf(_point(uv).y / maxf(size.y, 1.0), 0.0, 1.0) * SEASON_CHANGE_DURATION
+	return clampf((tree_season_age - delay) / 1.8, 0.0, 1.0)
+
 func _draw_tree(c: Control, p: Vector2, scale_factor: float = 1.0, _uv: Vector2 = Vector2.INF) -> void:
 	# GroundShadows renders its contact decal below every upright sprite.
 	var extent := Vector2(40, 44) * scale_factor
-	c.draw_texture_rect(SHORE_TREE, Rect2((p - extent * Vector2(0.5, 0.9)).round(), extent.round()), false)
+	var rect := Rect2((p - extent * Vector2(0.5, 0.9)).round(), extent.round())
+	var amount := _tree_season_blend(_uv)
+	if amount >= 1.0 or previous_season == season:
+		c.draw_texture_rect(seasonal_trees[season], rect, false)
+	elif season == 0 and previous_season == 3:
+		# Fixed leaf-cluster masks grow real opaque leaves instead of fading a crown.
+		c.draw_texture_rect(tree_frames[0][clampi(roundi(amount * 16), 0, 16)], rect, false)
+	elif season == 3:
+		c.draw_texture_rect(tree_frames[3][clampi(roundi(amount * 16), 0, 16)], rect, false)
+		if not reduced_motion and amount > 0.02 and amount < 0.98:
+			for i in 6:
+				var fall := fposmod(amount * 1.7 + float(i) / 6.0, 1.0)
+				var leaf := p + Vector2((float(i) - 2.5) * 5.0 + sin(fall * TAU + i) * 4.0, -28.0 + fall * 31.0) * scale_factor
+				var world_leaf := leaf if _uv == Vector2.INF else _wildlife_point(_uv) + leaf - p
+				if not _creeper_weather_exclusion().has_point(world_leaf):
+					c.draw_rect(Rect2(leaf.round(), Vector2(2, 2) * scale_factor), Color("dbb074", 1.0 - fall))
+	else:
+		c.draw_texture_rect(seasonal_trees[previous_season], rect, false)
+		c.draw_texture_rect(seasonal_trees[season], rect, false, Color(1, 1, 1, amount))
 
 func _draw_marsh(c: Control, p: Vector2, pid: String) -> void:
 	var color := Color("a8b86a") if pid == "lihao" else Color("81a26d")
@@ -1164,3 +1298,130 @@ func _draw_bird_actor(c: Control, bird: Dictionary) -> void:
 	c.draw_set_transform(p, 0.0, Vector2(_bird_facing(bird), 1.0))
 	c.draw_texture_rect_region(BIRD_ACTIONS[sprite_index], Rect2(-extent * Vector2(0.5, 0.875), extent), _bird_frame_region(sprite_index, frame), Color(1, 1, 1, visibility))
 	c.draw_set_transform(Vector2.ZERO)
+
+## Flood-fill from the map edges: isolated lake islands stay outside this mask.
+func _build_exterior_seasons() -> void:
+	const N := 256
+	exterior_image = Image.create(N, N, false, Image.FORMAT_R8)
+	var open := PackedByteArray()
+	open.resize(N * N)
+	for y in N:
+		for x in N:
+			var col := _terrain_color(Vector2(x + 0.5, y + 0.5) / N)
+			open[y * N + x] = 0 if col.b > col.g and col.g > col.r else 1
+	var queue := PackedInt32Array()
+	for y in N:
+		for x in N:
+			if (x == 0 or y == 0 or x == N - 1 or y == N - 1) and open[y * N + x] == 1:
+				open[y * N + x] = 2
+				queue.append(y * N + x)
+	var head := 0
+	while head < queue.size():
+		var index := queue[head]
+		head += 1
+		var x := index % N
+		var y := int(index / N)
+		exterior_image.set_pixel(x, y, Color.WHITE)
+		for offset in [Vector2i(-1, 0), Vector2i(1, 0), Vector2i(0, -1), Vector2i(0, 1)]:
+			var next: Vector2i = Vector2i(x, y) + offset
+			if next.x < 0 or next.y < 0 or next.x >= N or next.y >= N: continue
+			var ni: int = next.y * N + next.x
+			if open[ni] == 1:
+				open[ni] = 2
+				queue.append(ni)
+	exterior_texture = ImageTexture.create_from_image(exterior_image)
+	tree_frames = preload("res://scripts/seasonal_tree_art.gd").build(SHORE_TREE.get_image())
+	for target_season in 4:
+		seasonal_trees.append(tree_frames[target_season][16])
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 20261014
+	for i in 1800:
+		var uv := Vector2(rng.randf_range(-0.3, 1.3), rng.randf_range(-0.3, 1.3))
+		if not _is_exterior_land(uv) or _season_near_water(uv, 0.035) or uv.distance_to(CREEPER_ANCHOR) < 0.15: continue
+		var clear := true
+		for home in house_sites:
+			if uv.distance_to(home) < 0.055: clear = false; break
+		if not clear: continue
+		if i % 3 == 0: summer_flowers.append(uv)
+		snow_sites.append(uv)
+
+func _is_exterior_land(uv: Vector2) -> bool:
+	if exterior_image == null or not _is_land(uv): return false
+	if uv.x < 0.0 or uv.x > 1.0 or uv.y < 0.0 or uv.y > 1.0: return true
+	var pixel := Vector2i((uv.clamp(Vector2.ZERO, Vector2.ONE) * 255).round())
+	return exterior_image.get_pixelv(pixel).r > 0.5
+
+func _season_prop_tint(uv: Vector2) -> Color:
+	if not _is_exterior_land(uv): return Color.WHITE
+	var colors := [Color.WHITE, Color(0.98, 1.04, 0.94), Color(1.40, 1.10, 0.77), Color(1.14, 1.20, 1.20)]
+	return colors[previous_season].lerp(colors[season], _season_blend_at(uv))
+
+func _draw_summer_flower(c: Control, p: Vector2, uv: Vector2) -> void:
+	var index := int(abs(uv.x * 1307 + uv.y * 791))
+	var amount := _flower_amount_at(uv)
+	if amount <= 0.01: return
+	var sway := 0.0 if reduced_motion else sin(elapsed * 1.4 + index) * 0.035
+	c.draw_set_transform(p, sway, Vector2.ONE * maxf(0.08, amount))
+	var color: Color = [Color("f5a3ba"), Color("fff0a6"), Color("cdb0ef"), Color("fdf4e5")][index % 4]
+	color.a = smoothstep(0.0, 0.35, amount)
+	for offset in [Vector2(-5, 0), Vector2(3, -4), Vector2(6, 2)]:
+		var stem: Vector2 = offset
+		c.draw_rect(Rect2(stem, Vector2(2, 5)), Color("547d43"))
+		c.draw_rect(Rect2(stem + Vector2(-2, -3), Vector2(6, 2)), color)
+		c.draw_rect(Rect2(stem + Vector2(0, -5), Vector2(2, 6)), color)
+		c.draw_rect(Rect2(stem + Vector2(0, -3), Vector2(2, 2)), Color("e6b856"))
+	c.draw_set_transform(Vector2.ZERO)
+
+func _creeper_weather_exclusion() -> Rect2:
+	var bounds := creeper_mesh.get_aabb()
+	var rect := Rect2(map_camera.unproject_position(creeper_mesh.to_global(bounds.get_endpoint(0))), Vector2.ZERO)
+	for i in range(1, 8): rect = rect.expand(map_camera.unproject_position(creeper_mesh.to_global(bounds.get_endpoint(i))))
+	return rect.grow(12.0)
+
+func _weather_weight(kind: String, season_index: int) -> float:
+	if kind == "snow": return 1.0 if season_index == 3 else 0.0
+	if kind == "leaf": return 1.0 if season_index == 2 else 0.0
+	return 0.65 if season_index == 0 else (0.30 if season_index == 1 else 0.0)
+
+func _season_particle_specs() -> Array[Dictionary]:
+	var particles: Array[Dictionary] = []
+	if reduced_motion: return particles
+	var exclusion := _creeper_weather_exclusion()
+	# Fixed screen-space seeds cover every aspect ratio without gameplay RNG.
+	for channel in [["snow", 150, 0.11, 0.012], ["leaf", 48, 0.065, 0.024], ["petal", 32, 0.075, 0.018]]:
+		var kind: String = channel[0]
+		for i in int(channel[1]):
+			var phase := float(i) + (13.0 if kind == "leaf" else (29.0 if kind == "petal" else 0.0))
+			var normalized := Vector2(fposmod(phase * 0.754877 + elapsed * float(channel[3]) + sin(elapsed * 0.65 + phase) * 0.015, 1.10) - 0.05,
+				fposmod(phase * 0.618034 + elapsed * float(channel[2]), 1.20) - 0.10)
+			var point := (normalized * size).round()
+			if not Rect2(Vector2.ZERO, size).grow(8).has_point(point) or exclusion.has_point(point): continue
+			var weight := lerpf(_weather_weight(kind, previous_season), _weather_weight(kind, season), _season_blend_for_y(normalized.y))
+			if kind == "petal" and previous_season in [0, 1] and season in [2, 3] and season_progress < 1.0:
+				weight = maxf(weight, sin(season_progress * PI) * 0.65)
+			if weight < 0.01: continue
+			particles.append({"kind": kind, "point": point, "alpha": weight, "index": i})
+			if particles.size() >= MAX_WEATHER_PARTICLES: return particles
+	return particles
+
+func _draw_season_weather(c: Control) -> void:
+	for particle in _season_particle_specs():
+		var p: Vector2 = particle["point"]
+		var i: int = particle["index"]
+		var alpha: float = particle["alpha"]
+		if particle["kind"] == "snow":
+			var color := Color(0.98, 0.99, 0.97, alpha * 0.80)
+			c.draw_rect(Rect2(p, Vector2(2, 2)), color)
+			if i % 5 == 0:
+				c.draw_rect(Rect2(p + Vector2(-2, 0), Vector2(6, 2)), color)
+				c.draw_rect(Rect2(p + Vector2(0, -2), Vector2(2, 6)), color)
+		else:
+			var color: Color = [Color("d8a775"), Color("eac786"), Color("b98c6a")][i % 3] if particle["kind"] == "leaf" else [Color("efb3c2"), Color("f3dbc1"), Color("ddc6ec")][i % 3]
+			color.a = alpha * 0.70
+			var tilt := roundf(sin(elapsed * 1.5 + i) * 2.0)
+			c.draw_colored_polygon(PackedVector2Array([p + Vector2(-3, 0), p + Vector2(tilt, -2), p + Vector2(3, 1), p + Vector2(-tilt, 3)]), color)
+
+func _season_near_water(uv: Vector2, radius: float) -> bool:
+	for i in 8:
+		if _is_water(uv + Vector2.from_angle(i * TAU / 8.0) * radius): return true
+	return false
