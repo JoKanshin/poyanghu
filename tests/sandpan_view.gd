@@ -76,7 +76,7 @@ func _ready() -> void:
 		check(get_viewport().get_visible_rect().encloses(view.view_button.get_global_rect()), "View button outside window")
 		var inverse: Transform2D = wetland.get_node("Wildlife").get_transform().affine_inverse()
 		for uv in [Vector2(0.3, 0.4), Vector2(0.6, 0.7), Vector2(0.7, 0.3)]:
-			var projected: Vector2 = wetland.map_camera.unproject_position(wetland._ground_position(uv))
+			var projected: Vector2 = wetland.map_camera.unproject_position(wetland._ground_position(uv) + Vector3(0, wetland._relief_at(uv), 0))
 			check(wetland._shadow_point(uv).distance_to(inverse * projected) < 0.002, "Ground/overlay alignment changed during clearance")
 		check(wetland.get_node("Wildlife").get_transform().is_equal_approx(wetland.get_node("GroundShadows").get_transform()), "Shadow transform differs from scenery")
 		var focus: Vector2 = wetland.hand_view_state

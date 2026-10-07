@@ -99,14 +99,23 @@ func _ready() -> void:
 						check(_matches_season(terrain.get_pixel(x, y), season), "Visible outer meadow must match season %d" % season)
 				if zoom == game.MENU_CAM_ZOOM:
 					check(margins > 20, "Menu camera test must sample the outer meadow")
+					# Isolate the artwork boundary palette from real slopes, whose
+					# lighting can legitimately differ between nearby map positions.
+					wetland.ground_material.set_shader_parameter("terrain_relief", false)
+					await get_tree().process_frame
+					await RenderingServer.frame_post_draw
+					var flat_terrain: Image = wetland.terrain_viewport.get_texture().get_image()
 					for pair in [[Vector2(-0.005, 0.6), Vector2(0.005, 0.6)], [Vector2(0.995, 0.6), Vector2(1.005, 0.6)]]:
-						var outside: Vector2 = wetland._point(pair[0])
-						var inside: Vector2 = wetland._point(pair[1])
+						var outside: Vector2 = (wetland._screen_projection * pair[0]).round()
+						var inside: Vector2 = (wetland._screen_projection * pair[1]).round()
 						var bounds := Rect2(Vector2.ZERO, Vector2(terrain.get_size()))
 						if not bounds.has_point(outside) or not bounds.has_point(inside): continue
-						var delta: Color = terrain.get_pixelv(Vector2i(outside)) - terrain.get_pixelv(Vector2i(inside))
+						var delta: Color = flat_terrain.get_pixelv(Vector2i(outside)) - flat_terrain.get_pixelv(Vector2i(inside))
 						var tolerance := 0.12 if season == 3 else 0.015
 						check(absf(delta.r) < tolerance and absf(delta.g) < tolerance and absf(delta.b) < tolerance, "Meadow palette must be continuous across the artwork boundary")
+					wetland.ground_material.set_shader_parameter("terrain_relief", true)
+					await get_tree().process_frame
+					await RenderingServer.frame_post_draw
 				var clearing_point: Vector2 = wetland._point(wetland.CREEPER_ANCHOR + Vector2(-0.07, 0.05))
 				if Rect2(Vector2.ZERO, Vector2(terrain.get_size())).has_point(clearing_point):
 					check(_matches_season(terrain.get_pixelv(Vector2i(clearing_point)), season), "Easter egg clearing must also follow the season")

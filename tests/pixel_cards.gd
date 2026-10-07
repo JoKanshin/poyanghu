@@ -20,26 +20,33 @@ func capture(label: String) -> void:
 	RenderingServer.force_draw()
 	get_viewport().get_texture().get_image().save_png(output_dir.path_join(label + ".png"))
 
-func verify_face(panel: PanelContainer, title: String, footer: String) -> void:
+func verify_face(panel: PanelContainer, title: String, footer: String, dixinhu: bool = false) -> void:
 	check(panel.has_meta("pixel_face"), title + " uses the shared bitmap face")
 	var face: TextureRect = panel.get_meta("pixel_face")
 	check(face.texture_filter == CanvasItem.TEXTURE_FILTER_NEAREST, "No smoothing")
+	if dixinhu:
+		check(face.texture == PixelArt.DIXINHU, "Dixinhu uses the complete supplied easter-egg face")
+		return
 	check(face.texture == PixelArt.texture(title, footer), "Correct name and fee/state")
+	var category: String = "knowledge" if footer in ["知识卡", "未收集"] else PixelArt.category_for(title)
+	var base: Image = PixelArt.base_image(category)
+	var glyph_scale := 4 if PixelArt.SUITS.has(category) else 1
 	for child in panel.get_children():
 		check(not child is Label or not child.visible, "Card text never draws with a Label")
 	var image := face.texture.get_image()
 	var unchanged := true
 	var shadows := 0
 	var shadow_offset_correct := true
-	for y in 144:
-		for x in 96:
+	for y in image.get_height():
+		for x in image.get_width():
 			var pixel := image.get_pixel(x, y)
-			if pixel != PixelArt.paper_image.get_pixel(x, y):
-				unchanged = unchanged and Rect2i(16, 32, 65, 65).has_point(Vector2i(x, y)) or (
-					unchanged and Rect2i(16, 100, 65, 17).has_point(Vector2i(x, y)))
+			if pixel != base.get_pixel(x, y):
+				var title_region := Rect2i(68, 133, 268, 253) if glyph_scale == 4 else Rect2i(16, 32, 65, 65)
+				var cost_region := Rect2i(120, 417, 112, 68) if glyph_scale == 4 else Rect2i(16, 100, 65, 17)
+				unchanged = unchanged and (title_region.has_point(Vector2i(x, y)) or cost_region.has_point(Vector2i(x, y)))
 				if pixel == Color8(150, 150, 150):
 					shadows += 1
-					shadow_offset_correct = shadow_offset_correct and image.get_pixel(x - 1, y - 1) == Color.BLACK
+					shadow_offset_correct = shadow_offset_correct and image.get_pixel(x - glyph_scale, y - glyph_scale) in [Color.BLACK, Color("35482d")]
 	check(unchanged, "Every pixel outside text and shadow remains original")
 	check(shadows > 0, "Shadow is exactly RGB 150,150,150")
 	check(shadow_offset_correct, "Every shadow pixel is one source pixel below/right of ink")
@@ -69,7 +76,7 @@ func _ready() -> void:
 		for collected in [false, true]:
 			var panel: PanelContainer = game._make_knowledge_card(kid, collected)
 			verify_face(panel, GameState.KNOWLEDGE_CARDS[kid].name if collected else "？",
-				"知识卡" if collected else "未收集")
+				"知识卡" if collected else "未收集", collected and kid == "egg_dixinhu")
 			panel.free()
 	game._on_title_start()
 	game._on_difficulty_pick(GameState.Difficulty.EASY)
@@ -129,6 +136,7 @@ func _ready() -> void:
 	var overlays: Array = foil_card.get_meta("gyro_overlays")
 	check(overlays.size() == 1, "Foil remains independent and follows the rigid card")
 	if overlays.size() == 1:
+		check(overlays[0].get_shader_parameter("card_mask") == PixelArt.DIXINHU, "Foil mask follows the supplied easter-egg face")
 		check(overlays[0].get_shader_parameter("card_center") == game._card_gyro_center(foil_card), "Foil uses the same card center")
 	await capture("pixel-cards-foil")
 	game._close_knowledge_viewer()

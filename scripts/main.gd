@@ -4,7 +4,6 @@ const VisualTheme = preload("res://scripts/visual_theme.gd")
 const PixelCardArt = preload("res://scripts/pixel_card_art.gd")
 const PixelWetland = preload("res://scripts/pixel_wetland.gd")
 var wetland: Control
-var menu_art_test_btn: Button
 var card_art_preview: CanvasLayer
 
 func _open_card_art_preview() -> void:
@@ -237,6 +236,8 @@ var _current_event: String = ""
 
 # 主菜单
 var menu_root: Control
+var menu_utilities: GridContainer
+var menu_separator: HSeparator
 var menu_col: VBoxContainer            # 左下角选项列
 var menu_start_btn: Button
 var menu_easy_btn: Button
@@ -2123,7 +2124,7 @@ func _build_menu() -> void:
 	bg.set_anchors_preset(Control.PRESET_FULL_RECT)
 	menu_root.add_child(bg)
 
-	# --- 右上角：标题 ---
+	# --- 左上角：标题 ---
 	var title := _make_label("保卫鄱阳湖", 48, VisualTheme.GOLD)
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
 	title.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
@@ -2162,18 +2163,14 @@ func _build_menu() -> void:
 	menu_col = VBoxContainer.new()
 	menu_col.anchor_left = 0.0
 	menu_col.anchor_right = 0.0
-	menu_col.anchor_top = 1.0
+	menu_col.anchor_top = 0.0
 	menu_col.anchor_bottom = 1.0
 	menu_col.offset_left = 68.0
-	menu_col.offset_right = 372.0
-	# ⚠ 这里给的高度必须**大于内容的实际高度**。VBoxContainer 的最小高度会把
-	#   Control 撑大，一旦内容比这个矩形高，Godot 会保留 offset_top 而**向下长**，
-	#   底部那一项就被顶出屏幕（「退出」曾经半截在屏幕外就是这么来的）。
-	#   锚底 + ALIGNMENT_END ⇒ 内容的底边 = offset_bottom，所以想整体上移就把它调小。
-	menu_col.offset_top = -520.0
+	menu_col.offset_right = 388.0
+	menu_col.offset_top = 270.0
 	menu_col.offset_bottom = -82.0
-	menu_col.alignment = BoxContainer.ALIGNMENT_END
-	menu_col.add_theme_constant_override("separation", 8)
+	menu_col.alignment = BoxContainer.ALIGNMENT_BEGIN
+	menu_col.add_theme_constant_override("separation", 10)
 	menu_root.add_child(menu_col)
 
 	# 一级：新游戏 / 继续游戏
@@ -2244,15 +2241,23 @@ func _build_menu() -> void:
 	menu_back_btn.visible = false
 	menu_col.add_child(menu_back_btn)
 
-	# 一级：其余选项（设置与制作人员暂未实现效果）
+	# 主行动在上，收藏与设置以两列排列，退出单独留在底部。
+	menu_separator = HSeparator.new()
+	menu_separator.custom_minimum_size.y = 10
+	menu_col.add_child(menu_separator)
+	menu_utilities = GridContainer.new()
+	menu_utilities.columns = 2
+	menu_utilities.add_theme_constant_override("h_separation", 10)
+	menu_utilities.add_theme_constant_override("v_separation", 10)
+	menu_col.add_child(menu_utilities)
 	if TALENT_TREE_ENABLED:
-		menu_talent_btn = _make_button("天赋树 · 灵感研修", _show_talent_panel, 18)
+		menu_talent_btn = _make_button("天赋树", _show_talent_panel, 18)
 		menu_talent_btn.custom_minimum_size = Vector2(0, 44)
-		menu_col.add_child(menu_talent_btn)
+		menu_utilities.add_child(menu_talent_btn)
 
 	menu_settings_btn = _make_button("设置", _show_settings_panel, 18)
 	menu_settings_btn.custom_minimum_size = Vector2(0, 44)
-	menu_col.add_child(menu_settings_btn)
+	menu_utilities.add_child(menu_settings_btn)
 
 	# 「更新日志」「制作人员」已移入设置面板（见下面的 svb），不在这里建 ——
 	# 主菜单列少两个按钮，底部才不会溢出屏幕。
@@ -2273,7 +2278,7 @@ func _build_menu() -> void:
 	ach_icon.offset_top = -11
 	ach_icon.offset_bottom = 11
 	menu_achievements_btn.add_child(ach_icon)
-	menu_col.add_child(menu_achievements_btn)
+	menu_utilities.add_child(menu_achievements_btn)
 
 	# 「知识卡」：与成就同样在按钮内左侧贴一个独立图标（不挂 Button.icon，
 	# 避免图标宽度被算进「图标+文字」的整体居中而让文字偏移）。
@@ -2290,13 +2295,14 @@ func _build_menu() -> void:
 	kn_icon.offset_top = -11
 	kn_icon.offset_bottom = 11
 	menu_knowledge_btn.add_child(kn_icon)
-	menu_col.add_child(menu_knowledge_btn)
-	menu_art_test_btn = _make_button("美术测试卡", _open_card_art_preview, 18)
-	menu_art_test_btn.custom_minimum_size = Vector2(0, 44)
-	menu_col.add_child(menu_art_test_btn)
+	menu_utilities.add_child(menu_knowledge_btn)
+	menu_utilities.move_child(menu_knowledge_btn, 0)
+	menu_utilities.move_child(menu_achievements_btn, 1)
+	for utility in menu_utilities.get_children():
+		utility.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 
 	menu_quit_btn = _make_button("退出", _on_menu_quit, 18)
-	menu_quit_btn.custom_minimum_size = Vector2(0, 44)
+	menu_quit_btn.custom_minimum_size = Vector2(0, 40)
 	menu_col.add_child(menu_quit_btn)
 
 	# --- 第 4 页：天赋树 ---
@@ -3051,7 +3057,8 @@ func _menu_state(state: int) -> void:
 	# 更新日志 / 制作人员已移入设置面板，显隐由面板自己管，不在这里控制
 	menu_achievements_btn.visible = main_level
 	menu_knowledge_btn.visible = main_level
-	menu_art_test_btn.visible = main_level
+	menu_utilities.visible = main_level
+	menu_separator.visible = main_level
 	menu_quit_btn.visible = main_level
 
 	menu_easy_btn.visible = state == 1
@@ -4384,7 +4391,16 @@ func _step_card_gyro(card: Control, target: Vector2, delta: float) -> void:
 	if mat == null:
 		return
 	var current := Vector2(float(card.get_meta("gyro_x", 0.0)), float(card.get_meta("gyro_y", 0.0)))
+	var face: TextureRect = preload("res://scripts/card_geometry.gd").face_of(card)
+	var geometry_key: Array = [mat.get_instance_id(), card.get_global_transform(), card.size,
+		face.position if face else Vector2.ZERO, face.size if face else Vector2.ZERO,
+		face.texture.get_instance_id() if face and face.texture else 0]
+	var old_poke: float = float(card.get_meta("poke_age", 1.0))
+	if old_poke >= 0.28 and current == target and card.get_meta("gyro_geometry_key", []) == geometry_key:
+		return
+	card.set_meta("gyro_geometry_key", geometry_key)
 	current = current.lerp(target, 1.0 - exp(-12.0 * delta))
+	if current.distance_squared_to(target) < 0.0000000001: current = target
 	var poke_age: float = minf(1.0, float(card.get_meta("poke_age", 1.0)) + delta)
 	card.set_meta("poke_age", poke_age)
 	var poke_scale := 1.0
@@ -4399,7 +4415,6 @@ func _step_card_gyro(card: Control, target: Vector2, delta: float) -> void:
 	mat.set_shader_parameter("tilt_y", current.y)
 	mat.set_shader_parameter("card_center", _card_gyro_center(card))
 	mat.set_shader_parameter("poke_scale", poke_scale)
-	var face: TextureRect = preload("res://scripts/card_geometry.gd").face_of(card)
 	if face != null:
 		var face_rect: Rect2 = preload("res://scripts/card_geometry.gd").face_rect(face)
 		for child in face.get_parent().get_children():
@@ -5119,7 +5134,7 @@ func _make_knowledge_card(kid: String, collected: bool) -> PanelContainer:
 	panel.add_theme_stylebox_override("panel", _knowledge_card_style(collected))
 	var k: Dictionary = GameState.KNOWLEDGE_CARDS.get(kid, {})
 	PixelCardArt.add_face(panel, str(k.get("name", "")) if collected else "？",
-		"知识卡" if collected else "未收集", not collected)
+		"知识卡" if collected else "未收集", not collected, "", collected and kid == "egg_dixinhu")
 	if collected and kid == "egg_dixinhu":
 		var rim := ColorRect.new()
 		rim.name = "KnowledgeFoil"
@@ -5128,7 +5143,7 @@ func _make_knowledge_card(kid: String, collected: bool) -> PanelContainer:
 		rim.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		var foil := ShaderMaterial.new()
 		foil.shader = preload("res://scripts/knowledge_foil.gdshader")
-		foil.set_shader_parameter("card_mask", PixelCardArt.PAPER)
+		foil.set_shader_parameter("card_mask", PixelCardArt.DIXINHU)
 		rim.material = foil
 		panel.add_child(rim)
 		rim.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -6534,7 +6549,7 @@ func _make_card(card: Dictionary, tier: String = "") -> Dictionary:
 	if not card["tiers"].has(use_tier):
 		use_tier = "effective"
 	var cost: int = GameState.tier_cost(str(card["id"]), use_tier)
-	PixelCardArt.add_face(panel, str(card["name"]), str(cost))
+	PixelCardArt.add_face(panel, str(card["name"]), str(cost), false, str(card["category"]))
 	# Preserve the existing price-state interface; this Label never draws the card text.
 	var cost_l := Label.new()
 	cost_l.name = "PriceState"
@@ -6596,7 +6611,7 @@ func _update_card_face(info: Dictionary) -> void:
 	var cost_l: Label = info["cost_label"]
 	cost_l.text = "%s%d" % [tag, cost]
 	var face: TextureRect = info["panel"].get_meta("pixel_face")
-	face.texture = PixelCardArt.texture(str(card["name"]), str(cost))
+	face.texture = PixelCardArt.texture(str(card["name"]), str(cost), str(card["category"]))
 	# 锁定的牌用更亮的金色，一眼看出「这张是按哪个档锁住的」
 	cost_l.add_theme_color_override("font_color",
 		Color("956523") if locked else Color("6f542a"))

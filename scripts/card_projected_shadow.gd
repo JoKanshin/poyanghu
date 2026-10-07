@@ -12,13 +12,18 @@ func update_projection(card: Control, tilt: Vector2) -> void:
 	# 接收平面始终位于倾斜卡片背后，不让角点穿过背景。
 	var receiver := 16.0 + extent.length() * 0.30
 	var perspective := 520.0 / (520.0 + receiver)
+	var inverse := get_global_transform().affine_inverse()
+	var cx := cos(tilt.x)
+	var sx := sin(tilt.x)
+	var cy := cos(tilt.y)
+	var sy := sin(tilt.y)
 	points.clear()
 	for uv in [Vector2.ZERO, Vector2(1, 0), Vector2.ONE, Vector2(0, 1)]:
 		var c: Vector2 = (transform * (card.size * uv) - center) * float(card.get_meta("poke_scale", 1.0))
-		var q := Vector3(c.x * cos(tilt.y), c.y, -c.x * sin(tilt.y))
-		var r := Vector3(q.x, q.y * cos(tilt.x) - q.z * sin(tilt.x), q.y * sin(tilt.x) + q.z * cos(tilt.x))
+		var q := Vector3(c.x * cy, c.y, -c.x * sy)
+		var r := Vector3(q.x, q.y * cx - q.z * sx, q.y * sx + q.z * cx)
 		var projected := (Vector2(r.x, r.y) + LIGHT_RAY * (receiver - r.z)) * perspective + center
-		points.append(get_global_transform().affine_inverse() * projected)
+		points.append(inverse * projected)
 	softness = clampf(receiver * 0.035, 2.0, 8.0) / maxf(transform.x.length(), 0.01)
 	queue_redraw()
 
