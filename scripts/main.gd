@@ -3791,10 +3791,7 @@ func _crisis_body_text(crisis: Dictionary, is_warning: bool) -> String:
 
 ## 解析危机 cond（如 "water_level < 45"）→ {metric, op, threshold}
 func _parse_cond(cond: String) -> Dictionary:
-	var parts := cond.strip_edges().split(" ")
-	if parts.size() >= 3:
-		return {"metric": parts[0], "op": parts[1], "threshold": int(parts[2])}
-	return {}
+	return GameState._parse_cond_simple(cond)
 
 
 ## 当前值是否真的落在危机条件那一侧（安全区不报警）
@@ -5355,6 +5352,16 @@ func _make_metric_row(metric: String) -> VBoxContainer:
 	bar.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	wrap.add_child(bar)
 
+	var band: ColorRect
+	var high_line: ColorRect
+	var reference_label: Label
+	if metric == "water_level":
+		band = ColorRect.new()
+		band.color = Color(0.55, 0.95, 0.70, 0.24)
+		band.anchor_bottom = 1.0
+		band.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		wrap.add_child(band)
+
 	# 阈值红线（像素竖线）：指标低于此线即判负；锚定在阈值比例处，随难度更新
 	var line := ColorRect.new()
 	line.color = Color(1.0, 0.2, 0.2, 0.95)
@@ -5366,10 +5373,23 @@ func _make_metric_row(metric: String) -> VBoxContainer:
 	line.anchor_bottom = 1.0
 	line.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	wrap.add_child(line)
+	if metric == "water_level":
+		line.color = Color("b6ebae")
+		high_line = ColorRect.new()
+		high_line.color = line.color
+		high_line.anchor_bottom = 1.0
+		high_line.offset_left = -1
+		high_line.offset_right = 1
+		high_line.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		wrap.add_child(high_line)
 
 	vb.add_child(wrap)
+	if metric == "water_level":
+		reference_label = _make_label("", 10, Color("b6ebae"))
+		vb.add_child(reference_label)
 
-	metric_bars[metric] = {"bar": bar, "val": val, "line": line, "row": vb, "icon": icon}
+	metric_bars[metric] = {"bar": bar, "val": val, "line": line, "row": vb, "icon": icon,
+		"band": band, "high_line": high_line, "reference_label": reference_label}
 	return vb
 
 
@@ -5378,6 +5398,24 @@ func _make_metric_row(metric: String) -> VBoxContainer:
 func _update_threshold_lines() -> void:
 	for metric in metric_bars:
 		var line: ColorRect = metric_bars[metric].get("line")
+		if metric == "water_level":
+			var rule: Dictionary = GameState.water_reference()
+			var pressure: Dictionary = GameState.water_pressure(int(GameState.metrics.get(metric, 50)))
+			var low_ratio: float = float(rule["low"]) / 100.0
+			var high_ratio: float = float(rule["high"]) / 100.0
+			line.anchor_left = low_ratio
+			line.anchor_right = low_ratio
+			var high: ColorRect = metric_bars[metric]["high_line"]
+			high.anchor_left = high_ratio
+			high.anchor_right = high_ratio
+			var band: ColorRect = metric_bars[metric]["band"]
+			band.anchor_left = low_ratio
+			band.anchor_right = high_ratio
+			var reference: Label = metric_bars[metric]["reference_label"]
+			var status: String = {"safe": "适宜", "low": "偏低", "high": "偏高"}[pressure["side"]]
+			reference.text = "%s参考 %d–%d · %s" % [GameState.SEASON_NAMES[GameState.current_season()], rule["low"], rule["high"], status]
+			reference.add_theme_color_override("font_color", Color("b6ebae") if pressure["side"] == "safe" else Color("ffcc66"))
+			continue
 		if line != null:
 			var ratio: float = GameState.failure_threshold_for(metric) / 100.0
 			line.anchor_left = ratio
@@ -5492,6 +5530,9 @@ func _fill_metric_tip(metric: String) -> void:
 	var p: Dictionary = GameState.metric_hover_preview(metric)
 	metric_tip_title.text = "%s   %d" % [str(GameState.METRIC_NAMES.get(metric, metric)), int(p["cur"])]
 	metric_tip_title.add_theme_color_override("font_color", METRIC_COLORS.get(metric, Color(0.92, 0.92, 0.92)))
+	if metric == "water_level":
+		_fill_water_metric_tip(p)
+		return
 
 	var cur: int = int(p["cur"])
 	var kind: String = str(p["kind"])
@@ -5515,7 +5556,7 @@ func _fill_metric_tip(metric: String) -> void:
 		dtxt = "%+d" % nat_min
 		dcol = "#ff8f7a"
 	var rows: Array = []
-	rows.append("[color=#cfd6dc]本回合自然演化[/color]   [color=%s][b]%s[/b][/color]" % [dcol, dtxt])
+	rows.append("[color=#cfd6dc]自然演化（含洪旱联动）[/color]   [color=%s][b]%s[/b][/color]" % [dcol, dtxt])
 	# 刻意不写「为什么」：水质怎么拖累植被、植被怎么影响候鸟这一类因果，是留给玩家自己悟的隐性参数。
 
 	# ② 回合末大概落到哪
@@ -5565,6 +5606,49 @@ func _fill_metric_tip(metric: String) -> void:
 		metric_tip_body.text = txt
 
 
+func _fill_water_metric_tip(p: Dictionary) -> void:
+	var rule: Dictionary = GameState.water_reference()
+	var drift: Array = GameState.water_drift_range()
+	var weather: Dictionary = GameState.year_hydrology()
+	var pressure: Dictionary = GameState.water_pressure(int(p["cur"]))
+	var season: String = GameState.current_season()
+	var rows: Array[String] = []
+	rows.append("[color=#b6ebae][b]%s·%s季参考 %d–%d[/b][/color]（含端点）" % [GameState.difficulty_name(), GameState.SEASON_NAMES[season], rule["low"], rule["high"]])
+	rows.append(str(rule["theme"]))
+	rows.append("本年水情：%s（自然涨落修正 %+d）" % [weather["name"], weather["shift"]])
+	rows.append("水位不直接判负；过低干旱，过高淹水。")
+	if pressure["side"] == "safe":
+		rows.append("[color=#7ee08a]当前在参考区间内[/color]")
+	else:
+		rows.append("[color=#ffcc66]当前%s %d 点 · 生态压力 ×%.2f[/color]" % ["偏低" if pressure["side"] == "low" else "偏高", pressure["deviation"], pressure["multiplier"]])
+	rows.append("自然涨落 [b]%+d ~ %+d[/b] → 回合末水位 [b]%d ~ %d[/b]" % [drift[0], drift[1], p["end_min"], p["end_max"]])
+	var losses: Array[String] = []
+	var outcomes: Array = GameState.natural_evolution_outcomes()
+	for metric in GameState.METRIC_NAMES:
+		var lo := 0
+		var hi := -100
+		for outcome in outcomes:
+			var d: int = int(outcome["pressure_losses"].get(metric, 0))
+			lo = mini(lo, d)
+			hi = maxi(hi, d)
+		if lo < 0:
+			losses.append("%s %s" % [GameState.METRIC_NAMES[metric], "%+d" % lo if lo == hi else "%+d ~ %+d" % [lo, hi]])
+	rows.append("[color=#ffb060]回合末洪旱额外损失（已含难度）：[/color]" if not losses.is_empty() else "[color=#7ee08a]预计回合末无洪旱额外损失[/color]")
+	for loss in losses: rows.append("  " + loss)
+	rows.append("[color=#8e9aa4]季内偏离平均计算：每 10 点 1 倍，上限 3 倍。[/color]")
+	rows.append("自然恢复可减轻损失，不能抹去本季已有压力。")
+	var next_season: String = GameState.SEASONS[(GameState.SEASONS.find(season) + 1) % 4]
+	var next_rule: Dictionary = GameState.water_reference(next_season)
+	if GameState.turn < GameState.TOTAL_TURNS:
+		rows.append("下季%s：参考 %d–%d，提前留出调度空间。" % [GameState.SEASON_NAMES[next_season], next_rule["low"], next_rule["high"]])
+	if int(p["crisis_delta"]) != 0:
+		rows.append("[color=#ffb060]预警：%s，下回合水位 %+d[/color]" % [p["crisis_name"], p["crisis_delta"]])
+	var txt := "\n".join(rows)
+	if txt != _tip_last_text:
+		_tip_last_text = txt
+		metric_tip_body.text = txt
+
+
 func _tip_delta_suffix(from_v: int, to_v: int) -> String:
 	var d: int = to_v - from_v
 	if d == 0:
@@ -5591,6 +5675,7 @@ func _place_metric_tip(mp: Vector2) -> void:
 
 
 func _update_hud() -> void:
+	_update_threshold_lines()
 	var m: Dictionary = GameState.metrics
 	# 算分动画期间**只**冻结指标条与数值 —— 这两样由动画逐项驱动，
 	# 若在这里一次性刷到终值，动画还没播就先跳完了。
@@ -5613,7 +5698,7 @@ func _update_hud() -> void:
 	# 免得界面自己再维护一份 %4 映射、跟机制层对不上。
 	var season: String = GameState.current_season()
 	season_label.text = "第 %d 年 · %s" % [year, GameState.SEASON_NAMES.get(season, "")]
-	season_tagline.text = str(GameState.SEASON_TAGLINE.get(season, ""))
+	season_tagline.text = str(GameState.SEASON_TAGLINE.get(season, "")) + "\n" + str(GameState.year_hydrology()["name"])
 	var season_index: int = GameState.SEASONS.find(season)
 	if season_index >= 0 and season_index != _season_dial_index:
 		_season_dial_index = season_index
@@ -6787,7 +6872,11 @@ func _finish_turn() -> void:
 			var eline := GameState.failure_threshold_for(em)
 			var eafter := clampi(ecur + ed, 0, 100)
 			var verdict := "[color=#7ee08a]仍在生态红线 %d 之上[/color]" % eline
-			if eafter < eline:
+			if em == "water_level":
+				var next_season: String = GameState.SEASONS[GameState.turn % 4]
+				var pressure: Dictionary = GameState.water_pressure(eafter, next_season)
+				verdict = "[color=#ffcc66]水位不直接判负；%s季参考 %d–%d，%s[/color]" % [GameState.SEASON_NAMES[next_season], pressure["low"], pressure["high"], {"safe": "区间内", "low": "注意干旱", "high": "注意淹水"}[pressure["side"]]]
+			elif eafter < eline:
 				verdict = "[color=#ff5a5a]会跌破生态红线 %d[/color]" % eline
 				fatal_names.append(str(GameState.METRIC_NAMES.get(em, em)))
 			lines.append("  %s %+d → 约 %d，%s" % [GameState.METRIC_NAMES.get(em, em), ed, eafter, verdict])

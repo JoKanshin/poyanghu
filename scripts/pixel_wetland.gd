@@ -383,7 +383,7 @@ func sync_state(state: Dictionary = {}, animate: bool = true, duration: float = 
 	season = int(state["season"])
 	if new_seed:
 		_reset_scenery()
-	sync_settlement_targets()
+	sync_community_targets()
 	if new_seed or not animate or reduced_motion or displayed_metrics.is_empty():
 		displayed_metrics = metrics.duplicate()
 		displayed_populations = populations.duplicate()
@@ -391,6 +391,8 @@ func sync_state(state: Dictionary = {}, animate: bool = true, duration: float = 
 		displayed_islands = float(islands)
 		transition_age = duration
 		transition_duration = duration
+		for i in house_progress.size():
+			house_progress[i] = 1.0 if i < house_target_count else 0.0
 	elif changed:
 		transition_from = {"metrics": displayed_metrics.duplicate(), "populations": displayed_populations.duplicate(),
 			"plants": displayed_plants.duplicate(), "islands": displayed_islands}
@@ -530,7 +532,7 @@ func _make_house_sites() -> void:
 				nearest = candidate
 		if nearest.x >= 0.0:
 			house_sites.append(nearest)
-	# Alternate sectors when settlement grows, so the first homes already
+	# Alternate sectors when community grows, so the first homes already
 	# form a visible ring instead of filling one side of the lake first.
 	var clockwise_sites := house_sites.duplicate()
 	house_sites.clear()
@@ -539,9 +541,12 @@ func _make_house_sites() -> void:
 			house_sites.append(clockwise_sites[index])
 	house_progress.resize(house_sites.size())
 
-func sync_settlement_targets() -> void:
-	# Preserve the old settlement-to-village rule; the extra art anchors stay reeds.
-	house_target_count = clampi(roundi(settlement / 100.0 * 7.0), 0, mini(7, house_sites.size()))
+func sync_community_targets() -> void:
+	# 社区指数决定可见村落规模，使用全部环湖位置；不再由围垦强度决定栋数。
+	house_target_count = _community_house_count()
+
+func _community_house_count() -> int:
+	return roundi(clampf(float(metrics.get("community", 0)), 0.0, 100.0) / 100.0 * house_sites.size())
 
 func _accept_habitat(kind: String, uv: Vector2) -> bool:
 	# Seeded placement uses the original geography, independent of the previous
@@ -582,7 +587,7 @@ func _reset_scenery() -> void:
 	visual_seed = GameState.run_seed
 	visual_rng.seed = int(GameState.run_seed) ^ 0x5EED5A7
 	for i in house_progress.size():
-		house_progress[i] = 1.0 if i < roundi(settlement / 100.0 * 7.0) else 0.0
+		house_progress[i] = 1.0 if i < _community_house_count() else 0.0
 	action_effects.clear()
 	plant_sites.clear()
 	for pid in GameState.PLANTS:
@@ -606,7 +611,24 @@ func _visible_trees() -> Array:
 	return sites.slice(0, count)
 
 func _bird_count(sid: String) -> int:
-	return mini(10, _visual_count("populations", sid, 10.0))
+	var count := _metric_bird_count(sid, metrics)
+	if transition_age < transition_duration and transition_from.has("metrics"):
+		count = maxi(count, _metric_bird_count(sid, transition_from["metrics"]))
+	return count
+
+## 候鸟总值映射到 0–50 只，轮流分配到五种鸟，避免逐物种取整放大误差。
+func _metric_bird_count(sid: String, values: Dictionary) -> int:
+	var species: Array = GameState.SPECIES.keys()
+	var index := species.find(sid)
+	if index < 0: return 0
+	var total := roundi(clampf(float(values.get("birds", 0)), 0.0, 100.0) / 100.0 * species.size() * 10)
+	return clampi(ceili(float(total - index) / species.size()), 0, 10)
+
+func _bird_visibility(sid: String, slot: int) -> float:
+	var target := 1.0 if slot < _metric_bird_count(sid, metrics) else 0.0
+	if transition_age >= transition_duration or not transition_from.has("metrics"): return target
+	var previous := 1.0 if slot < _metric_bird_count(sid, transition_from["metrics"]) else 0.0
+	return lerpf(previous, target, smoothstep(0.0, 1.0, transition_age / transition_duration))
 
 func _visual_count(bucket: String, key: String, divisor: float) -> int:
 	var target: Dictionary = metrics if bucket == "metrics" else (plants if bucket == "plants" else populations)
@@ -1124,7 +1146,7 @@ func _bird_frame_region(species: int, frame: int) -> Rect2:
 	return Rect2(Vector2(frame % 4, floori(float(frame) / 4.0)) * tile, tile)
 
 func _draw_bird_actor(c: Control, bird: Dictionary) -> void:
-	var visibility := _visual_weight("populations", str(bird["sid"]), int(bird["slot"]), 10.0)
+	var visibility := _bird_visibility(str(bird["sid"]), int(bird["slot"]))
 	if visibility <= 0.001: return
 	var sprite_index: int = SPECIES_ART.get(str(bird["sid"]), 0)
 	var state: int = bird["state"]

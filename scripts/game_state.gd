@@ -19,6 +19,84 @@ const SEASON_TAGLINE := {
 	"winter": "碟形湖登场，人鸟面对面",
 }
 
+# 0–100 水文指数，非实测米数。区间端点包含在内，各季重叠以留出调度空间。
+const WATER_SEASON_RULES := {
+	"spring": {"low": 48, "high": 62, "drift": [3, 6], "theme": "涨水育苗、鱼类繁殖",
+		"low_loss": {"vegetation": 2, "water_quality": 1, "fish": 2},
+		"high_loss": {"vegetation": 3, "fish": 1}},
+	"summer": {"low": 58, "high": 74, "drift": [5, 9], "theme": "丰水连通、预留防洪空间",
+		"low_loss": {"vegetation": 3, "water_quality": 2, "fish": 3},
+		"high_loss": {"vegetation": 3, "water_quality": 1, "community": 1}},
+	"autumn": {"low": 44, "high": 60, "drift": [-8, -4], "theme": "渐次退水、露滩备食",
+		"low_loss": {"vegetation": 2, "water_quality": 1, "fish": 2, "birds": 1},
+		"high_loss": {"vegetation": 2, "birds": 2}},
+	"winter": {"low": 36, "high": 50, "drift": [-6, -3], "theme": "保留浅水、守护越冬觅食地",
+		"low_loss": {"vegetation": 2, "water_quality": 1, "fish": 1, "birds": 2},
+		"high_loss": {"vegetation": 2, "birds": 3}},
+}
+const WATER_PRESSURE_SPAN := 10.0
+const WATER_PRESSURE_CAP := 3.0
+const HYDRO_YEAR_SHIFT := 1
+# 高难度收窄管理窗口；洪旱损失仍独立按难度倍率计算。
+const WATER_RANGE_INSET := [0, 0, 1, 2]
+
+## 年内来水偏差保持四季连续，独立随机流；可从种子重建，预览/读档不掷新天气。
+func year_hydrology(at_turn: int = -1) -> Dictionary:
+	var t: int = turn if at_turn < 0 else at_turn
+	var year: int = int((maxi(1, t) - 1) / 4) + 1
+	var weather_rng := RandomNumberGenerator.new()
+	weather_rng.seed = run_seed + year * 104729 + 0x57415445
+	var roll := weather_rng.randi_range(0, 99)
+	var shift := -HYDRO_YEAR_SHIFT if roll < 30 else (HYDRO_YEAR_SHIFT if roll >= 70 else 0)
+	return {"year": year, "shift": shift, "name": "偏旱年" if shift < 0 else ("偏湿年" if shift > 0 else "平水年")}
+
+func water_drift_range(season: String = "", at_turn: int = -1) -> Array:
+	var base: Array = water_reference(season)["drift"]
+	var shift: int = int(year_hydrology(at_turn)["shift"])
+	return [int(base[0]) + shift, int(base[1]) + shift]
+
+func water_reference(season: String = "") -> Dictionary:
+	var rule: Dictionary = WATER_SEASON_RULES.get(current_season() if season.is_empty() else season, WATER_SEASON_RULES["spring"]).duplicate(true)
+	var inset: int = WATER_RANGE_INSET[difficulty]
+	rule["low"] = int(rule["low"]) + inset
+	rule["high"] = int(rule["high"]) - inset
+	return rule
+
+## 每偏离 10 点为 1 倍，连续增加，最多 3 倍；难度只放大生态损失，不放大退水。
+func water_pressure(level: int, season: String = "") -> Dictionary:
+	var rule := water_reference(season)
+	var low: int = int(rule["low"])
+	var high: int = int(rule["high"])
+	var side := "low" if level < low else ("high" if level > high else "safe")
+	var deviation: int = maxi(low - level, level - high) if side != "safe" else 0
+	var multiplier: float = minf(WATER_PRESSURE_CAP, deviation / WATER_PRESSURE_SPAN)
+	var effects: Dictionary = {}
+	if side != "safe":
+		for metric in rule[side + "_loss"]:
+			var loss: int = roundi(float(rule[side + "_loss"][metric]) * multiplier * float(PENALTY_MULT[difficulty]))
+			# 刚越界时至少损失 1 点植被；其他影响按整数精度渐次出现。
+			if metric == "vegetation": loss = maxi(1, loss)
+			if loss > 0: effects[metric] = -loss
+	return {"low": low, "high": high, "side": side, "deviation": deviation,
+		"multiplier": multiplier, "effects": effects}
+
+## 洪旱损害取行动后与自然涨落后两端的平均暴露；自然恢复减轻压力，不能追溯抹去损害。
+func water_turn_pressure(before: int, after: int, season: String = "") -> Dictionary:
+	var start := water_pressure(before, season)
+	var finish := water_pressure(after, season)
+	var rule := water_reference(season)
+	var low_mult: float = ((float(start["multiplier"]) if start["side"] == "low" else 0.0) + (float(finish["multiplier"]) if finish["side"] == "low" else 0.0)) * 0.5
+	var high_mult: float = ((float(start["multiplier"]) if start["side"] == "high" else 0.0) + (float(finish["multiplier"]) if finish["side"] == "high" else 0.0)) * 0.5
+	var effects: Dictionary = {}
+	for metric in METRIC_NAMES:
+		var base_loss: float = float(rule["low_loss"].get(metric, 0)) * low_mult + float(rule["high_loss"].get(metric, 0)) * high_mult
+		var loss: int = roundi(base_loss * float(PENALTY_MULT[difficulty]))
+		if metric == "vegetation" and low_mult + high_mult > 0.0: loss = maxi(1, loss)
+		if loss > 0: effects[metric] = -loss
+	return {"low": rule["low"], "high": rule["high"], "effects": effects,
+		"side": "low" if low_mult > high_mult else ("high" if high_mult > 0.0 else "safe"),
+		"multiplier": low_mult + high_mult, "before": before, "after": after}
+
 # ==================== 紧急调度 / 刷新手牌 ====================
 # 紧急调度：花固定一笔钱，直接从**当季卡池**里点名一张牌当场使用 ——
 # 解决「眼看着要崩、手上偏偏没有那张救命的牌」。定位是容错阀而不是主力：
@@ -53,15 +131,7 @@ enum Difficulty { EASY, NORMAL, HARD, NIGHTMARE }
 const FAILURE_THRESHOLD := { Difficulty.EASY: 20, Difficulty.NORMAL: 30, Difficulty.HARD: 40, Difficulty.NIGHTMARE: 45 }   # 判负阈值
 const PENALTY_MULT := { Difficulty.EASY: 1.0, Difficulty.NORMAL: 1.5, Difficulty.HARD: 2.0, Difficulty.NIGHTMARE: 2.0 }     # 扣分惩罚倍率
 
-# 困难档「常规随机扣分」的下限额外抬这么多点，**在难度负向倍率之后**生效。
-# 目的：削弱「随机到最坏值 + 指标恰好贴线 = 暴毙」的挫败感。
-#
-# ⚠ 为什么不直接改原始下界（-5 → -4）：
-#   那样会被困难档的 ×2.0 放大成 +2（-10 → -8），而且会让困难档的最坏水位
-#   波动**和普通档一样都是 -8**，把两档的区别一并削掉。
-#   在倍率之后再抬 1 才是字面意义上的「上调一分」——
-#   困难档最坏 -9 仍然比普通档的 -8 更凶，难度梯度保住。
-const HARD_ROUTINE_FLOOR_BONUS := 1
+# 0.1.3：水位退出致死判定；难度倍率只放大生态损失，水文涨落不放大。
 const FUNDING_PENALTY := { Difficulty.EASY: 0, Difficulty.NORMAL: 20, Difficulty.HARD: 35, Difficulty.NIGHTMARE: 35 }       # 每回合拨款削减（万）
 
 # ==================== 指标 → 每回合拨款（2026-09-28 第二条玩测反馈）====================
@@ -108,18 +178,16 @@ func difficulty_name() -> String:
 #   水质 无监测每回合 -2~-4、开局离致死线只有 9.3；社区信任 平时不衰减、缓冲 19.4。
 # 共用一条线时死因会高度集中（简单档 89% 死在水质+植被，社区信任只占 1%）。
 # 2026-09-28 起**已启用**（按玩测可再调；调完重跑 版本更新0.0.3.md 第五节的验证）：
-#   "water_level":     -3,   # 单回合波动最大（困难档 -10..+3），线略往下挪
 #   "water_quality":   -5,   # 无条件衰减 + 缓冲最小，最宽容，避免「忘监测就必死」
 #   "vegetation":      +3,   # 候鸟与鱼类的上游，略严
 #   "fish":            -5,   # 同样无条件衰减（无巡护 -1~-2/回合）
 #   "birds":            0,   # 恢复最慢、条件触发，维持原线
 #   "community":      +10,   # 平时不衰减（缓冲 19.4），抬线让「牺牲社区」真的会输
-# 生效后的六条致死线（顺序：水位/水质/植被/鱼类/候鸟/社区）：
-#   简单 17/15/23/15/20/30
-#   普通 27/25/28/25/30/40   ← 植被 33→28，见下面的 FAILURE_THRESHOLD_EXTRA
-#   困难 37/35/38/35/40/50   ← 植被 43→38
-# 想整体关掉、回到「六项共用一条难度线」→ 把下面改回 {}
-const FAILURE_THRESHOLD_OFFSET := {"water_level": -3, "water_quality": -5, "vegetation": 3, "fish": -5, "birds": 0, "community": 10}
+# 生效后的五条致死线（顺序：水质/植被/鱼类/候鸟/社区；水位无致死线）：
+#   简单 15/23/15/20/30
+#   普通 25/28/25/30/40
+#   困难 35/38/35/40/50
+const FAILURE_THRESHOLD_OFFSET := {"water_quality": -5, "vegetation": 3, "fish": -5, "birds": 0, "community": 10}
 
 # 在 FAILURE_THRESHOLD_OFFSET 之上、**只对特定难度**再叠加的调整。
 # 用来做「普通/困难太严、简单档不动」这类微调 —— 直接改 FAILURE_THRESHOLD_OFFSET
@@ -157,7 +225,7 @@ const TIER_COST_MULT := {"basic": 0.5, "effective": 1.0, "deep": 2.0}
 const TIER_NAMES := {"basic": "基础投入", "effective": "有效投入", "deep": "深度投入"}
 
 # ==================== 物种数据 ====================
-# 每个物种有生态角色；数量受相关指标与行动联动。地图上按数量显示会动的个体。
+# 每个物种有生态角色；物种指数受相关指标与行动联动。沙盘鸟类总数由候鸟总值决定。
 const SPECIES := {
 	"baihe": {
 		"name": "白鹤", "color": Color(0.97, 0.97, 0.95),
@@ -484,6 +552,18 @@ const ACTION_CARDS := [
 			"deep":      {"effects": [{"metric": "water_level", "delta": 15, "delay": 0}, {"metric": "water_quality", "delta": 5, "delay": 0}, {"metric": "community", "delta": -2, "delay": 0}]},
 		},
 		"side_note": {"deep": "调水涉及上下游利益，社区信任 -2"},
+	},
+	{
+		"id": "flood_release", "name": "分洪退水调度", "category": "manage",
+		"season": "all", "tags": ["洪水调度"],
+		"desc": "协调闸坝泄水与分洪通道，降低过高水位，让淹没的草场和浅滩重新露出。四季可用，低水位时慎用。",
+		"cost": 30,
+		"tiers": {
+			"basic": {"effects": [{"metric": "water_level", "delta": -6, "delay": 0}, {"metric": "community", "delta": -1, "delay": 0}]},
+			"effective": {"effects": [{"metric": "water_level", "delta": -12, "delay": 0}, {"metric": "community", "delta": -2, "delay": 0}]},
+			"deep": {"effects": [{"metric": "water_level", "delta": -20, "delay": 0}, {"metric": "community", "delta": -3, "delay": 0}]},
+		},
+		"side_note": {"deep": "集中分洪占用沿岸作业空间，社区信任 -3；退水过度会加重干旱"},
 	},
 	{
 		"id": "wetland_restore", "name": "退田还湿（湿地生态修复）", "category": "ecology",
@@ -1281,7 +1361,7 @@ const CRISIS_BREATH_TURNS := 1
 const DEEP_WARN_RESEARCH := 8
 const CRISES := [
 	{
-		"id": "drought", "name": "极端干旱", "weight": 1.0, "cond": "water_level < 45",
+		"id": "drought", "name": "极端干旱", "weight": 1.0, "cond": "water_level < seasonal_low",
 		"cooldown": 5,   # 重事件：掉 14 水位，两次之间至少隔 5 回合
 		"needs": ["补水调度"],
 		"warn": "【自然预警】气象部门预报：未来一季降水显著偏少，湖区面临枯水风险。",
@@ -1313,9 +1393,9 @@ const CRISES := [
 		"effects": [{"metric": "community", "delta": -7}, {"metric": "birds", "delta": -6}],
 	},
 	{
-		"id": "flood", "name": "汛期洪水", "weight": 0.8, "cond": "water_level > 60",
+		"id": "flood", "name": "汛期洪水", "weight": 0.8, "cond": "water_level > seasonal_high",
 		"cooldown": 6,   # 大戏一场就够：季节性洪水，一局最多两三次
-		"needs": ["生态修复", "栖息地营造"],
+		"needs": ["生态修复", "栖息地营造", "洪水调度"],
 		"warn": "【自然预警】上游持续降雨，水文站预计湖区水位将快速上涨。",
 		"hit": "【危机爆发】汛期洪水漫过草洲——新生沉水植被被冲毁，底质遭到破坏。",
 		"effects": [{"metric": "water_level", "delta": 18}, {"metric": "vegetation", "delta": -10}],
@@ -1714,6 +1794,7 @@ func _guard_starting_metrics() -> void:
 	if difficulty == Difficulty.NIGHTMARE:
 		return
 	for m in metrics.keys():
+		if m == "water_level": continue
 		var safe: int = failure_threshold_for(str(m)) + 2
 		if int(metrics[m]) < safe:
 			metrics[m] = safe
@@ -1736,7 +1817,7 @@ func _species_target(sid: String) -> int:
 	var drivers: Array = SPECIES[sid]["drivers"]
 	var sum := 0
 	for d in drivers:
-		sum += metrics[d]
+		sum += _water_habitat_score() if d == "water_level" else int(metrics[d])
 	return int(sum / drivers.size())
 
 
@@ -1745,8 +1826,11 @@ func _plant_target(pid: String) -> int:
 	var drivers: Array = PLANTS[pid]["drivers"]
 	var sum := 0
 	for d in drivers:
-		sum += metrics[d]
+		sum += _water_habitat_score() if d == "water_level" else int(metrics[d])
 	return int(sum / drivers.size())
+
+func _water_habitat_score() -> int:
+	return clampi(100 - int(water_pressure(int(metrics.get("water_level", 50)))["deviation"]) * 3, 0, 100)
 
 
 ## 本回合由六项指标换来的额外拨款（万）。FUNDING_STEPS 的求值器。
@@ -1991,6 +2075,7 @@ func _mark_warning_hit(id: String, hit_turn: int) -> void:
 
 ## 从 cond 字符串里取出 {metric, op, threshold}（预警历史要记下当时的数值）
 func _parse_cond_simple(cond: String) -> Dictionary:
+	cond = _seasonal_water_condition(cond)
 	var m := RegEx.new()
 	m.compile("(\\w+)\\s*(<=|>=|<|>|==)\\s*(-?\\d+)")
 	var res := m.search(cond)
@@ -2005,6 +2090,7 @@ func _parse_cond_simple(cond: String) -> Dictionary:
 ## 单独看社区低就报警会冤枉玩家（鱼还多的时候，候鸟不会大规模进田）。
 ## 注意：单条件的老写法（如 "turn == 1"、"vegetation < 45"）走的是同一条路，行为与改动前一致。
 func _eval_condition_simple(cond: String) -> bool:
+	cond = _seasonal_water_condition(cond)
 	var m := RegEx.new()
 	m.compile("(\\w+)\\s*(<=|>=|<|>|==)\\s*(-?\\d+)")
 	var all := m.search_all(cond)
@@ -2027,6 +2113,11 @@ func _eval_condition_simple(cond: String) -> bool:
 			return false
 	return true
 	return false
+
+
+func _seasonal_water_condition(cond: String) -> String:
+	var rule := water_reference()
+	return cond.replace("seasonal_low", str(rule["low"])).replace("seasonal_high", str(rule["high"]))
 
 
 ## 某张卡某档位的成本（万，取整）
@@ -2206,8 +2297,11 @@ func _card_weight(card: Dictionary, wanted: Dictionary, rescue: Dictionary) -> f
 func _rescue_metric_set() -> Dictionary:
 	var out: Dictionary = {}
 	for m in metrics:
+		if m == "water_level": continue
 		if int(metrics[m]) < failure_threshold_for(m) + RESCUE_MARGIN:
 			out[m] = true
+	var pressure := water_pressure(int(metrics.get("water_level", 50)))
+	if pressure["side"] != "safe": out["water_level"] = pressure["side"]
 	return out
 
 
@@ -2215,6 +2309,10 @@ func _rescue_metric_set() -> Dictionary:
 func _card_helps_any(card: Dictionary, needed: Dictionary) -> bool:
 	for tier in card.get("tiers", {}).values():
 		for e in tier.get("effects", []):
+			if e["metric"] == "water_level" and needed.has("water_level"):
+				if (needed["water_level"] == "high" and int(e["delta"]) < 0) or (needed["water_level"] == "low" and int(e["delta"]) > 0):
+					return true
+				continue
 			if int(e["delta"]) > 0 and needed.has(str(e["metric"])):
 				return true
 	return false
@@ -2308,7 +2406,7 @@ func execute_action(card_id: String, tier: String, free: bool = false) -> bool:
 			# 所以小票的四类来源求和完全不受影响。
 			if metrics.has(e["metric"]):
 				var preview: int = int(e["delta"])
-				if preview < 0:
+				if preview < 0 and e["metric"] != "water_level":
 					preview = _scaled_delta(preview)   # 与到期时 _apply_delta 的口径保持一致
 				score_ledger.append({
 					"phase": "card_delayed", "label": str(card["name"]),
@@ -2354,13 +2452,11 @@ func execute_action(card_id: String, tier: String, free: bool = false) -> bool:
 ##   所以提示里写的数字和实际结算的数字同源，不会各写一套。
 func natural_evolution() -> void:
 	for e in natural_evolution_plan():
-		# ⚠ 自己算好最终值、传 apply_penalty=false，**不要**再让 _apply_delta 乘一次倍率：
-		#   困难档的随机下限是在倍率**之后**抬的（见 natural_evolution_plan），
-		#   交给 _apply_delta 缩放会把那个 +1 抹掉（而且会双重放大）。
-		#   min/max 夹取对其它条目是恒等操作 —— 它们的 delta 本来就落在自己的区间里 ——
-		#   所以简单/普通档与改动前逐字一致。
-		var d: int = clampi(_scaled_delta(int(e["delta"])), int(e["min"]), int(e["max"]))
+		# 统一换算实际变动；水位与洪旱已给最终值，其余负向演化只缩放一次。
+		var d: int = _evolution_delta(e)
 		_apply_delta(str(e["metric"]), d, false, "routine", str(e["why"]))
+		if e.get("hydrology", false) and d != 0:
+			_add_log("%s：%s %+d" % [e["why"], METRIC_NAMES[e["metric"]], d])
 	_sync_species()
 	_sync_plants()
 	metrics_changed.emit()
@@ -2372,46 +2468,45 @@ func natural_evolution() -> void:
 ##   min/max = 叠加难度负向倍率后，玩家真正会看到的区间
 ##   kind    = random / loss / gain / none
 ## roll_random=false 时不去动水位那次随机（HUD 每帧查它，绝不能扰动全局随机序列）
-func natural_evolution_plan(roll_random: bool = true) -> Array:
+func natural_evolution_plan(roll_random: bool = true, water_delta_override: int = 999) -> Array:
 	var sim: Dictionary = metrics.duplicate()   # 推演副本：后一步的条件要看前几步之后的值（与原执行顺序一致）
 	var out: Array = []
 
 	# 1) 水位按**季节节律**变化 —— 贴鄱阳湖的水文现实：春涨水、夏高水、秋落水、冬枯水。
-	#    区间写的是**原始值**，负向部分照旧吃难度倍率（与其它条目同一口径）；
-	#    min 是「吃完倍率后玩家真正会看到的最坏值」，困难档再抬 HARD_ROUTINE_FLOOR_BONUS 点减少暴毙。
+	#    水位涨落独立于难度；难度放大的是下面的生态压力。
 	#    ⚠ 区间内的随机是保留的：节律决定「往哪个方向走」，具体走几步仍不确定，
 	#      否则每局的水位曲线会一模一样，肉鸽性就没了。
 	var season := current_season()
-	var wl_raw_lo: int = 1
-	var wl_raw_hi: int = 3
+	var rule := water_reference(season)
+	var drift := water_drift_range(season)
+	var wl_raw_lo: int = int(drift[0])
+	var wl_raw_hi: int = int(drift[1])
 	var wl_why: String = "春季涨水（五河来水，水位小幅回升）"
 	match season:
 		"summer":
-			wl_raw_lo = 2
-			wl_raw_hi = 5
 			wl_why = "夏季高水（长江汛期，水位大幅上涨、易漫滩）"
 		"autumn":
-			wl_raw_lo = -4
-			wl_raw_hi = -2
 			wl_why = "秋季落水（水位回落，洲滩渐次露出）"
 		"winter":
-			wl_raw_lo = -5
-			wl_raw_hi = -3
 			wl_why = "冬季枯水（全年最低，碟形湖脱离主湖）"
-	var wl_lo: int = _scaled_delta(wl_raw_lo)
-	var wl_hi: int = _scaled_delta(wl_raw_hi)
-	# ⚠ 只有在「枯水季」（下限为负）才抬下限：这条本来是为了减少困难档的暴毙，
-	#   而春季/夏季是正区间，若不设守卫会把春季的最低下限从 +1 抬到 +2，白白窄化区间。
-	if difficulty == Difficulty.HARD and wl_lo < 0:
-		wl_lo += HARD_ROUTINE_FLOOR_BONUS
-	var wl: int = _randi_range(wl_raw_lo, wl_raw_hi) if roll_random else 0
+	var wl: int = _randi_range(wl_raw_lo, wl_raw_hi) if roll_random else roundi((wl_raw_lo + wl_raw_hi) / 2.0)
+	if water_delta_override != 999: wl = clampi(water_delta_override, wl_raw_lo, wl_raw_hi)
 	out.append({"metric": "water_level", "delta": wl,
-		"min": wl_lo, "max": wl_hi, "kind": "random",
+		"applied_delta": wl, "min": wl_raw_lo, "max": wl_raw_hi, "kind": "random",
 		"why": wl_why})
-	# 推演用的也按同一个下限夹一次，否则「小窗显示的范围」与「后几步的条件判断」
-	# 会以没抬过下限的值来推，跟实际结算对不上。
-	var wl_applied: int = clampi(_scaled_delta(wl), wl_lo, wl_hi)
-	sim["water_level"] = clampi(int(sim.get("water_level", 0)) + wl_applied, 0, 100)
+	var water_before: int = int(sim.get("water_level", 0))
+	sim["water_level"] = clampi(water_before + wl, 0, 100)
+
+	# 水位本身不致死；按整季暴露结算一次，再让水质→植被→候鸟继续联动。
+	var pressure := water_turn_pressure(water_before, int(sim["water_level"]))
+	for metric in pressure["effects"]:
+		var loss: int = int(pressure["effects"][metric])
+		var why := "%s季%s：行动后水位 %d → 自然变化后 %d，参考 %d–%d，季内暴露 ×%.2f" % [
+			SEASON_NAMES[season], "干旱压力" if pressure["side"] == "low" else "淹水压力",
+			water_before, sim["water_level"], pressure["low"], pressure["high"], pressure["multiplier"]]
+		out.append({"metric": metric, "delta": loss, "applied_delta": loss,
+			"min": loss, "max": loss, "kind": "loss", "why": why, "hydrology": true})
+		sim[metric] = clampi(int(sim.get(metric, 0)) + loss, 0, 100)
 
 	# 2) 水质：无治理则缓慢恶化
 	if used_action_ids.has("water_monitor") or used_action_ids.has("research") or used_action_ids.has("smart_patrol"):
@@ -2478,24 +2573,41 @@ func _scaled_delta(delta: int) -> int:
 		return roundi(delta * PENALTY_MULT[difficulty])
 	return delta
 
+func _evolution_delta(e: Dictionary) -> int:
+	if e.has("applied_delta"): return int(e["applied_delta"])
+	return clampi(_scaled_delta(int(e["delta"])), int(e["min"]), int(e["max"]))
+
+## 枚举全部水文随机值，逐条夹取，保留水质/植被门槛联动，悬停推演不消耗随机数。
+func natural_evolution_outcomes() -> Array:
+	var drift: Array = water_drift_range()
+	var outcomes: Array = []
+	for wl in range(int(drift[0]), int(drift[1]) + 1):
+		var snapshot: Dictionary = metrics.duplicate()
+		var pressure_losses: Dictionary = {}
+		for e in natural_evolution_plan(false, wl):
+			var metric: String = str(e["metric"])
+			var d := _evolution_delta(e)
+			snapshot[metric] = clampi(int(snapshot.get(metric, 0)) + d, 0, 100)
+			if e.get("hydrology", false): pressure_losses[metric] = d
+		outcomes.append({"metrics": snapshot, "pressure_losses": pressure_losses})
+	return outcomes
+
 
 ## ── HUD 悬停提示用：某一项指标「本回合会掉多少 / 红线在哪」──
 ## 只读，不改状态。数据来源：natural_evolution_plan()（回合末自然演化）+ pending_crisis（下回合结算时爆发的危机）
-## ⚠ why 字段只留给代码与文档：指标之间的因果链是**隐性参数**，不上屏，
-##   玩家应该自己从数字里总结。界面层只取数字，别把它渲染出来。
+## 枚举水位随机值，汇总同一指标的全部变动，包含越界压力及后续生态联动。
 func metric_hover_preview(metric: String) -> Dictionary:
 	var cur: int = int(metrics.get(metric, 0))
 	var line: int = failure_threshold_for(metric)
 
-	var info: Dictionary = {}
-	for e in natural_evolution_plan(false):
-		if str(e["metric"]) == metric:
-			info = e
-			break
-	var nat_min: int = int(info.get("min", 0))
-	var nat_max: int = int(info.get("max", 0))
-	var end_min: int = clampi(cur + nat_min, 0, 100)
-	var end_max: int = clampi(cur + nat_max, 0, 100)
+	var end_min := 100
+	var end_max := 0
+	for outcome in natural_evolution_outcomes():
+		var value: int = int(outcome["metrics"].get(metric, cur))
+		end_min = mini(end_min, value)
+		end_max = maxi(end_max, value)
+	var nat_min: int = end_min - cur
+	var nat_max: int = end_max - cur
 
 	# 已预警、下回合结算时才爆发的危机：只看它有没有打到这一项（危机伤害不吃难度负向倍率）
 	var crisis_name := ""
@@ -2510,13 +2622,13 @@ func metric_hover_preview(metric: String) -> Dictionary:
 	var worst: int = clampi(end_min + crisis_delta, 0, 100)
 	return {
 		"metric": metric, "cur": cur, "line": line,
-		"kind": str(info.get("kind", "none")), "why": str(info.get("why", "")),
+		"kind": "random" if end_min != end_max else ("loss" if nat_min < 0 else ("gain" if nat_min > 0 else "none")),
 		"nat_min": nat_min, "nat_max": nat_max,
 		"end_min": end_min, "end_max": end_max,
 		"crisis_name": crisis_name, "crisis_delta": crisis_delta, "worst": worst,
 		"margin_nat": end_min - line,      # 只算自然演化时的余量（取最坏的一头）
-		"break_nat": end_min < line,       # 光自然演化就会跌破生态红线
-		"break_total": worst < line,       # 把下回合那场危机一起算上
+		"break_nat": metric != "water_level" and end_min < line,
+		"break_total": metric != "water_level" and worst < line,
 		"penalty_mult": PENALTY_MULT[difficulty],
 	}
 
@@ -2636,6 +2748,8 @@ func failure_threshold() -> int:
 ## 某一项指标的判负阈值 = 难度线 + 该项偏移 + 该难度下的额外调整
 ## （两张表里都没写就是难度线本身）
 func failure_threshold_for(metric: String) -> int:
+	# -1 表示没有致死线；所有难度（包括噩梦）都按季节生态影响处理水位。
+	if metric == "water_level": return -1
 	# ⚠ 噩梦档**不叠任何偏移**：995f784 那版就是六项共用一条线，
 	#   "每指标单独红线"是后来才加的。照搬偏移会把噩梦档悄悄变简单
 	#   （社区 +10 会把它的线从 45 抬到 55，等于开局凭空多出 7 点余量）。
@@ -2651,6 +2765,7 @@ func _check_failure() -> bool:
 	if game_over:
 		return is_failure   # 已经判负，不重复判、不重复发信号
 	for metric in metrics:
+		if metric == "water_level": continue
 		var threshold: int = failure_threshold_for(metric)
 		if metrics[metric] < threshold:
 			is_failure = true
@@ -2673,6 +2788,7 @@ func check_failure_now() -> bool:
 func metrics_below_threshold() -> Array:
 	var out: Array = []
 	for metric in metrics:
+		if metric == "water_level": continue
 		var threshold: int = failure_threshold_for(metric)
 		if metrics[metric] < threshold:
 			out.append({"metric": metric, "value": metrics[metric]})
@@ -2845,7 +2961,7 @@ func _apply_delta(metric: String, delta: int, apply_penalty: bool = true,
 	# ⚠ 危机伤害**不吃**这个倍率：危机数值（-14 之类）本身就是设计好的惩罚，
 	#   再乘 1.5 / 2.0 会让困难档"任何一次危机都是一击必杀"——对策卡给的是正向数值
 	#   （正向不乘倍率），+8 永远追不上 -28，"预警 → 对策卡 → 应对"的核心循环就废了。
-	if delta < 0 and apply_penalty:
+	if delta < 0 and apply_penalty and metric != "water_level":
 		delta = _scaled_delta(delta)
 	var before: int = metrics[metric]
 	var after: int = clampi(before + delta, 0, 100)
