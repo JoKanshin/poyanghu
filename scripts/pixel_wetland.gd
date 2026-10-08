@@ -1,4 +1,7 @@
 extends Control
+
+const Motion = preload("res://scripts/motion.gd")
+const MotionWeb = preload("res://scripts/motion_web.gd")
 const VisualTheme := preload("res://scripts/visual_theme.gd")
 ## Orthographic 45-degree wetland view, with upright scenery and wildlife.
 ## All decorative placement is deterministic; never consume gameplay RNG.
@@ -168,6 +171,10 @@ var easter_rng := RandomNumberGenerator.new()
 var visual_seed := -1
 var plant_sites: Dictionary = {}
 var bird_agents: Array[Dictionary] = []
+const MAX_INTERESTS := 4
+var interests: Array[Dictionary] = []
+var interest_cooldown := 0.0
+var interest_captures := 0
 var house_sites: Array[Vector2] = []
 var house_progress: Array[float] = []
 var house_target_count := 0
@@ -399,8 +406,7 @@ func set_menu_camera(far: bool, menu_zoom: float = 1.3) -> void:
 		_set_camera_zoom(target)
 		return
 	# Retarget from the current pose, including interrupted transitions.
-	camera_tween = create_tween()
-	camera_tween.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+	camera_tween = Motion.tween(self, "camera", "camera")
 	camera_tween.tween_method(_set_camera_zoom, camera_zoom_factor, menu_zoom if far else GAME_CAMERA_ZOOM, 1.2 if far else 0.8)
 
 func _set_camera_zoom(value: float) -> void:
@@ -413,8 +419,7 @@ func set_hand_view(focus_fraction: float, zoom_multiplier: float, animate: bool 
 	if not animate or reduced_motion:
 		_set_hand_view_state(target)
 		return
-	hand_view_tween = create_tween()
-	hand_view_tween.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+	hand_view_tween = Motion.tween(self, "focus", "hand_focus")
 	hand_view_tween.tween_method(_set_hand_view_state, hand_view_state, target, 0.28)
 
 func _set_hand_view_state(value: Vector2) -> void:
@@ -535,11 +540,79 @@ func _process(delta: float) -> void:
 		if action_effects[i]["age"] >= action_effects[i]["duration"]: action_effects.remove_at(i)
 	if not reduced_motion:
 		elapsed += delta
+		interest_cooldown = maxf(0.0, interest_cooldown - delta)
+		for interest in interests: interest.age += delta
 		_process_birds(delta)
+		for i in range(interests.size() - 1, -1, -1):
+			if interests[i].age >= 4.0 or interests[i].caught: interests.remove_at(i)
+	else:
+		interests.clear()
 	for i in house_progress.size():
 		var target := 1.0 if i < house_target_count else 0.0
 		house_progress[i] = target if reduced_motion else move_toward(house_progress[i], target, delta * (1.8 if target > house_progress[i] else 2.2))
 	_redraw_scenery()
+
+## Actual lake gestures drive scenery, never gameplay funds/populations/RNG.
+func _input(event: InputEvent) -> void:
+	if reduced_motion or not is_processing() or MotionWeb.paused(self): return
+	var clicked: bool = event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT
+	var swept: bool = event is InputEventMouseMotion and event.relative.length() >= 12.0
+	if not clicked and not swept: return
+	var host := get_tree().get_first_node_in_group("motion_host")
+	if host:
+		if host._intro_playing or host._deck_open or host.knowledge_viewer.visible or host.popup_root.visible or host.crisis_root.visible: return
+		if host.menu_root.visible and not host.menu_col.visible: return
+	var hovered := get_viewport().gui_get_hovered_control()
+	while hovered:
+		if hovered is Button or hovered is PanelContainer or hovered is ScrollContainer or hovered is LineEdit: return
+		hovered = hovered.get_parent_control()
+	var local: Vector2 = get_global_transform().affine_inverse() * event.position
+	if not Rect2(Vector2.ZERO, size).has_point(local): return
+	var uv := _screen_projection.affine_inverse() * local
+	_emit_interest(uv)
+
+func _emit_interest(uv: Vector2) -> bool:
+	if reduced_motion or interest_cooldown > 0.0 or interests.size() >= MAX_INTERESTS: return false
+	if not Rect2(Vector2.ZERO, Vector2.ONE).has_point(uv) or not _is_water(uv): return false
+	interests.append({"pos": uv, "age": 0.0, "caught": false})
+	interest_cooldown = 0.8
+	return true
+
+## ink-crowd / lyre-crows: acceleration-limited response with a finite consequence.
+func _follow_interest(bird: Dictionary, delta: float) -> bool:
+	var pos: Vector2 = bird.pos
+	var selected: Dictionary = {}
+	var best := 0.12 * 0.12
+	if int(bird.state) not in [3, 4, 5]:
+		for interest in interests:
+			var gap := pos.distance_squared_to(interest.pos)
+			if not interest.caught and gap < best and _is_water((pos + interest.pos) * 0.5):
+				selected = interest
+				best = gap
+	if selected.is_empty():
+		bird["motion_hunting"] = false
+		bird["motion_velocity"] = Vector2.ZERO
+		return false
+	bird["motion_hunting"] = true
+	if best < 0.006 * 0.006:
+		selected.caught = true
+		interest_captures += 1
+		bird.state = 1
+		bird.timer = 0.8
+		bird["motion_response_age"] = 0.0
+		bird["motion_velocity"] = Vector2.ZERO
+		return true
+	var velocity := MotionWeb.steer(bird.get("motion_velocity", Vector2.ZERO), selected.pos - pos, delta, 0.035, 0.12)
+	var next := pos + velocity * delta
+	if not _is_water(next) or not _is_water((pos + next) * 0.5):
+		bird["motion_velocity"] = Vector2.ZERO
+		bird["motion_hunting"] = false
+		return false
+	bird["motion_velocity"] = velocity
+	bird.pos = next
+	bird.angle = velocity.angle()
+	bird.state = 2
+	return true
 
 func _redraw_scenery() -> void:
 	if not has_node("Wildlife"): return
@@ -737,6 +810,9 @@ func _reset_scenery() -> void:
 	for i in house_progress.size():
 		house_progress[i] = 1.0 if i < _community_house_count() else 0.0
 	action_effects.clear()
+	interests.clear()
+	interest_cooldown = 0.0
+	interest_captures = 0
 	plant_sites.clear()
 	for pid in GameState.PLANTS:
 		var kind: String = GameState.PLANTS[pid]["kind"]
@@ -823,7 +899,10 @@ func _process_birds(delta: float) -> void:
 		var state: int = bird["state"]
 		var pos: Vector2 = bird["pos"]
 		var target: Vector2 = bird["target"]
-		if state == 3 or state == 5:
+		bird["motion_response_age"] = minf(1.0, float(bird.get("motion_response_age", 1.0)) + delta)
+		if _follow_interest(bird, delta):
+			pass
+		elif state == 3 or state == 5:
 			var to_target := target - pos
 			var step := 0.14 * delta
 			if to_target.length() <= step:
@@ -1187,6 +1266,12 @@ func _draw_island(c: Control, i: int) -> void:
 	c.draw_texture_rect(FLOATING_ISLAND, Rect2((p - extent * Vector2(0.5, 0.65)).round(), extent), false, Color(1, 1, 1, growth))
 
 func _draw_action_effects(c: Control) -> void:
+	for interest in interests:
+		var age: float = interest.age
+		var p := _wildlife_point(interest.pos)
+		var alpha := maxf(0.0, 1.0 - age / 4.0) * 0.55
+		c.draw_arc(p, 5.0 + minf(age, 1.0) * 14.0, 0, TAU, 24, Color(0.73, 0.94, 1.0, alpha), 1.0, false)
+		if age < 0.6: c.draw_arc(p, 3.0 + age * 30.0, 0, TAU, 24, Color(0.78, 0.94, 0.62, alpha), 1.0, false)
 	for effect in action_effects:
 		var phase := float(effect.age) / float(effect.duration)
 		var alpha := sin(phase * PI) * 0.8
@@ -1388,6 +1473,10 @@ func _draw_sprite(c: Control, p: Vector2, index: int, extent: Vector2, tint: Col
 
 func _bird_animation_frame(bird: Dictionary) -> int:
 	var state: int = bird["state"]
+	var response_age := float(bird.get("motion_response_age", 1.0))
+	if not reduced_motion and response_age < 5.0 / 11.0:
+		# toy-flipbook: one fully visible atlas frame, held at 11 Hz, no dissolve.
+		return [6, 7, 8, 15, 0][mini(4, floori(response_age * 11.0))]
 	var age := float(bird.get("animation_age", 0.0))
 	var previous := int(bird.get("animation_previous_state", 0))
 	if not reduced_motion and age < 0.18:
@@ -1411,6 +1500,10 @@ func _draw_bird_actor(c: Control, bird: Dictionary) -> void:
 	var sprite_index: int = SPECIES_ART.get(str(bird["sid"]), 0)
 	var state: int = bird["state"]
 	var p := _wildlife_point(bird["pos"])
+	var response_age := float(bird.get("motion_response_age", 1.0))
+	if not reduced_motion and response_age < 0.55:
+		var response_alpha := (1.0 - response_age / 0.55) * visibility
+		c.draw_arc(p + Vector2(0, -8), 5.0 + response_age * 8.0, -PI * 0.85, -PI * 0.15, 8, Color(0.78, 0.94, 0.62, response_alpha), 1.5, false)
 	var frame := _bird_animation_frame(bird)
 	if state == 3 or state == 5:
 		p.y -= 6.0 + round(sin(elapsed * 13.0) * 2.0)

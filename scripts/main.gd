@@ -1,5 +1,11 @@
 extends Node
 
+const Motion = preload("res://scripts/motion.gd")
+const MotionWeb = preload("res://scripts/motion_web.gd")
+const MotionSpring = preload("res://scripts/motion_spring.gd")
+const MotionScroll = preload("res://scripts/motion_scroll.gd")
+const WoodenTierLever = preload("res://scripts/wooden_tier_lever.gd")
+
 const VisualTheme = preload("res://scripts/visual_theme.gd")
 const PixelCardArt = preload("res://scripts/pixel_card_art.gd")
 const PixelWetland = preload("res://scripts/pixel_wetland.gd")
@@ -134,13 +140,12 @@ class SeasonDial extends Control:
 	## 转到第 index 季（0 春 / 1 夏 / 2 秋 / 3 冬）。animate=false 直接落位（读档/重开用）。
 	func turn_to(index: int, animate: bool = true) -> void:
 		var target: float = -PI * 0.5 + float(index) * PI * 0.5
-		if not animate or is_equal_approx(_angle, target):
+		if not animate or preload("res://scripts/motion_web.gd").reduced(self):
+			preload("res://scripts/motion_spring.gd").stop(self, "_angle")
 			_angle = target
 			queue_redraw()
 			return
-		var tw := create_tween()
-		tw.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
-		tw.tween_method(_set_angle, _angle, target, 0.45)
+		preload("res://scripts/motion_spring.gd").to(self, "_angle", target, 200.0, 22.0)
 
 	func _set_angle(a: float) -> void:
 		_angle = a
@@ -153,8 +158,18 @@ class SeasonDial extends Control:
 		for i in 4:
 			var a: float = -PI * 0.5 + float(i) * PI * 0.5
 			draw_circle(c + Vector2(cos(a), sin(a)) * (RAD - 4.0), 1.5, Color(0.55, 0.63, 0.57))
-		draw_line(c, c + Vector2(cos(_angle), sin(_angle)) * (RAD - 2.0),
-			Color(1.0, 0.86, 0.42), 2.0, true)
+		# string-clock: the flexible stroke yields, its data endpoint stays exact.
+		var direction := Vector2.from_angle(_angle)
+		var tip := c + direction * (RAD - 2.0)
+		var driver := get_node_or_null("MotionSpring__angle")
+		var velocity := float(driver.velocity) if driver else 0.0
+		var middle := c.lerp(tip, 0.5) + direction.orthogonal() * clampf(velocity * 0.18, -2.0, 2.0)
+		var stroke := PackedVector2Array()
+		for i in 9:
+			var t := float(i) / 8.0
+			stroke.append(c * (1.0 - t) * (1.0 - t) + middle * 2.0 * t * (1.0 - t) + tip * t * t)
+		draw_polyline(stroke, Color(1.0, 0.86, 0.42), 2.0, true)
+		draw_circle(tip, 1.5, Color(1.0, 0.86, 0.42))
 		draw_circle(c, 2.5, Color(1.0, 0.86, 0.42))
 
 ## Permanent study and seeded random talents coexist; allocations start next run.
@@ -206,10 +221,21 @@ var end_turn_btn: Button
 var bottom_right: VBoxContainer
 var card_box: Control
 var selected_label: Label
+var drag_play_hint: Label = null
 var action_hint: Label         # 右下角常驻提示「每回合最多 N 个行动」——N 随难度变化，见 _update_hud
 var current_hand: Array = []   # 当前手牌（card dict 数组）
 var card_infos: Array = []     # {panel, card_id, base_pos, theta, radial, selected, tier, cost_label}
 var _fan_layout_size: Vector2 = Vector2.ZERO  # 上次布局时的容器尺寸
+var _card_press_panel: PanelContainer = null
+var _card_press_elapsed := 0.0
+var _card_press_origin := Vector2.ZERO
+var _card_dragging := false
+var _card_drag_index := -1
+var _card_drag_mouse := Vector2.ZERO
+var _card_drag_last_mouse := Vector2.ZERO
+var _card_drag_grab_offset := Vector2.ZERO
+const CARD_DRAG_HOLD_SEC := 0.14
+const CARD_DRAG_THRESHOLD := 7.0
 var play_deal_anim: bool = false              # 下次布局时播放发牌入场动画
 ## 左下角「出牌档位」拉杆（局内 UI）：向左拨 = 基础投入（半价），中间 = 有效投入，向右拨 = 深度投入（双倍价）。
 ## ⚠ 档位是**选牌那一刻**记进 card_infos 的（info["tier"]）——选中之后再拨拉杆，
@@ -217,7 +243,7 @@ var play_deal_anim: bool = false              # 下次布局时播放发牌入�
 var tier_lever: PanelContainer
 var lever_track: Control
 var lever_handle: Control
-var _lever_slide_tween: Tween = null   # 手柄滑动动画（连续点档位时要掐掉上一条）
+var _lever_dragging := false
 var lever_cd_label: Label              # 「出牌档位」右边的冷却倒计时
 var lever_slot_btns: Array = []
 var lever_state_label: Label
@@ -462,6 +488,7 @@ const INTRO_SLIDE_SEC := 5.0
 
 
 func _ready() -> void:
+	add_to_group("motion_host")
 	_load_audio_settings()
 	_setup_bgm()
 	_setup_sfx()
@@ -532,8 +559,8 @@ func _set_menu_camera(far: bool) -> void:
 	var base := _cam_base_size()
 	if far:
 		cam.size = base
-	var tween := create_tween()
-	tween.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+	var tween := Motion.tween(self, "linear")
+	Motion.curve(tween, "sine.out")
 	tween.tween_property(cam, "size", base * (MENU_CAM_ZOOM if far else 1.0), 1.2 if far else 0.8)
 
 
@@ -1270,6 +1297,7 @@ func _process(delta: float) -> void:
 		if _intro_elapsed >= INTRO_SLIDE_SEC:
 			_advance_intro()
 	_update_card_hover(delta)
+	_process_card_drag(delta)
 	_process_deck_gyro(delta)
 	_process_detail_gyro(delta)   # 点开的那张放大牌：指针压上去时同样要晃
 	_update_sort_cooldown()
@@ -1278,7 +1306,7 @@ func _process(delta: float) -> void:
 	# ⚠ 算分动画期间必须跳过：_layout_fan() 会把牌瞬间抓回扇形原位**并覆写 base_pos**，
 	#   飞出去排开的牌会被一把拽回来。（正常情况下这个尺寸判据是稳定的，
 	#   但动画期间任何一次布局抖动都会毁掉整段演出。）
-	if not _score_animating and card_box != null and card_box.size.x > 10.0:
+	if not _score_animating and not _card_dragging and card_box != null and card_box.size.x > 10.0:
 		if _fan_layout_size.distance_to(card_box.size) > 1.0:
 			_layout_fan()
 
@@ -1554,8 +1582,8 @@ func _update_species_views() -> void:
 				# 新出现的个体：弹性放大登场（TRANS_BACK，有"冒出来"的弹性感）
 				rig.visible = true
 				rig.scale = Vector3(0.01, 0.01, 0.01)
-				var tw := rig.create_tween()
-				tw.set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+				var tw := Motion.tween(rig, "linear")
+				Motion.curve(tw, "back.out")
 				tw.tween_property(rig, "scale", Vector3.ONE, 0.4)
 			elif should_show and rig.scale.x < 1.0:
 				# 正在退场又需要显示：立即恢复
@@ -1564,8 +1592,8 @@ func _update_species_views() -> void:
 				# 消失的个体：缩小淡出后隐藏（不打断正在进行的退场动画）
 				if rig.scale.x < 0.9:
 					continue
-				var tw2 := rig.create_tween()
-				tw2.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_IN)
+				var tw2 := Motion.tween(rig, "linear")
+				Motion.curve(tw2, "power2.in")
 				tw2.tween_property(rig, "scale", Vector3(0.01, 0.01, 0.01), 0.25)
 				tw2.tween_callback(func() -> void: rig.visible = false)
 
@@ -1695,9 +1723,9 @@ func _update_plant_views() -> void:
 				rig.visible = true
 				rig.position = _plant_position(pid, kind, i)
 				rig.scale = Vector3(1.0, 0.01, 1.0)
-				var tw := rig.create_tween()
-				tw.set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
-				tw.tween_property(rig, "scale", Vector3.ONE, 0.55).set_delay(i * 0.03)
+				var tw := Motion.tween(rig, "linear")
+				Motion.curve(tw, "back.out")
+				tw.tween_property(rig, "scale", Vector3.ONE, 0.55).set_delay(Motion.stagger("enter", i))
 			elif should_show:
 				# 已在显示：确保缩放正确（防止动画被打断后残留小尺寸）
 				if rig.scale.y < 0.95:
@@ -1705,8 +1733,8 @@ func _update_plant_views() -> void:
 					rig.position = _plant_position(pid, kind, i)
 			elif not should_show and rig.visible:
 				# 消退：纵向缩回地面
-				var tw2 := rig.create_tween()
-				tw2.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_IN)
+				var tw2 := Motion.tween(rig, "linear")
+				Motion.curve(tw2, "power2.in")
 				tw2.tween_property(rig, "scale", Vector3(1.0, 0.01, 1.0), 0.3)
 				tw2.tween_callback(func() -> void: rig.visible = false)
 
@@ -1954,6 +1982,14 @@ func _build_ui() -> void:
 	card_box.mouse_filter = Control.MOUSE_FILTER_PASS
 	card_box.resized.connect(_on_card_box_resized)
 	hv.add_child(card_box)
+	# Prompt above the fan while a card is dragged; ignore input so it cannot block drops.
+	drag_play_hint = _make_label("松手落到桌面 · 待打出", 15, Color("a8f0c1"))
+	drag_play_hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	drag_play_hint.add_theme_color_override("font_outline_color", Color(0.03, 0.08, 0.06, 0.95))
+	drag_play_hint.add_theme_constant_override("outline_size", 5)
+	drag_play_hint.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	drag_play_hint.visible = false
+	canvas.add_child(drag_play_hint)
 
 	# 右下角：行动次数提醒（缩短）+ 结束回合按钮（沙盘素材之外的空白角落）
 	bottom_right = VBoxContainer.new()
@@ -1961,17 +1997,22 @@ func _build_ui() -> void:
 	bottom_right.anchor_top = 1.0
 	bottom_right.anchor_right = 1.0
 	bottom_right.anchor_bottom = 1.0
+	# Text can increase the VBox minimum size (queue count, budget, error hints).
+	# Grow toward the playfield, keeping the right and bottom screen margins fixed.
+	bottom_right.grow_horizontal = Control.GROW_DIRECTION_BEGIN
+	bottom_right.grow_vertical = Control.GROW_DIRECTION_BEGIN
 	bottom_right.offset_left = -210
 	bottom_right.offset_right = -18
 	# 高度要放得下 6 项（已选 / 行动提示 / 排序按钮 / 紧急调度 / 刷新手牌 / 结束回合）。
 	# ⚠ 容器装不下时 Godot 会保 offset_top 而向下长，底部按钮会被顶出屏幕。
 	bottom_right.offset_top = -276
 	bottom_right.offset_bottom = -14
+	_ui_slide_origin[bottom_right] = [-210.0, -276.0, -18.0, -14.0]
 	bottom_right.add_theme_constant_override("separation", 4)
 	bottom_right.visible = false
 	canvas.add_child(bottom_right)
 
-	selected_label = _make_label("已选：0/3", 14, Color(1, 0.9, 0.5))
+	selected_label = _make_label("桌面待打出：0 张", 14, Color(1, 0.9, 0.5))
 	selected_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	selected_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	selected_label.custom_minimum_size.y = 30
@@ -2141,20 +2182,28 @@ func _build_menu() -> void:
 	title.add_theme_color_override("font_shadow_color", VisualTheme.INK)
 	title.add_theme_constant_override("shadow_offset_y", 5)
 	menu_root.add_child(title)
+	preload("res://scripts/motion_parallax.gd").attach(title, 2.0)
 	var eyebrow := _make_label("P O Y A N G   /   W E T L A N D S", 12, VisualTheme.MINT)
 	eyebrow.position = Vector2(68, 44)
 	menu_root.add_child(eyebrow)
+	preload("res://scripts/motion_parallax.gd").attach(eyebrow, 7.0)
 	var subtitle := _make_label("一湖清水，万物共生。", 24, VisualTheme.PAPER)
 	subtitle.position = Vector2(68, 150)
 	menu_root.add_child(subtitle)
+	preload("res://scripts/motion_parallax.gd").attach(subtitle, 4.0)
 	var description := _make_label("生态保护 · 卡牌策略 · 四季之旅", 12, VisualTheme.MINT)
 	description.position = Vector2(68, 194)
 	menu_root.add_child(description)
-	var footer := _make_label("守护每一片芦苇，等待每一次归来。", 12, VisualTheme.PAPER)
+	var reeds := preload("res://scripts/motion_reeds.gd").new()
+	reeds.name = "MotionReeds"
+	reeds.position = Vector2(68, 220)
+	reeds.size = Vector2(300, 36)
+	menu_root.add_child(reeds)
+	var footer := _make_label("守护每一片芦苇，等待每一次归来。\n轻点湖面，观察水鸟。", 12, VisualTheme.PAPER)
 	footer.anchor_top = 1.0
 	footer.anchor_bottom = 1.0
 	footer.offset_left = 68
-	footer.offset_top = -40
+	footer.offset_top = -52
 	footer.offset_bottom = -20
 	menu_root.add_child(footer)
 
@@ -2467,6 +2516,14 @@ func _build_menu() -> void:
 		name_l.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 		row.add_child(name_l)
 
+	var motion_credit := RichTextLabel.new()
+	motion_credit.bbcode_enabled = true
+	motion_credit.fit_content = true
+	motion_credit.custom_minimum_size = Vector2(0, 34)
+	motion_credit.add_theme_font_size_override("normal_font_size", 12)
+	motion_credit.text = "[center]动效机制：[url=https://github.com/feitangyuan/motion-web]motion-web · feitangyuan[/url]\n[url=https://github.com/feitangyuan/motion-web/blob/main/LICENSE]CC BY-NC 4.0[/url] · 已改为 Godot 原生实现[/center]"
+	motion_credit.meta_clicked.connect(func(link: Variant): OS.shell_open(str(link)))
+	cvb.add_child(motion_credit)
 	var c_back := _make_button("返回", _on_credits_back, 16)
 	c_back.custom_minimum_size = Vector2(0, 40)
 	cvb.add_child(c_back)
@@ -2495,6 +2552,7 @@ func _build_menu() -> void:
 
 	# 必须用 ScrollContainer：日志只会越写越长，老弹窗系统不滚动会顶穿窗口
 	var g_scroll := ScrollContainer.new()
+	MotionScroll.attach(g_scroll)
 	g_scroll.custom_minimum_size = Vector2(540, 360)
 	g_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	gvb.add_child(g_scroll)
@@ -2532,6 +2590,7 @@ func _build_menu() -> void:
 	avb.add_child(HSeparator.new())
 
 	var a_scroll := ScrollContainer.new()
+	MotionScroll.attach(a_scroll)
 	a_scroll.custom_minimum_size = Vector2(540, 360)
 	a_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	avb.add_child(a_scroll)
@@ -2716,13 +2775,13 @@ func _show_achievement_popup(achievement_id: String) -> void:
 	var x_hidden: float = vp.x + 8.0
 	ach_popup.position = Vector2(x_hidden, y)
 
-	var tw := ach_popup.create_tween()
-	tw.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+	var tw := Motion.tween(ach_popup, "linear")
+	Motion.curve(tw, "power2.out")
 	tw.tween_property(ach_popup, "position:x", x_home, SLIDE)
 	await get_tree().create_timer(SLIDE + HOLD).timeout
 	# ⚠ 时序用 create_timer，不用 await tween.finished —— tween 被 kill 时该信号永不发出
-	var tw2 := ach_popup.create_tween()
-	tw2.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_IN)
+	var tw2 := Motion.tween(ach_popup, "linear")
+	Motion.curve(tw2, "power2.in")
 	tw2.tween_property(ach_popup, "position:x", x_hidden, SLIDE)
 	await get_tree().create_timer(SLIDE).timeout
 	ach_popup.visible = false
@@ -2852,8 +2911,8 @@ func _render_intro_slide() -> void:
 	intro_body.text = slide["body"]
 	# 淡入
 	intro_col.modulate.a = 0.0
-	var tw := intro_col.create_tween()
-	tw.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+	var tw := Motion.tween(intro_col, "linear", "opacity")
+	Motion.curve(tw, "power2.out")
 	tw.tween_property(intro_col, "modulate:a", 1.0, 0.45)
 
 
@@ -2862,8 +2921,8 @@ func _advance_intro() -> void:
 		return
 	_intro_advancing = true
 	# 淡出，完成后再切下一张 / 结束
-	var tw := intro_col.create_tween()
-	tw.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_IN)
+	var tw := Motion.tween(intro_col, "linear", "opacity")
+	Motion.curve(tw, "power2.in")
 	tw.tween_property(intro_col, "modulate:a", 0.0, 0.35)
 	tw.tween_callback(func() -> void:
 		_intro_advancing = false
@@ -3111,7 +3170,7 @@ func _on_menu_placeholder() -> void:
 ## 菜单提示：显示后 3 秒自动消失
 func _flash_menu_hint(label: Label, text: String) -> void:
 	label.text = text
-	var tw := create_tween()
+	var tw := Motion.tween(label, "linear", "hint")
 	tw.tween_interval(3.0)
 	tw.tween_callback(func() -> void:
 		if label.text == text:
@@ -3406,6 +3465,290 @@ func _unhandled_input(event: InputEvent) -> void:
 		_toggle_pause()
 
 
+## Capture release/motion globally so a held card keeps tracking the pointer outside its panel.
+func _input(event: InputEvent) -> void:
+	if _card_press_panel == null:
+		return
+	if event is InputEventMouseMotion:
+		var mouse := get_viewport().get_mouse_position()
+		if not _card_dragging and mouse.distance_to(_card_press_origin) >= CARD_DRAG_THRESHOLD:
+			_start_card_drag()
+		if _card_dragging:
+			_update_card_drag_pose(mouse, event.relative)
+			get_viewport().set_input_as_handled()
+	elif event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and not event.pressed:
+		_finish_card_pointer(get_viewport().get_mouse_position())
+		get_viewport().set_input_as_handled()
+
+
+func _process_card_drag(delta: float) -> void:
+	if _card_press_panel == null or _card_dragging:
+		return
+	if not Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT):
+		return
+	_card_press_elapsed += delta
+	if _card_press_elapsed >= CARD_DRAG_HOLD_SEC:
+		_start_card_drag()
+		if _card_dragging:
+			_update_card_drag_pose(get_viewport().get_mouse_position(), Vector2.ZERO)
+
+
+func _start_card_drag() -> void:
+	if _card_press_panel == null or _score_animating or _sort_animating or _paused:
+		return
+	var info := _find_card_info(_card_press_panel)
+	if info.is_empty() or info.get("shaking", false) or info.get("flying", false):
+		return
+	_card_drag_index = card_infos.find(info)
+	if _card_drag_index < 0:
+		return
+	_card_dragging = true
+	info["dragging"] = true
+	info["hovered"] = false
+	_card_drag_mouse = get_viewport().get_mouse_position()
+	_card_drag_last_mouse = _card_drag_mouse
+	_card_drag_grab_offset = _card_press_panel.position + _card_press_panel.pivot_offset - _screen_to_card_box(_card_drag_mouse)
+	_card_press_panel.set_meta("drag_old_z", _card_press_panel.z_index)
+	_card_press_panel.z_index = 1000
+	card_box.move_child(_card_press_panel, card_box.get_child_count() - 1)
+	MotionSpring.stop(_card_press_panel, "position")
+	MotionSpring.stop(_card_press_panel, "rotation")
+	MotionSpring.stop(_card_press_panel, "scale")
+	_update_card_stack()
+
+
+func _update_card_drag_pose(mouse_global: Vector2, mouse_delta: Vector2) -> void:
+	if not _card_dragging or not is_instance_valid(_card_press_panel):
+		return
+	_card_drag_mouse = mouse_global
+	var panel := _card_press_panel
+	panel.position = _screen_to_card_box(mouse_global) + _card_drag_grab_offset - panel.pivot_offset
+	var lean := clampf(mouse_delta.x * 0.012, -0.20, 0.20)
+	MotionSpring.to(panel, "rotation", lean, 500.0, 34.0)
+	MotionSpring.to(panel, "scale", Vector2(1.15, 1.15), 430.0, 30.0)
+	_step_card_gyro(panel, _card_gyro_target(panel, mouse_global, true, true), get_process_delta_time())
+	_card_drag_last_mouse = mouse_global
+	_update_drag_play_hint(mouse_global)
+	_update_staged_drag_preview(mouse_global)
+
+
+func _staged_row_without_drag() -> Array:
+	var row: Array = []
+	for entry in card_infos:
+		if entry.get("staged_by_drag", false) and entry["panel"] != _card_press_panel:
+			row.append(entry)
+	row.sort_custom(func(a, b): return int(a.get("stage_order", 0)) < int(b.get("stage_order", 0)))
+	return row
+
+
+func _staged_insert_slot(point: Vector2, count: int) -> int:
+	if count <= 1:
+		return 0
+	var spacing := minf(132.0, maxf(96.0, (card_box.size.x - 122.0) / float(count - 1)))
+	var first_center := card_box.size.x * 0.5 - float(count - 1) * 0.5 * spacing
+	# Use fixed slot centers: animated neighbours must not feed back into picking.
+	return clampi(roundi((_screen_to_card_box(point).x - first_center) / spacing), 0, count - 1)
+
+
+func _update_staged_drag_preview(point: Vector2) -> void:
+	var row := _staged_row_without_drag()
+	var dragged := _find_card_info(_card_press_panel)
+	if dragged.is_empty():
+		return
+	if _is_play_drop_target(point):
+		var slot := _staged_insert_slot(point, row.size() + 1) if dragged.get("staged_by_drag", false) else row.size()
+		row.insert(slot, dragged)
+	elif dragged.get("staged_by_drag", false):
+		row.append(dragged)
+		row.sort_custom(func(a, b): return int(a.get("stage_order", 0)) < int(b.get("stage_order", 0)))
+	_layout_staged_cards(row)
+
+
+func _is_play_drop_target(point: Vector2) -> bool:
+	if card_box == null or not is_instance_valid(card_box):
+		return false
+	var hand_rect := card_box.get_global_rect()
+	return point.x >= hand_rect.position.x and point.x <= hand_rect.end.x \
+		and point.y >= hand_rect.position.y - 274.0 and point.y < hand_rect.position.y - 8.0
+
+
+func _update_drag_play_hint(point: Vector2) -> void:
+	if drag_play_hint == null or not is_instance_valid(drag_play_hint):
+		return
+	var show_hint := _card_dragging and _is_play_drop_target(point)
+	drag_play_hint.visible = show_hint
+	if not show_hint:
+		return
+	var info := _find_card_info(_card_press_panel)
+	var reason := "" if not info.is_empty() and info["selected"] else _card_selection_error(info)
+	if reason.is_empty():
+		drag_play_hint.text = "松手落到桌面 · 待打出"
+		drag_play_hint.add_theme_color_override("font_color", Color("a8f0c1"))
+	else:
+		drag_play_hint.text = reason + " · 松手返回手牌"
+		drag_play_hint.add_theme_color_override("font_color", Color("ff9185"))
+	var vp_width := get_viewport().get_visible_rect().size.x
+	drag_play_hint.position = Vector2(vp_width * 0.5 - 190.0, card_box.global_position.y - 270.0)
+
+
+func _finish_card_pointer(mouse_global: Vector2) -> void:
+	var panel := _card_press_panel
+	if panel == null:
+		return
+	if _card_dragging:
+		var info := _find_card_info(panel)
+		_update_card_drag_pose(mouse_global, mouse_global - _card_drag_last_mouse)
+		var drop_to_table := _is_play_drop_target(mouse_global)
+		if not info.is_empty():
+			info["dragging"] = false
+		_card_dragging = false
+		_card_drag_index = -1
+		if drag_play_hint != null:
+			drag_play_hint.visible = false
+		panel.z_index = int(panel.get_meta("drag_old_z", 0))
+		if not info.is_empty():
+			if drop_to_table and not _paused and not _score_animating and not _sort_animating:
+				# Dragging onto the table is the only way to queue a hand card.
+				if not info.get("selected", false):
+					var reason := _card_selection_error(info)
+					if reason.is_empty():
+						info["selected"] = true
+						info["tier"] = play_tier
+						info["staged_by_drag"] = true
+						info["stage_order"] = _next_stage_order()
+						_apply_gold_frame(panel)
+						_update_card_face(info)
+						var released_pos := panel.position
+						_layout_fan(true)
+						panel.position = released_pos
+						MotionSpring.to(panel, "position", info["base_pos"], 410.0, 25.0)
+						_update_selected_label()
+					else:
+						_reject_card(panel, reason)
+				elif info.get("staged_by_drag", false):
+					# A table card can be dragged to reorder the pending play row.
+					info["stage_order"] = _stage_order_from_drop(mouse_global)
+					var released_pos := panel.position
+					_layout_fan(true)
+					panel.position = released_pos
+					MotionSpring.to(panel, "position", info["base_pos"], 410.0, 25.0)
+			else:
+				# Returning a staged card to the fan removes it from the queue.
+				if info.get("staged_by_drag", false) and not info.get("dispatched", false) and _is_hand_drop_target(mouse_global):
+					info["selected"] = false
+					info["staged_by_drag"] = false
+					info["stage_order"] = -1
+					info["tier"] = ""
+					panel.z_index = 0
+					_remove_gold_frame(panel)
+					_update_card_face(info)
+					_layout_fan(true)
+					_update_selected_label()
+				elif info.get("staged_by_drag", false):
+					var released_pos := panel.position
+					if drop_to_table:
+						_stage_order_from_drop(mouse_global)
+					_layout_fan(true)
+					panel.position = released_pos
+					MotionSpring.to(panel, "position", info["base_pos"], 410.0, 25.0)
+				else:
+					_reorder_hand_on_drop(info, mouse_global)
+			for entry in card_infos:
+				var entry_panel: PanelContainer = entry["panel"]
+				if not is_instance_valid(entry_panel):
+					continue
+				if entry.get("staged_by_drag", false) or entry.get("shaking", false):
+					continue
+				var goal: Vector2 = entry["base_pos"] + entry["radial"] * (CARD_RAISE if entry["selected"] else 0.0)
+				MotionSpring.to(entry_panel, "position", goal, 390.0, 24.0)
+				MotionSpring.to(entry_panel, "rotation", float(entry["theta"]), 460.0, 30.0)
+				MotionSpring.to(entry_panel, "scale", Vector2.ONE, 390.0, 28.0)
+			_step_card_gyro(panel, Vector2.ZERO, 0.06)
+		var settled_row: Array = []
+		for entry in card_infos:
+			if entry.get("staged_by_drag", false):
+				settled_row.append(entry)
+		settled_row.sort_custom(func(a, b): return int(a.get("stage_order", 0)) < int(b.get("stage_order", 0)))
+		_layout_staged_cards(settled_row)
+		_update_card_stack()
+	else:
+		# Selection is now deliberate: cards enter the pending row only by dragging upward.
+		pass
+	_card_press_panel = null
+	_card_press_elapsed = 0.0
+	_card_press_origin = Vector2.ZERO
+	_card_drag_index = -1
+	if drag_play_hint != null:
+		drag_play_hint.visible = false
+	_update_selected_label()
+	_refresh_action_buttons()
+
+
+func _is_hand_drop_target(point: Vector2) -> bool:
+	return card_box != null and card_box.get_global_rect().has_point(point)
+
+
+func _next_stage_order() -> int:
+	var next := 0
+	for info in card_infos:
+		if info.get("staged_by_drag", false):
+			next = maxi(next, int(info.get("stage_order", -1)) + 1)
+	return next
+
+
+func _stage_order_from_drop(point: Vector2) -> int:
+	var row_infos := _staged_row_without_drag()
+	var insert_at := _staged_insert_slot(point, row_infos.size() + 1)
+	row_infos.insert(insert_at, _find_card_info(_card_press_panel))
+	for i in row_infos.size():
+		row_infos[i]["stage_order"] = i
+	return insert_at
+
+
+func _ordered_staged_indices() -> Array:
+	var indices: Array = []
+	for i in card_infos.size():
+		if card_infos[i].get("selected", false):
+			indices.append(i)
+	indices.sort_custom(func(a, b):
+		var ia: Dictionary = card_infos[a]
+		var ib: Dictionary = card_infos[b]
+		return int(ia.get("stage_order", 2147483647)) < int(ib.get("stage_order", 2147483647)))
+	return indices
+
+
+func _reorder_hand_on_drop(dragged: Dictionary, mouse_global: Vector2) -> bool:
+	if card_infos.size() < 2 or not card_box.get_global_rect().has_point(mouse_global):
+		return false
+	var old_index := card_infos.find(dragged)
+	if old_index < 0:
+		return false
+	var drop_x := _screen_to_card_box(mouse_global).x
+	var insert_at := 0
+	for entry in card_infos:
+		if entry == dragged:
+			continue
+		var other_panel: PanelContainer = entry["panel"]
+		var center_x: float = float(entry["base_pos"].x) + other_panel.pivot_offset.x
+		if drop_x > center_x:
+			insert_at += 1
+	if insert_at == old_index:
+		return false
+	var positions: Dictionary = {}
+	for entry in card_infos:
+		var p: PanelContainer = entry["panel"]
+		positions[p] = {"position": p.position, "rotation": p.rotation}
+	card_infos.remove_at(old_index)
+	card_infos.insert(insert_at, dragged)
+	_layout_fan()
+	for entry in card_infos:
+		var p: PanelContainer = entry["panel"]
+		var old_pose: Dictionary = positions[p]
+		p.position = old_pose["position"]
+		p.rotation = old_pose["rotation"]
+	return true
+
+
 func _can_pause() -> bool:
 	# 算分动画期间禁止暂停：_paused 是自定义变量、不是 get_tree().paused，
 	# tween 在「暂停」下照常跑，放行只会得到「暂停菜单下面还在飞牌」的画面。
@@ -3479,15 +3822,19 @@ func _clear_save() -> void:
 
 func save_game() -> void:
 	var hand_ids: Array = []
-	var selected_ids: Array = []
+	var staged_queue: Array = []
 	for info in card_infos:
-		hand_ids.append(info["card_id"])
-		if info["selected"]:
-			selected_ids.append(info["card_id"])
+		if not info.get("dispatched", false):
+			hand_ids.append(info["card_id"])
+	for idx in _ordered_staged_indices():
+		var staged: Dictionary = card_infos[idx]
+		staged_queue.append({
+			"card_id": staged["card_id"], "dispatched": staged.get("dispatched", false),
+			"tier": _info_tier(staged)})
 	var data := {
 		"state": GameState.serialize(),
 		"hand_ids": hand_ids,
-		"selected_ids": selected_ids,
+		"staged_queue": staged_queue,
 		"phase": _current_phase,
 		"event_text": _current_event,
 	}
@@ -3541,7 +3888,11 @@ func load_game() -> bool:
 ## 恢复分配阶段：重建手牌并还原选中状态
 func _restore_hand(data: Dictionary) -> void:
 	var hand_ids: Array = data.get("hand_ids", [])
-	var selected_ids: Array = data.get("selected_ids", [])
+	# Old saves used selected_ids; migrate those cards into the new table queue.
+	var staged_queue: Array = data.get("staged_queue", [])
+	if staged_queue.is_empty():
+		for old_id in data.get("staged_ids", data.get("selected_ids", [])):
+			staged_queue.append({"card_id": str(old_id), "dispatched": false, "tier": ""})
 	current_hand = []
 	for cid in hand_ids:
 		var card: Dictionary = GameState._find_card(cid)
@@ -3549,10 +3900,30 @@ func _restore_hand(data: Dictionary) -> void:
 			current_hand.append(card)
 	play_deal_anim = false
 	_build_hand_panel()
+	var restored_panels: Array[PanelContainer] = []
+	for i in staged_queue.size():
+		var staged: Dictionary = staged_queue[i]
+		var cid: String = str(staged.get("card_id", ""))
+		var was_dispatched: bool = staged.get("dispatched", false)
+		for info in card_infos:
+			var panel: PanelContainer = info["panel"]
+			if info["card_id"] == cid and info.get("dispatched", false) == was_dispatched \
+				and not restored_panels.has(panel):
+				info["selected"] = true
+				info["staged_by_drag"] = true
+				info["stage_order"] = i
+				var saved_tier: String = str(staged.get("tier", ""))
+				info["tier"] = saved_tier if saved_tier != "" else _info_tier(info)
+				_update_card_face(info)
+				_apply_gold_frame(panel)
+				restored_panels.append(panel)
+				break
+	_layout_fan()
+	var next_order := staged_queue.size()
 	for info in card_infos:
-		if info["card_id"] in selected_ids:
-			info["selected"] = true
-			_apply_gold_frame(info["panel"])
+		if info.get("staged_by_drag", false) and not restored_panels.has(info["panel"]):
+			info["stage_order"] = next_order
+			next_order += 1
 	hand_panel.visible = true
 	bottom_right.visible = true
 	tier_lever.visible = true
@@ -3727,14 +4098,14 @@ func _show_crisis_alert(crisis: Dictionary, is_warning: bool) -> void:
 	crisis_root.visible = true
 	# 淡红脉冲：起手轻轻亮一下，随后持续柔和脉冲（不再刺眼）
 	crisis_dim.color.a = 0.28
-	var pulse := crisis_dim.create_tween().set_loops()
-	pulse.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+	var pulse := Motion.tween(crisis_dim, "pulse", "warning").set_loops()
+	Motion.curve(pulse, "sine.inOut")
 	pulse.tween_property(crisis_dim, "color:a", 0.10, 0.6)
 	pulse.tween_property(crisis_dim, "color:a", 0.28, 0.6)
 	# 像素感叹号：大小脉冲（像在跳动），动画保持不变
 	crisis_icon.pivot_offset = crisis_icon.size * 0.5
-	var tw := crisis_icon.create_tween().set_loops()
-	tw.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+	var tw := Motion.tween(crisis_icon, "pulse", "warning").set_loops()
+	Motion.curve(tw, "sine.inOut")
 	tw.tween_property(crisis_icon, "scale", Vector2(1.22, 1.22), 0.45)
 	tw.tween_property(crisis_icon, "scale", Vector2.ONE, 0.45)
 
@@ -3941,6 +4312,7 @@ func _build_warn_history(canvas: CanvasLayer) -> void:
 
 	# 列表必须能滚：本局最多可能攒下 8~10 条，弹窗本体不滚动会顶穿窗口
 	var scroll := ScrollContainer.new()
+	MotionScroll.attach(scroll)
 	scroll.custom_minimum_size = Vector2(560, 400)
 	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	pv.add_child(scroll)
@@ -4121,7 +4493,7 @@ func _on_deck_mouse_entered() -> void:
 	_deck_hovered = true
 	_fan_deck(true)
 	# 展开动画结束后才显示黄框（途中不显示）
-	var tw := create_tween()
+	var tw := Motion.tween(self, "linear")
 	tw.tween_interval(0.22)
 	tw.tween_callback(func() -> void:
 		if _deck_hovered:
@@ -4144,10 +4516,9 @@ func _fan_deck(out: bool) -> void:
 		var back: TextureRect = deck_backs[i]
 		var pos: Vector2 = fan_positions[i] if out else stack_positions[i]
 		var rot: float = fan_rotations[i] if out else 0.0
-		var tw := back.create_tween()
-		tw.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
-		tw.tween_property(back, "position", pos, 0.22)
-		tw.parallel().tween_property(back, "rotation", rot, 0.22)
+		# press-stack: each depth receives the same gesture with its own delay.
+		MotionSpring.to(back, "position", pos, 350.0, 24.0, float(i) * 0.025)
+		MotionSpring.to(back, "rotation", rot, 350.0, 24.0, float(i) * 0.025)
 
 
 ## 自绘黄框：给每张牌背各画一条贴牌黄边（严格贴着每张牌的形状）
@@ -4220,6 +4591,7 @@ func _build_deck_viewer() -> void:
 	_update_sort_btn()
 
 	var scroll := ScrollContainer.new()
+	MotionScroll.attach(scroll)
 	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	box.add_child(scroll)
@@ -4263,18 +4635,16 @@ func _slide_main_ui(out: bool) -> void:
 		var dir := _slide_out_dir(c)
 		var dx := dir.x * (vp.x + 200.0)
 		var dy := dir.y * (vp.y + 200.0)
-		var tw := create_tween()
-		tw.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_IN_OUT)
-		if out:
-			tw.tween_property(c, "offset_left", c.offset_left + dx, 0.34)
-			tw.parallel().tween_property(c, "offset_right", c.offset_right + dx, 0.34)
-			tw.parallel().tween_property(c, "offset_top", c.offset_top + dy, 0.34)
-			tw.parallel().tween_property(c, "offset_bottom", c.offset_bottom + dy, 0.34)
-		else:
-			tw.tween_property(c, "offset_left", origin[0], 0.34)
-			tw.parallel().tween_property(c, "offset_right", origin[2], 0.34)
-			tw.parallel().tween_property(c, "offset_top", origin[1], 0.34)
-			tw.parallel().tween_property(c, "offset_bottom", origin[3], 0.34)
+		var target_left: float = float(origin[0]) + (dx if out else 0.0)
+		var target_right: float = float(origin[2]) + (dx if out else 0.0)
+		var target_top: float = float(origin[1]) + (dy if out else 0.0)
+		var target_bottom: float = float(origin[3]) + (dy if out else 0.0)
+		var tw := Motion.tween(self, "linear")
+		Motion.curve(tw, "power2.inOut")
+		tw.tween_property(c, "offset_left", target_left, 0.34)
+		tw.parallel().tween_property(c, "offset_right", target_right, 0.34)
+		tw.parallel().tween_property(c, "offset_top", target_top, 0.34)
+		tw.parallel().tween_property(c, "offset_bottom", target_bottom, 0.34)
 		_ui_slide_tweens.append(tw)
 
 
@@ -4325,10 +4695,9 @@ func _open_deck_viewer() -> void:
 	await get_tree().process_frame
 	for i in cards.size():
 		var p: Control = cards[i]
-		var tw := p.create_tween()
-		tw.set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
-		tw.tween_property(p, "scale", Vector2.ONE, 0.28).set_delay(i * 0.03)
-		tw.parallel().tween_property(p, "modulate:a", 1.0, 0.18).set_delay(i * 0.03)
+		var tw := Motion.tween(p, "enter", "arrival")
+		tw.tween_property(p, "scale", Vector2.ONE, 0.28).set_delay(Motion.stagger("enter", i))
+		tw.parallel().tween_property(p, "modulate:a", 1.0, 0.18).set_delay(Motion.stagger("enter", i))
 
 
 ## 整张卡作为刚性平面旋转，纹理使用透视正确采样，避免三角形接缝与扭曲。
@@ -4386,9 +4755,15 @@ func _card_gyro_center(card: Control) -> Vector2:
 	return card.get_global_transform() * (card.size * 0.5)
 
 
-func _card_gyro_target(card: Control, mouse: Vector2, active: bool) -> Vector2:
+func _card_gyro_target(card: Control, mouse: Vector2, active: bool, relative_to_face: bool = false) -> Vector2:
 	if not active:
 		return Vector2.ZERO
+	if relative_to_face:
+		# Hand and staged cards share pressure by position on the face, independent
+		# of fan rotation or hover scale. Edges apply the same bounded tilt in both rows.
+		var local := card.get_global_transform().affine_inverse() * mouse - card.size * 0.5
+		var pressure := local / Vector2(maxf(1.0, card.size.x * 0.5), maxf(1.0, card.size.y * 0.5))
+		return Vector2(clampf(pressure.y * 0.32, -0.32, 0.32), clampf(pressure.x * 0.32, -0.32, 0.32))
 	var offset := mouse - _card_gyro_center(card)
 	return Vector2(clampf(offset.y * 0.0032, -0.32, 0.32), clampf(offset.x * 0.0042, -0.32, 0.32))
 
@@ -4444,6 +4819,7 @@ func _poke_card(card: Control) -> void:
 
 
 func _close_deck_viewer() -> void:
+	_close_card_detail()
 	_deck_open = false
 	_deck_gyro_view = null
 	deck_viewer.visible = false
@@ -4592,8 +4968,8 @@ func _sort_deck_cards(by_category: bool) -> void:
 		var new_pos: Vector2 = p.position
 		p.position = old_pos[p]
 		p.set_meta("base_pos", new_pos)   # 更新悬停基准位，避免下次悬停飞到旧位
-		var tw: Tween = p.create_tween()
-		tw.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_IN_OUT)
+		var tw: Tween = Motion.tween(p, "linear")
+		Motion.curve(tw, "power2.inOut")
 		tw.tween_property(p, "position", new_pos, 0.3)
 	# 等飞行动画完成，期间 _sort_animating 保持 true，避免连点造成位置 tween 重叠
 	await get_tree().create_timer(0.32).timeout
@@ -4625,52 +5001,71 @@ func _toggle_hand_sort() -> void:
 ## ⚠ 选中状态挂在 card_infos 的条目上，跟着卡片一起走，不需要额外保存/恢复；
 ##   金色选中框是画在 panel 上的，也随 panel 一起移动。
 func _sort_hand_cards(by_category: bool) -> void:
-	const GATHER_DUR := 0.24        # 收牌时长
-	const GATHER_LAG := 0.016       # 收牌错开（做出"被一把收拢"的层次）
-	const DEAL_DUR := 0.28          # 发牌时长
-	const DEAL_LAG := 0.040         # 发牌错开（沿用 _play_deal_animation 的节奏）
-	const PILE_SPREAD := 3.0        # 牌堆里每张牌往下错一点，完全重合就看不出一叠了
-	const PILE_SCALE := 0.92        # 收拢时略微缩小，像被攥成一把
+	var GATHER_DUR := Motion.seconds("gather")        # 收牌时长
+	var GATHER_LAG := float(Motion.profiles.gather.stagger)       # 收牌错开（做出"被一把收拢"的层次）
+	var DEAL_DUR := Motion.seconds("deal")          # 发牌时长
+	var DEAL_LAG := float(Motion.profiles.deal.stagger)         # 发牌错开（沿用 _play_deal_animation 的节奏）
+	const PILE_SPREAD := 1.0
+	var pile_scale := Vector2(64.0 / 122.0, 86.0 / 165.0)
 
-	if card_infos.size() < 2:
+	var hand_infos: Array = []
+	var staged_infos: Array = []
+	for info in card_infos:
+		if info.get("staged_by_drag", false):
+			staged_infos.append(info)
+		else:
+			hand_infos.append(info)
+	if hand_infos.size() < 2:
 		return
-	var n := card_infos.size()
+	var n := hand_infos.size()
 
-	# ① 收牌：全部飞到屏幕中央叠成一堆
-	#    屏幕坐标 → card_box 局部坐标；pivot 在底部中心，
-	#    所以 position = 落点 - pivot 才是把牌的底部中心放到那个点上。
-	var vp := get_viewport().get_visible_rect().size
-	var pile_center: Vector2 = _screen_to_card_box(vp * 0.5)
+	# ① Shrink into the visible deck back on the right, using its actual screen
+	# center and size. Account for each hand card's bottom pivot at the small scale.
+	var deck_rect := deck_root.get_global_rect()
+	var pile_screen := deck_rect.position + Vector2(50.0, 43.0)
+	if not deck_backs.is_empty():
+		var back: Control = deck_backs.back()
+		pile_screen = back.get_global_transform() * (back.size * 0.5)
+		pile_scale = back.size / Vector2(122.0, 165.0)
+	var pile_center := _screen_to_card_box(pile_screen)
 	# 收牌落点按 **panel** 存 —— _layout_fan() 会重排位置，排完序下标就换人了
 	var pile_pos: Dictionary = {}
+	var old_z: Dictionary = {}
 	for i in n:
-		var info: Dictionary = card_infos[i]
+		var info: Dictionary = hand_infos[i]
 		var p: PanelContainer = info["panel"]
 		if not is_instance_valid(p):
 			return
 		# 让 _update_card_hover 让出控制权：它每帧把牌拽回 base_pos，
 		# 会和飞行 tween 逐帧打架（照抄 shaking / 算分飞牌的既有做法）
 		info["flying"] = true
-		var spot: Vector2 = pile_center - p.pivot_offset + Vector2(0.0, float(i) * PILE_SPREAD)
+		_kill_card_tweens(p)
+		old_z[p] = p.z_index
+		p.z_index = 1000 + i
+		var spot: Vector2 = pile_center - p.pivot_offset + (p.pivot_offset - p.size * 0.5) * pile_scale \
+			+ Vector2(-float(i) * PILE_SPREAD, 0.0)
 		pile_pos[p] = spot
 		var d: float = float(i) * GATHER_LAG
-		var tw := p.create_tween()
+		var tw := Motion.tween(p, "linear")
 		tw.set_parallel(true)
-		tw.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_IN)
+		Motion.curve(tw, "power2.in")
 		tw.tween_property(p, "position", spot, GATHER_DUR).set_delay(d)
 		tw.tween_property(p, "rotation", 0.0, GATHER_DUR).set_delay(d)
-		tw.tween_property(p, "scale", Vector2(PILE_SCALE, PILE_SCALE), GATHER_DUR).set_delay(d)
-	await get_tree().create_timer(GATHER_DUR + float(n - 1) * GATHER_LAG + 0.02).timeout
+		tw.tween_property(p, "scale", pile_scale, GATHER_DUR).set_delay(d)
+	await get_tree().create_timer(GATHER_DUR + float(n - 1) * GATHER_LAG + 0.08).timeout
 
 	# ② 排序 + 重新布局。此刻牌全叠在一点，位置怎么变都看不出来，
 	#    排序这一步天然被收拢动作掩盖掉了 —— 顺序要到发牌时才揭晓。
-	card_infos.sort_custom(func(a, b):
+	hand_infos.sort_custom(func(a, b):
 		return _card_id_dict_less(str(a["card_id"]), str(b["card_id"]), by_category))
+	card_infos.clear()
+	card_infos.append_array(hand_infos)
+	card_infos.append_array(staged_infos)
 	_layout_fan()   # 重写每张牌的 position / rotation / base_pos / theta / radial
 
 	# ③ 发牌：从牌堆位置按新顺序逐张飞回自己的扇形位置
 	for i in n:
-		var info: Dictionary = card_infos[i]
+		var info: Dictionary = hand_infos[i]
 		var p: PanelContainer = info["panel"]
 		if not is_instance_valid(p):
 			continue
@@ -4681,19 +5076,22 @@ func _sort_hand_cards(by_category: bool) -> void:
 			target += (info["radial"] as Vector2) * CARD_RAISE
 		p.position = pile_pos.get(p, target)
 		p.rotation = 0.0
-		p.scale = Vector2(PILE_SCALE, PILE_SCALE)
+		p.scale = pile_scale
 		var d: float = float(i) * DEAL_LAG
-		var tw := p.create_tween()
+		var tw := Motion.tween(p, "linear")
 		tw.set_parallel(true)
-		tw.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+		Motion.curve(tw, str(Motion.profiles.deal.ease))
 		tw.tween_property(p, "position", target, DEAL_DUR).set_delay(d)
 		tw.tween_property(p, "rotation", float(info["theta"]), DEAL_DUR).set_delay(d)
 		tw.tween_property(p, "scale", Vector2.ONE, DEAL_DUR).set_delay(d)
 
 	# 等发完，期间 _sort_animating 保持 true，避免连点让位置 tween 重叠
 	await get_tree().create_timer(DEAL_DUR + float(n - 1) * DEAL_LAG + 0.02).timeout
-	for info in card_infos:
+	for info in hand_infos:
 		info["flying"] = false
+		var p: PanelContainer = info["panel"]
+		if is_instance_valid(p):
+			p.z_index = int(old_z.get(p, 0))
 
 
 ## 按 card_id 比较（手牌排序用 —— card_infos 里存的是 id，不是卡牌字典）
@@ -4709,40 +5107,34 @@ func _card_id_dict_less(a_id: String, b_id: String, by_category: bool) -> bool:
 ## 悬停：浮起放大 + 黄框；并记录为陀螺仪目标，不添加循环漂浮。
 func _on_viewer_card_hover(view: Control, _card: Dictionary) -> void:
 	_deck_gyro_view = view
-	_kill_card_tweens(view)
+	_kill_card_tweens(view, true)
 	if not view.has_meta("base_pos"):
 		view.set_meta("base_pos", view.position)  # 首次悬停才记录原位（此时布局已完成）
 	var base: Vector2 = view.get_meta("base_pos")
 	view.z_index = 10
 	view.pivot_offset = view.size * 0.5
-	var tweens: Array = []
-	# 浮起放大
-	var tw := view.create_tween()
-	tweens.append(tw)
-	tw.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
-	tw.tween_property(view, "position:y", base.y - 16, 0.16)
-	tw.parallel().tween_property(view, "scale", Vector2(1.12, 1.12), 0.16)
-	view.set_meta("hover_tweens", tweens)
+	# Motion-web spring-default: lift with weight, preserve momentum on reversal.
+	MotionSpring.to(view, "position", base + Vector2(0, -16), 350.0, 28.0)
+	MotionSpring.to(view, "scale", Vector2(1.12, 1.12), 350.0, 28.0)
 	_apply_yellow_frame(view)
 
 
 func _on_viewer_card_unhover(view: Control) -> void:
 	if _deck_gyro_view == view:
 		_deck_gyro_view = null
-	_kill_card_tweens(view)
+	_kill_card_tweens(view, true)
 	view.z_index = 0
 	var base: Vector2 = view.get_meta("base_pos", view.position)
-	var tw := view.create_tween()
-	tw.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
-	tw.tween_property(view, "position", base, 0.16)
-	tw.parallel().tween_property(view, "scale", Vector2.ONE, 0.16)
-	tw.parallel().tween_property(view, "rotation", 0.0, 0.16)
-	view.set_meta("return_tween", tw)
+	MotionSpring.to(view, "position", base, 350.0, 28.0)
+	MotionSpring.to(view, "scale", Vector2.ONE, 350.0, 28.0)
+	MotionSpring.to(view, "rotation", 0.0, 350.0, 28.0)
 	_remove_yellow_frame(view)
 
 
 ## 取消该卡牌所有悬停/归位动画，避免快速反复划过时 tween 打架
-func _kill_card_tweens(view: Control) -> void:
+func _kill_card_tweens(view: Control, preserve_momentum: bool = false) -> void:
+	if not preserve_momentum:
+		for key in ["position", "scale", "rotation"]: MotionSpring.stop(view, key)
 	var tweens: Array = view.get_meta("hover_tweens", [])
 	for t in tweens:
 		if t != null:
@@ -4831,6 +5223,7 @@ func _show_card_detail(view: Control, card: Dictionary) -> void:
 	card_detail.visible = true
 	card_detail.set_meta("closing", false)
 	if _detail_big_card != null and is_instance_valid(_detail_big_card):
+		Motion.release_face(_detail_big_card)
 		_detail_big_card.queue_free()
 		_detail_big_card = null
 	var made_big := _make_card(card)
@@ -4844,7 +5237,7 @@ func _show_card_detail(view: Control, card: Dictionary) -> void:
 	big.set_meta("source_view", view)
 	_poke_card(big)
 	# 起始：被点击卡牌的屏幕中心；终点：左侧展示区中心
-	var src_center := view.get_global_rect().get_center()
+	var src_center := _card_gyro_center(view)
 	var dst_center := card_detail_card.get_global_rect().get_center()
 	var inv := card_detail.get_global_transform().affine_inverse()
 	var src_local: Vector2 = inv * src_center - big.pivot_offset
@@ -4852,18 +5245,29 @@ func _show_card_detail(view: Control, card: Dictionary) -> void:
 	big.position = src_local
 	big.scale = Vector2.ONE
 	card_detail.add_child(big)
+	Motion.borrow_face(big, view)
+	_step_card_gyro(big, Vector2.ZERO, 0.0)
 	# 投射动画：平移 + 放大
-	var fly := big.create_tween()
-	big.set_meta("fly_tween", fly)
-	fly.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
-	fly.tween_property(big, "position", dst_local, 0.4)
-	fly.parallel().tween_property(big, "scale", Vector2(1.8, 1.8), 0.4)
+	if wetland and wetland.reduced_motion:
+		big.position = dst_local
+		big.scale = Vector2(1.8, 1.8)
+		big.rotation = 0.0
+	else:
+		var fly := Motion.tween(big, "carry", "detail")
+		big.set_meta("fly_tween", fly)
+		fly.tween_property(big, "position", dst_local, Motion.seconds("carry"))
+		fly.parallel().tween_property(big, "scale", Vector2(1.8, 1.8), Motion.seconds("carry"))
+		fly.parallel().tween_property(big, "rotation", 0.0, Motion.seconds("carry"))
 	card_detail_title.text = card["name"]
 	card_detail_body.text = _card_detail_text(card)
+	Motion.cancel(card_detail_body, "text_reveal")
+	if wetland and wetland.reduced_motion:
+		card_detail_body.visible_characters = -1
+		return
 	card_detail_body.visible_characters = 0
 	var total := card_detail_body.get_total_character_count()
-	var tw := card_detail_body.create_tween()
-	tw.set_trans(Tween.TRANS_LINEAR)
+	var tw := Motion.tween(card_detail_body, "linear", "text_reveal")
+	Motion.curve(tw, "none")
 	tw.tween_property(card_detail_body, "visible_characters", total, clampf(total * 0.03, 0.4, 2.5))
 
 
@@ -4889,6 +5293,9 @@ func _card_detail_text(card: Dictionary) -> String:
 
 
 func _close_card_detail() -> void:
+	Motion.release_face(_detail_big_card)
+	Motion.cancel(card_detail_body, "text_reveal")
+	if is_instance_valid(_detail_big_card): Motion.cancel(_detail_big_card, "detail")
 	card_detail.visible = false
 
 
@@ -4914,11 +5321,11 @@ func _handle_detail_click(event: InputEventMouseButton, detail: Control, big: Co
 	var position := big.position
 	if source and is_instance_valid(source):
 		position = detail.get_global_transform().affine_inverse() * _card_gyro_center(source) - big.pivot_offset
-	var fly := big.create_tween()
+	var fly := Motion.tween(big, "return", "detail")
 	big.set_meta("fly_tween", fly)
-	fly.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_IN_OUT)
-	fly.tween_property(big, "position", position, 0.22)
-	fly.parallel().tween_property(big, "scale", Vector2.ONE, 0.22)
+	fly.tween_property(big, "position", position, Motion.seconds("return"))
+	fly.parallel().tween_property(big, "scale", Vector2.ONE, Motion.seconds("return"))
+	fly.parallel().tween_property(big, "rotation", source.rotation if is_instance_valid(source) else 0.0, Motion.seconds("return"))
 	fly.tween_callback(close)
 
 
@@ -5031,6 +5438,7 @@ func _build_knowledge_viewer() -> void:
 	title_bar.add_child(knowledge_count_label)
 
 	var scroll := ScrollContainer.new()
+	MotionScroll.attach(scroll)
 	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	box.add_child(scroll)
@@ -5102,16 +5510,15 @@ func _open_knowledge_viewer() -> void:
 	await get_tree().process_frame
 	for i in views.size():
 		var p: Control = views[i]
-		var tw := p.create_tween()
-		tw.set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
-		tw.tween_property(p, "scale", Vector2.ONE, 0.28).set_delay(i * 0.03)
-		tw.parallel().tween_property(p, "modulate:a", 1.0, 0.18).set_delay(i * 0.03)
+		var tw := Motion.tween(p, "enter", "arrival")
+		tw.tween_property(p, "scale", Vector2.ONE, 0.28).set_delay(Motion.stagger("enter", i))
+		tw.parallel().tween_property(p, "modulate:a", 1.0, 0.18).set_delay(Motion.stagger("enter", i))
 
 
 func _close_knowledge_viewer() -> void:
 	if knowledge_viewer == null:
 		return
-	knowledge_detail.visible = false
+	_close_knowledge_detail()
 	knowledge_viewer.visible = false
 	_deck_gyro_view = null
 	menu_col.visible = true
@@ -5191,6 +5598,7 @@ func _show_knowledge_detail(view: Control, kid: String) -> void:
 	knowledge_detail.visible = true
 	knowledge_detail.set_meta("closing", false)
 	if _knowledge_big_card != null and is_instance_valid(_knowledge_big_card):
+		Motion.release_face(_knowledge_big_card)
 		_knowledge_big_card.queue_free()
 		_knowledge_big_card = null
 	var big: PanelContainer = _make_knowledge_card(kid, collected)
@@ -5203,7 +5611,7 @@ func _show_knowledge_detail(view: Control, kid: String) -> void:
 	big.set_meta("source_view", view)
 	_poke_card(big)
 	# 起始：被点击卡牌的屏幕中心；终点：左侧展示区中心
-	var src_center := view.get_global_rect().get_center()
+	var src_center := _card_gyro_center(view)
 	var dst_center := knowledge_detail_card.get_global_rect().get_center()
 	var inv := knowledge_detail.get_global_transform().affine_inverse()
 	var src_local: Vector2 = inv * src_center - big.pivot_offset
@@ -5211,17 +5619,28 @@ func _show_knowledge_detail(view: Control, kid: String) -> void:
 	big.position = src_local
 	big.scale = Vector2.ONE
 	knowledge_detail.add_child(big)
-	var fly := big.create_tween()
-	big.set_meta("fly_tween", fly)
-	fly.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
-	fly.tween_property(big, "position", dst_local, 0.4)
-	fly.parallel().tween_property(big, "scale", Vector2(1.8, 1.8), 0.4)
+	Motion.borrow_face(big, view)
+	_step_card_gyro(big, Vector2.ZERO, 0.0)
+	if wetland and wetland.reduced_motion:
+		big.position = dst_local
+		big.scale = Vector2(1.8, 1.8)
+		big.rotation = 0.0
+	else:
+		var fly := Motion.tween(big, "carry", "detail")
+		big.set_meta("fly_tween", fly)
+		fly.tween_property(big, "position", dst_local, Motion.seconds("carry"))
+		fly.parallel().tween_property(big, "scale", Vector2(1.8, 1.8), Motion.seconds("carry"))
+		fly.parallel().tween_property(big, "rotation", 0.0, Motion.seconds("carry"))
 	knowledge_detail_title.text = str(GameState.KNOWLEDGE_CARDS[kid]["name"]) if collected else "？？？"
 	knowledge_detail_body.text = _knowledge_detail_text(kid, collected)
+	Motion.cancel(knowledge_detail_body, "text_reveal")
+	if wetland and wetland.reduced_motion:
+		knowledge_detail_body.visible_characters = -1
+		return
 	knowledge_detail_body.visible_characters = 0
 	var total := knowledge_detail_body.get_total_character_count()
-	var tw := knowledge_detail_body.create_tween()
-	tw.set_trans(Tween.TRANS_LINEAR)
+	var tw := Motion.tween(knowledge_detail_body, "linear", "text_reveal")
+	Motion.curve(tw, "none")
 	tw.tween_property(knowledge_detail_body, "visible_characters", total, clampf(total * 0.03, 0.4, 2.5))
 
 
@@ -5261,6 +5680,9 @@ func _on_knowledge_source_clicked(meta: Variant) -> void:
 
 
 func _close_knowledge_detail() -> void:
+	Motion.release_face(_knowledge_big_card)
+	Motion.cancel(knowledge_detail_body, "text_reveal")
+	if is_instance_valid(_knowledge_big_card): Motion.cancel(_knowledge_big_card, "detail")
 	knowledge_detail.visible = false
 
 
@@ -5409,9 +5831,9 @@ func _play_hud_enter() -> void:
 	left_panel.modulate.a = 0.0
 	right_panel.modulate.a = 0.0
 
-	var tw := create_tween()
+	var tw := Motion.tween(self, "linear")
 	tw.set_parallel(true)
-	tw.set_trans(Tween.TRANS_QUART).set_ease(Tween.EASE_OUT)
+	Motion.curve(tw, "power3.out")
 	tw.tween_property(left_panel, "offset_left", L_HOME_L, DUR)
 	tw.tween_property(left_panel, "offset_right", L_HOME_R, DUR)
 	tw.tween_property(left_panel, "modulate:a", 1.0, DUR * 0.7)
@@ -5819,8 +6241,8 @@ func _update_hud() -> void:
 			var bar: ProgressBar = metric_bars[metric]["bar"]
 			var val: Label = metric_bars[metric]["val"]
 			# 指标变化不是玩家直接操作 → 用动画"告知"变化（速查表：非用户触发可较长时长）
-			var tw := bar.create_tween()
-			tw.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+			var tw := Motion.tween(bar, "linear", "value")
+			Motion.curve(tw, "power2.out")
 			tw.tween_property(bar, "value", float(m[metric]), 0.35)
 			val.text = str(m[metric])
 
@@ -5931,6 +6353,7 @@ func _enter_allocate() -> void:
 	current_hand = GameState.draw_cards(7 + int(Talents.get_bonus("cards")), GameState.is_season_opener())
 	play_deal_anim = true
 	_build_hand_panel()
+	_sync_dispatched_stage_cards()
 	hand_panel.visible = true
 	bottom_right.visible = true
 	tier_lever.visible = true
@@ -5957,8 +6380,8 @@ func _refresh_action_buttons() -> void:
 		elif cd > 0:
 			dispatch_btn.text = "紧急调度 · 冷却 %d 回合" % cd
 			dispatch_btn.disabled = true
-		elif GameState.funds < GameState.dispatch_cost():
-			dispatch_btn.text = "紧急调度 · %d 万（资金不足）" % GameState.dispatch_cost()
+		elif GameState.funds < GameState.dispatch_cost() + _committed_funds():
+			dispatch_btn.text = "紧急调度 · %d 万（含待打出预算不足）" % GameState.dispatch_cost()
 			dispatch_btn.disabled = true
 		else:
 			# 价格是**递增**的：本局每用过一次 +10 万，所以这里必须每次重算
@@ -5988,7 +6411,7 @@ func _on_refresh_hand() -> void:
 	_refresh_used_turn = GameState.turn
 	current_hand = GameState.draw_cards(7 + int(Talents.get_bonus("cards")))
 	play_deal_anim = true
-	_build_hand_panel()
+	_build_hand_panel(true)
 	_play_refresh_break_animation()
 	_update_hud()
 
@@ -6020,14 +6443,14 @@ func _play_refresh_break_animation() -> void:
 		shard.pivot_offset = shard.size * 0.5
 		shard.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		cv.add_child(shard)
-		var tw := shard.create_tween()
+		var tw := Motion.tween(shard, "linear")
 		tw.set_parallel(true)
-		tw.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+		Motion.curve(tw, "power1.in")
 		var land := Vector2(shard.position.x + rng.randf_range(-46.0, 46.0), 780.0)
 		tw.tween_property(shard, "position", land, rng.randf_range(0.55, 0.95)).set_delay(rng.randf_range(0.0, 0.14))
 		tw.tween_property(shard, "rotation", shard.rotation + rng.randf_range(-3.2, 3.2), 0.9)
 		tw.tween_property(shard, "modulate:a", 0.0, 0.55).set_delay(0.4)
-		shard.create_tween().tween_callback(shard.queue_free).set_delay(1.4)
+		Motion.tween(shard, "linear").tween_callback(shard.queue_free).set_delay(1.4)
 	refresh_btn.modulate.a = 0.0
 
 
@@ -6115,6 +6538,7 @@ func _build_dispatch_panel() -> void:
 	box.add_child(dispatch_hint)
 
 	var scroll := ScrollContainer.new()
+	MotionScroll.attach(scroll)
 	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	box.add_child(scroll)
@@ -6165,69 +6589,75 @@ func _fill_dispatch_grid() -> void:
 	await get_tree().process_frame
 	for i in views.size():
 		var p: Control = views[i]
-		var tw := p.create_tween()
-		tw.set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+		var tw := Motion.tween(p, "enter", "arrival")
 		tw.tween_property(p, "scale", Vector2.ONE, 0.28).set_delay(i * 0.02)
 		tw.parallel().tween_property(p, "modulate:a", 1.0, 0.18).set_delay(i * 0.02)
 
 
-## 在调度面板里点一张牌 = 调度它（牌库那边点一下是看详情，这里直接买）。
-## 效果**不在这里生效** —— 到回合末由 _spawn_dispatched_cards() 与手牌一起结算，
-## 这样它才和常规出牌进同一段算分动画。
+## 调度面板点击后立即把牌放到桌面队列末尾；它与普通牌一样等「执行行动」再生效。
 func _on_dispatch_card_click(event: InputEvent, _view: Control, card: Dictionary) -> void:
 	if not (event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT):
 		return
 	if GameState.dispatch_card(str(card["id"])):
 		_close_dispatch_panel()
+		_sync_dispatched_stage_cards()
 		_update_hud()
 
 
-## 把本回合紧急调度买下的牌做成**真的卡面板**挂进手牌区、执行，并把下标塞进 played。
-## 这么做的好处：甩牌 / 逐张弹分 / 未选中的牌被收走 —— 三个环节全都自动带上它，
-## 不必另写一套并行演出，也就不会出现「调度牌的效果进了账、画面上却没有」。
-## ⚠ 必须在 _score_animating = true 之后调用，否则这些牌 emit 的 metrics_changed
-##   会把指标条先刷到中途值。
-func _spawn_dispatched_cards(played: Array) -> void:
+## 把已购买的紧急调度牌显示在桌面待打出队列中；效果延迟到本回合统一结算。
+func _sync_dispatched_stage_cards() -> void:
 	if GameState.dispatched_cards.is_empty():
 		return
 	for d in GameState.dispatched_cards:
 		var cid: String = str(d["card_id"])
+		var already_staged := false
+		for existing in card_infos:
+			if existing.get("dispatched", false) and str(existing["card_id"]) == cid:
+				already_staged = true
+				break
+		if already_staged:
+			continue
 		var card: Dictionary = GameState.card_by_id(cid)
 		if card.is_empty():
 			continue
-		# free = true：调度费在买的时候就付过了，且不占行动位（见 execute_action 的注释）
-		if not GameState.execute_action(cid, str(d["tier"]), true):
-			continue
-		# ⚠ _make_card 返回的是 {panel, cost_label} 字典，不是 PanelContainer ——
-		#   手牌那边也是这么取的（见 _build_hand_panel）。
 		var made: Dictionary = _make_card(card, str(d["tier"]))
 		var panel: PanelContainer = made["panel"]
+		panel.custom_minimum_size = Vector2(122.0, 165.0)
+		panel.size = Vector2(122.0, 165.0)
 		_bind_card_gyro(panel)
-		# ⚠ 必须与手牌用**同一个 pivot**（牌底中点）：甩牌的落点是
-		#   slot - panel.pivot_offset，手牌的 pivot 是 (61,165)（_layout_fan 设的）。
-		#   这里若留着默认的 (0,0)，调度牌就会比同排的牌右下各偏 61/165px ——
-		#   看着像"另起了一行"。踩过一次。
 		panel.pivot_offset = Vector2(61.0, 165.0)
-		# 起点放在手牌区中间偏下：紧接着会被甩牌动画拉去屏幕中央，
-		# 视觉上就是「它从手里一起飞出去」。**不要**调 _layout_fan ——
-		# 那会把整手牌重新排一遍，白白多一段动画。
 		panel.position = Vector2(card_box.size.x * 0.5 - 61.0, card_box.size.y - 168.0)
-		panel.mouse_filter = Control.MOUSE_FILTER_IGNORE   # 调度牌不接受点击（也不该被取消）
 		card_box.add_child(panel)
+		_apply_gold_frame(panel)
 		card_infos.append({
 			"panel": panel, "card_id": cid, "cost_label": made["cost_label"],
-			"base_pos": panel.position, "theta": 0.0, "radial": Vector2(0.0, -1.0),
-			"selected": true, "shaking": false, "hovered": false,
-			"tier": str(d["tier"]), "flying": true, "dispatched": true,
-			"sandpan_state": wetland.capture_state(),
+			"base_pos": panel.position, "theta": 0.0, "radial": Vector2.UP,
+			"selected": true, "staged_by_drag": true, "stage_order": _next_stage_order(),
+			"shaking": false, "hovered": false, "tier": str(d["tier"]), "dispatched": true,
 		})
-		played.append(card_infos.size() - 1)
+	_layout_fan()
+	_update_selected_label()
 
 
-func _build_hand_panel() -> void:
+func _build_hand_panel(preserve_staged: bool = false) -> void:
+	# A new hand owns a fresh input lifecycle; don't leave a pointer capture on old panels.
+	_card_press_panel = null
+	_card_press_elapsed = 0.0
+	_card_dragging = false
+	_card_drag_index = -1
+	var staged_infos: Array = []
+	for info in card_infos:
+		if preserve_staged and info.get("staged_by_drag", false):
+			staged_infos.append(info)
 	for c in card_box.get_children():
-		c.queue_free()
-	card_infos = []
+		var keep_panel := false
+		for staged in staged_infos:
+			if staged.get("panel") == c:
+				keep_panel = true
+				break
+		if not keep_panel:
+			c.queue_free()
+	card_infos = staged_infos
 	# 发牌就按当前排序模式排好。排序模式是全局的（与牌库共用），
 	# 所以新一局/新一回合发牌都沿用上一次的选择，不会又变回无序抽取的顺序。
 	# 比较器是全序（最后按 id 兜底），所以这里的结果与 _sort_hand_cards 的结果一致。
@@ -6246,6 +6676,7 @@ func _build_hand_panel() -> void:
 		})
 	_refresh_hand_display()      # 用当前档位把牌面的价格填上（加成只在悬停提示里）
 	_layout_fan.call_deferred()
+	_sync_dispatched_stage_cards()
 	_update_hud()
 
 
@@ -6260,9 +6691,20 @@ func _screen_to_card_box(screen_pt: Vector2) -> Vector2:
 	return screen_pt - card_box.global_position
 
 
-func _layout_fan() -> void:
-	var n := card_infos.size()
+func _layout_fan(animate_hand: bool = false) -> void:
+	var fan_infos: Array = []
+	var staged_infos: Array = []
+	for info in card_infos:
+		if info.get("staged_by_drag", false):
+			staged_infos.append(info)
+		else:
+			fan_infos.append(info)
+	staged_infos.sort_custom(func(a, b): return int(a.get("stage_order", 0)) < int(b.get("stage_order", 0)))
+	var n := fan_infos.size()
 	if n == 0:
+		_layout_staged_cards(staged_infos)
+		_fan_layout_size = card_box.size
+		if sandpan_view: sandpan_view.invalidate_layout()
 		return
 	var card_w := 122.0
 	var card_h := 165.0
@@ -6282,11 +6724,12 @@ func _layout_fan() -> void:
 		var theta := -total_span / 2.0 + delta_theta * float(i)
 		pivots.append(Vector2(sin(theta), -cos(theta)) * radius)
 		thetas.append(theta)
-		var panel: PanelContainer = card_infos[i]["panel"]
+		var panel: PanelContainer = fan_infos[i]["panel"]
 		panel.size = Vector2(card_w, card_h)
 		panel.custom_minimum_size = Vector2(card_w, card_h)
 		panel.pivot_offset = Vector2(card_w / 2.0, card_h)
-		panel.rotation = theta
+		if not animate_hand:
+			panel.rotation = theta
 
 	# 第二遍：算出旋转后整体的真实包围盒（不依赖手算常数）
 	var corners := [
@@ -6310,11 +6753,21 @@ func _layout_fan() -> void:
 	var dx: float = area_size.x / 2.0 - (min_x + max_x) / 2.0
 	var dy: float = (area_size.y - bottom_margin) - max_y
 	for i in n:
-		var panel: PanelContainer = card_infos[i]["panel"]
-		panel.position = pivots[i] + Vector2(dx, dy) - panel.pivot_offset
-		card_infos[i]["base_pos"] = panel.position
-		card_infos[i]["theta"] = thetas[i]
-		card_infos[i]["radial"] = Vector2(sin(thetas[i]), -cos(thetas[i]))
+		var panel: PanelContainer = fan_infos[i]["panel"]
+		var target: Vector2 = pivots[i] + Vector2(dx, dy) - panel.pivot_offset
+		fan_infos[i]["base_pos"] = target
+		fan_infos[i]["theta"] = thetas[i]
+		fan_infos[i]["radial"] = Vector2(sin(thetas[i]), -cos(thetas[i]))
+		if animate_hand:
+			# Retarget from the current pose, preserving spring momentum even when
+			# another card leaves or returns before the previous reflow has settled.
+			var raised: bool = fan_infos[i].get("hovered", false) or fan_infos[i]["selected"]
+			var goal: Vector2 = target + fan_infos[i]["radial"] * (CARD_RAISE if raised else 0.0)
+			MotionSpring.to(panel, "position", goal, 430.0, 32.0)
+			MotionSpring.to(panel, "rotation", thetas[i], 460.0, 34.0)
+		else:
+			panel.position = target
+	_layout_staged_cards(staged_infos)
 	_fan_layout_size = area_size
 	if sandpan_view: sandpan_view.invalidate_layout()
 	# 发牌入场动画（从下方滑入 + 逐张错开）
@@ -6323,24 +6776,57 @@ func _layout_fan() -> void:
 		_play_deal_animation()
 
 
+func _layout_staged_cards(staged_infos: Array) -> void:
+	if staged_infos.is_empty() or card_box == null:
+		return
+	var spacing := 132.0
+	if staged_infos.size() > 1:
+		spacing = minf(132.0, maxf(96.0, (card_box.size.x - 122.0) / float(staged_infos.size() - 1)))
+	var row_y := -198.0
+	for i in staged_infos.size():
+		var info: Dictionary = staged_infos[i]
+		var panel: PanelContainer = info["panel"]
+		var center_x := card_box.size.x * 0.5 + (float(i) - float(staged_infos.size() - 1) * 0.5) * spacing
+		var target := Vector2(center_x - panel.pivot_offset.x, row_y)
+		if _card_dragging and panel == _card_press_panel:
+			panel.z_index = 1000
+			continue
+		info["base_pos"] = target
+		info["theta"] = 0.0
+		info["radial"] = Vector2.UP
+		# Keep the newest queue slots visually above overlapping earlier cards.
+		# _update_card_stack can reorder children for hand picking, so use an explicit
+		# staged z band as well as the ordered position targets.
+		panel.z_index = 100 + i
+		MotionSpring.stop(panel, "rotation")
+		MotionSpring.stop(panel, "scale")
+		panel.rotation = 0.0
+		panel.scale = Vector2.ONE
+		MotionSpring.to(panel, "position", target, 440.0, 28.0)
+
+
 ## 发牌入场：牌从下方滑入，逐张错开（EASE_OUT，玩家等待中的入场用稍长时长）
 func _play_deal_animation() -> void:
+	var deal_index := 0
 	for i in card_infos.size():
 		var info: Dictionary = card_infos[i]
+		if info.get("staged_by_drag", false):
+			continue
 		var panel: PanelContainer = info["panel"]
 		var target: Vector2 = info["base_pos"]
 		panel.position = target + Vector2(0, 90.0)
 		panel.modulate.a = 0.0
-		var tw := panel.create_tween()
+		var tw := Motion.tween(panel, "linear")
 		tw.set_parallel(true)
-		tw.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
-		tw.tween_property(panel, "position", target, 0.34).set_delay(i * 0.045)
-		tw.tween_property(panel, "modulate:a", 1.0, 0.22).set_delay(i * 0.045)
+		Motion.curve(tw, "power2.out")
+		tw.tween_property(panel, "position", target, 0.34).set_delay(deal_index * 0.045)
+		tw.tween_property(panel, "modulate:a", 1.0, 0.22).set_delay(deal_index * 0.045)
+		deal_index += 1
 
 
 ## 容器尺寸变化时重排（确保扇形始终居中）
 func _on_card_box_resized() -> void:
-	if not card_infos.is_empty():
+	if not _card_dragging and not card_infos.is_empty():
 		_layout_fan()
 
 
@@ -6354,8 +6840,8 @@ const LEVER_STATE_TEXT := {
 	"effective": "有效投入 · 全价",
 	"deep": "深度投入 · 双倍价",
 }
-## 左下角「出牌档位」拉杆。外观照拨杆做：一条木轨 + 三个刻度 + 一根左右平移的手柄（始终竖直）。
-## 交互：点最左那一格 = 基础投入，中间 = 有效投入，最右 = 深度投入；按住手柄左右拖也跟手。
+## 左下角「出牌档位」拉杆。半圆木座固定在中线，木杆绕轴左右摆到三个投入档。
+## 交互：按住杆身拖动时角度跟手，释放后吸附到对应档位并带弹性回落。
 ## ⚠ 只影响**之后选中的牌**。已选中的牌在选的那一刻就把档位记进了 card_infos[i]["tier"]，
 ##   所以一回合内可以先拨到基础档选两张便宜牌、再拨到深度档选一张大牌。
 func _build_tier_lever(holder: Node) -> void:
@@ -6366,7 +6852,7 @@ func _build_tier_lever(holder: Node) -> void:
 	tier_lever.anchor_bottom = 1.0
 	tier_lever.offset_left = 14
 	tier_lever.offset_right = 226
-	tier_lever.offset_top = -136
+	tier_lever.offset_top = -146
 	tier_lever.offset_bottom = -14
 	_panel_style(tier_lever, Color(0.22, 0.16, 0.10, 0.96))
 	tier_lever.visible = false
@@ -6393,36 +6879,24 @@ func _build_tier_lever(holder: Node) -> void:
 	lever_track = Control.new()
 	# 高度要同时容得下「手柄」（上半）+「基础/有效/深度」小字（下半），
 	# 否则手柄会压在档位文字上（实测截图里压到过「深度」）。
-	lever_track.custom_minimum_size = Vector2(0, 62)
+	lever_track.custom_minimum_size = Vector2(0, 72)
 	lever_track.mouse_filter = Control.MOUSE_FILTER_STOP       # 整条轨都能点/拖
 	lever_track.resized.connect(_layout_lever_handle)
 	lever_track.gui_input.connect(_on_lever_input)
 	lvb.add_child(lever_track)
 
-	# 木轨：横贯整条轨，居中 6px 厚
-	var rail := ColorRect.new()
-	rail.color = Color(0.40, 0.29, 0.17, 1.0)
-	rail.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	rail.anchor_left = 0.0
-	rail.anchor_right = 1.0
-	rail.anchor_top = 0.5
-	rail.anchor_bottom = 0.5
-	rail.offset_top = -4
-	rail.offset_bottom = 4
-	lever_track.add_child(rail)
-
-	# 三个刻度（锚点固定在 1/6、3/6、5/6，自动跟随宽度）
+	# 三个落档标签；木质半圆支座和拨杆由嵌入的 Godot 3D 视口绘制。
 	for i in LEVER_TIERS.size():
 		var tick := ColorRect.new()
 		var fx: float = (2.0 * float(i) + 1.0) / 6.0
 		tick.anchor_left = fx
 		tick.anchor_right = fx
-		tick.anchor_top = 0.5
-		tick.anchor_bottom = 0.5
+		tick.anchor_top = 0.0
+		tick.anchor_bottom = 0.0
 		tick.offset_left = -1
 		tick.offset_right = 1
-		tick.offset_top = -7
-		tick.offset_bottom = 7
+		tick.offset_top = 5
+		tick.offset_bottom = 9
 		tick.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		tick.set_meta("lever_tier_index", i)
 		lever_track.add_child(tick)
@@ -6444,35 +6918,12 @@ func _build_tier_lever(holder: Node) -> void:
 		lever_track.add_child(lab)
 		lever_slot_btns.append(lab)      # 同上：标签也一起高亮
 
-	# 手柄：杆 + 头，支点在底部中心，靠 rotation 做倾倒
+	# 真实 3D 木杆与半圆木座。父轨仍负责点击和拖动输入。
 	lever_handle = Control.new()
-	lever_handle.custom_minimum_size = Vector2(28, 34)
-	lever_handle.size = Vector2(28, 34)
-	lever_handle.pivot_offset = Vector2(14, 32)
+	lever_handle.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	lever_handle.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	lever_handle.set_script(WoodenTierLever)
 	lever_track.add_child(lever_handle)
-
-	var stick := ColorRect.new()
-	stick.color = Color(0.74, 0.62, 0.44, 1.0)
-	stick.position = Vector2(10, 2)
-	stick.size = Vector2(8, 30)
-	stick.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	lever_handle.add_child(stick)
-
-	var knob := Panel.new()
-	var ksb := StyleBoxFlat.new()
-	ksb.bg_color = Color(0.56, 0.41, 0.23, 1.0)
-	ksb.border_color = Color(1.0, 0.86, 0.42, 1.0)
-	ksb.set_border_width_all(2)
-	ksb.corner_radius_top_left = 6
-	ksb.corner_radius_top_right = 6
-	ksb.corner_radius_bottom_left = 6
-	ksb.corner_radius_bottom_right = 6
-	knob.add_theme_stylebox_override("panel", ksb)
-	knob.position = Vector2(4, 0)
-	knob.size = Vector2(20, 17)
-	knob.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	lever_handle.add_child(knob)
 
 	lever_state_label = _make_label("", 12, Color(1.0, 0.92, 0.60))
 	lever_state_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -6481,28 +6932,31 @@ func _build_tier_lever(holder: Node) -> void:
 	_refresh_lever_visuals(false)
 
 
-## 点在轨上的哪个位置 → 吸附到最近的一格（按住拖动时也走这里，所以能"拖着拨"）
-## ⚠ 点击与拖动的动画策略**不同**：
-##   点击 = 手柄**滑过去**（0.24s 缓入缓出，看得出"拉杆被拨动"）；
-##   拖动 = 手柄**跟手**，不能播动画 —— 否则手柄会一直慢半拍地追鼠标，手感是坏的。
+## 拖动时木杆即时跟手，松开后选择最近档位并由弹簧吸回定位槽。
 func _on_lever_input(event: InputEvent) -> void:
 	if _current_phase != "allocate" or _paused or GameState.game_over:
 		return
-	var pressed := false
-	var pos := Vector2.ZERO
-	var is_click := false
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
-		pressed = event.pressed
-		pos = event.position
-		is_click = true
-	elif event is InputEventMouseMotion and (event.button_mask & MOUSE_BUTTON_MASK_LEFT) != 0:
-		pressed = true
-		pos = event.position
-	if not pressed:
-		return
+		if event.pressed:
+			if Time.get_ticks_msec() - _lever_cooldown_ms < LEVER_COOLDOWN_MS: return
+			_lever_dragging = true
+			_drag_tier_lever(event.position.x)
+		elif _lever_dragging:
+			_lever_dragging = false
+			var w: float = maxf(1.0, lever_track.size.x)
+			var idx := clampi(int(round(event.position.x / w * 3.0 - 0.5)), 0, LEVER_TIERS.size() - 1)
+			_set_play_tier(LEVER_TIERS[idx], true)
+			# 即使松回原档，杆身也会从拖动姿势弹回定位槽。
+			_place_lever_handle(true)
+	elif event is InputEventMouseMotion and _lever_dragging and (event.button_mask & MOUSE_BUTTON_MASK_LEFT) != 0:
+		_drag_tier_lever(event.position.x)
+
+
+func _drag_tier_lever(local_x: float) -> void:
+	if lever_track == null or lever_handle == null: return
 	var w: float = maxf(1.0, lever_track.size.x)
-	var idx := clampi(int(floor(pos.x / (w / 3.0))), 0, LEVER_TIERS.size() - 1)
-	_set_play_tier(LEVER_TIERS[idx], is_click)
+	var progress := clampf((local_x - w * 0.5) / (w / 3.0), -1.0, 1.0)
+	lever_handle.set_drag_angle(-progress * WoodenTierLever.MAX_SWING_DEGREES)
 
 
 ## 手柄按当前档位归位（尺寸变化时立刻归位，不播动画）
@@ -6514,25 +6968,8 @@ func _layout_lever_handle() -> void:
 
 func _place_lever_handle(animate: bool) -> void:
 	var idx: int = maxi(0, LEVER_TIERS.find(play_tier))
-	var w: float = maxf(1.0, lever_track.size.x)
-	var cx: float = w * (2.0 * float(idx) + 1.0) / 6.0
-	# 手柄底部落在「小字标签」上方，别压字（轨道下半 18px 留给标签）
-	var target_pos := Vector2(cx - lever_handle.size.x / 2.0, lever_track.size.y - 52.0)
-	# 手柄**始终竖直**，只左右平移。之前让它跟着倾斜 ±29°，实测在基础/深度档看着别扭：
-	# 圆头跟着转、还会离开它对应的刻度。竖直滑动读起来干净，位置同样一眼可辨。
-	lever_handle.rotation = 0.0
-	# 先掐掉上一次的滑动动画：连续点两格时，两条 tween 会抢同一个 position，
-	# 结果互相拉扯、手柄在半路抖一下才到位。
-	if _lever_slide_tween != null and _lever_slide_tween.is_valid():
-		_lever_slide_tween.kill()
-		_lever_slide_tween = null
-	if not animate:
-		lever_handle.position = target_pos
-		return
-	# 0.24s + 缓入缓出：太短（0.16）看着还是"跳"，太长会拖住操作节奏
-	_lever_slide_tween = lever_handle.create_tween()
-	_lever_slide_tween.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_IN_OUT)
-	_lever_slide_tween.tween_property(lever_handle, "position", target_pos, 0.24)
+	# 半圆木座固定在中线，杆身绕中心轴摆向左、中、右三个档位。
+	lever_handle.snap_to_tier(idx, animate)
 
 
 ## 切档：更新手柄姿态、刻度/标签高亮、状态文字，并刷新手牌上还没被选中的牌。
@@ -6684,48 +7121,36 @@ func _find_card_info(panel: PanelContainer) -> Dictionary:
 	return {}
 
 
-## 点击卡牌：切换选中（可取消）
+## 按下后移动/长按进入拖拽；短点击不再选择卡牌。
 func _on_card_gui_input(event: InputEvent, panel: PanelContainer) -> void:
 	if _score_animating or _sort_animating:
 		return      # 算分动画 / 手牌换位进行中，牌正在飞，不接受选中切换
 	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
-		_toggle_card(panel)
+		if _card_press_panel != null:
+			return
+		_card_press_panel = panel
+		_card_press_origin = get_viewport().get_mouse_position()
+		_card_press_elapsed = 0.0
 
 
-func _toggle_card(panel: PanelContainer) -> void:
-	var info: Dictionary = _find_card_info(panel)
+func _card_selection_error(info: Dictionary) -> String:
 	if info.is_empty():
-		return
-	if info["selected"]:
-		info["selected"] = false
-		info["tier"] = ""              # 取消选中 → 这张牌重新跟随拉杆
-		_remove_gold_frame(panel)
-		_update_card_face(info)
-	else:
-		# 行动位上限（随难度变化：简单档 4，普通/困难 3 —— 见 MAX_ACTIONS_BY_DIFFICULTY）
-		var slots := GameState.action_slots()
-		if _selected_count() >= slots:
-			_reject_card(panel, "行动位已满（本难度每回合最多 %d 个）" % slots)
-			return
-		# 资金检查：已选卡的总花费 + 这张，不能超过可用资金
-		# ★ 用拉杆当前档位算价 —— 基础档便宜、深度档贵，选之前先把拉杆拨对
-		var cost := GameState.tier_cost(info["card_id"], play_tier)
-		if _committed_funds() + cost > GameState.funds:
-			_reject_card(panel, "资金不足（还需 %d 万，可用 %d 万）" % [cost, GameState.funds - _committed_funds()])
-			return
-		info["selected"] = true
-		info["tier"] = play_tier         # ★ 选中的那一刻把档位锁定在这张牌上
-		_apply_gold_frame(panel)
-		_update_card_face(info)
-	_update_selected_label()
+		return "无法识别这张牌"
+	var slots := GameState.action_slots()
+	if _selected_count() >= slots:
+		return "行动位已满（本难度每回合最多 %d 个）" % slots
+	var cost := GameState.tier_cost(info["card_id"], play_tier)
+	if _committed_funds() + cost > GameState.funds:
+		return "资金不足（还需 %d 万，可用 %d 万）" % [cost, GameState.funds - _committed_funds()]
+	return ""
 
 
 ## 已选卡牌的总花费（万）
 func _committed_funds() -> int:
 	var total := 0
 	for info in card_infos:
-		if info["selected"]:
-			# 每张牌按它自己锁定的档位算 —— 一回合里混着打不同档也能算对预算
+		if info["selected"] and not info.get("dispatched", false):
+			# 调度牌已经单独付款，不重复占用回合资金预算。
 			total += GameState.tier_cost(info["card_id"], _info_tier(info))
 	return total
 
@@ -6733,39 +7158,46 @@ func _committed_funds() -> int:
 func _selected_count() -> int:
 	var n := 0
 	for info in card_infos:
-		if info["selected"]:
+		if info["selected"] and not info.get("dispatched", false):
 			n += 1
 	return n
 
 
 func _update_selected_label() -> void:
 	var used := _committed_funds()
-	selected_label.text = "已选：%d/%d　预算：%d/%d 万" % [
-		_selected_count(), GameState.action_slots(), used, GameState.funds]
+	var pending := 0
+	for info in card_infos:
+		if info.get("selected", false):
+			pending += 1
+	var queue_text := "拖牌到上方桌面待打出"
+	if pending > 0:
+		queue_text = "桌面待打出：%d 张" % pending
+	selected_label.text = "%s\n行动位 %d/%d · 预算 %d/%d 万" % [
+		queue_text, _selected_count(), GameState.action_slots(), used, GameState.funds]
 
 
-## 拒绝选中：红框闪烁 + 左右抖动 + 提示原因
+## 拒绝选中：红框提示 + 弹簧受力回摆 + 提示原因
 func _reject_card(panel: PanelContainer, reason: String) -> void:
 	var info: Dictionary = _find_card_info(panel)
 	if info.is_empty() or info.get("shaking", false):
 		return
 	info["shaking"] = true
+	# The impulse owns the card pose until it settles; stop hover springs to avoid two drivers fighting.
+	MotionSpring.stop(panel, "position")
+	MotionSpring.stop(panel, "rotation")
+	MotionSpring.stop(panel, "scale")
 	var sb := panel.get_theme_stylebox("panel")
 	var old_border := Color.WHITE
 	if sb is StyleBoxFlat:
 		old_border = sb.border_color
 		sb.border_color = Color(0.92, 0.26, 0.22)
-	var base: Vector2 = panel.position
-	var tw := panel.create_tween()
-	tw.set_trans(Tween.TRANS_SINE)
-	for k in 3:
-		tw.tween_property(panel, "position:x", base.x + 9.0, 0.045)
-		tw.tween_property(panel, "position:x", base.x - 9.0, 0.045)
-	tw.tween_property(panel, "position:x", base.x, 0.05)
-	tw.tween_callback(func() -> void:
+	var impact := preload("res://scripts/motion_impact.gd").new()
+	impact.direction = -1.0 if get_viewport().get_mouse_position().x >= panel.get_global_rect().get_center().x else 1.0
+	impact.finished.connect(func() -> void:
 		if is_instance_valid(sb):
 			sb.border_color = old_border
 		info["shaking"] = false)
+	panel.add_child(impact)
 	_flash_hint(reason)
 
 
@@ -6773,7 +7205,7 @@ func _reject_card(panel: PanelContainer, reason: String) -> void:
 func _flash_hint(text: String) -> void:
 	selected_label.add_theme_color_override("font_color", Color(1.0, 0.42, 0.36))
 	selected_label.text = text
-	var tw := selected_label.create_tween()
+	var tw := Motion.tween(selected_label, "linear")
 	tw.tween_interval(1.2)
 	tw.tween_callback(func() -> void:
 		selected_label.add_theme_color_override("font_color", Color(1, 0.9, 0.5))
@@ -6802,6 +7234,12 @@ func _update_card_hover(delta: float, mouse_override: Vector2 = Vector2.INF) -> 
 		var panel: PanelContainer = info["panel"]
 		if not is_instance_valid(panel):
 			continue
+		if info.get("dragging", false):
+			continue
+		# Staged cards are laid out in their own table row and never participate in fan hover.
+		if info.get("staged_by_drag", false):
+			info["hovered"] = false
+			continue
 		# flying = 正在被动画独占控制（算分飞牌 / 手牌收拢发牌），别做悬停命中
 		if info.get("shaking", false) or info.get("flying", false):
 			info["hovered"] = false
@@ -6816,6 +7254,8 @@ func _update_card_hover(delta: float, mouse_override: Vector2 = Vector2.INF) -> 
 			hits.append(i)
 	# 2) 重叠时只留最上层那张：从子列表末尾（最后绘制 = 最上层）往前找第一个命中的
 	var hovered_idx: int = -1
+	if _card_dragging:
+		hits.clear()
 	if hits.size() == 1:
 		hovered_idx = hits[0]
 	elif hits.size() > 1:
@@ -6835,8 +7275,19 @@ func _update_card_hover(delta: float, mouse_override: Vector2 = Vector2.INF) -> 
 		#   会与飞行 tween 逐帧打架（表现为牌往目标飞一点又被拽回来，来回抖）。
 		#   算分动画靠 _score_animating 整段挡掉了本函数所以看不出问题，
 		#   手牌收拢发牌没有那种全局开关，只能靠这个逐张的标志。
-		if not is_instance_valid(panel) or info.get("shaking", false) or info.get("flying", false):
+		if not is_instance_valid(panel):
+			continue
+		if info.get("staged_by_drag", false):
+			info["hovered"] = false
+			if not info.get("shaking", false) and not info.get("flying", false):
+				var staged_active: bool = bool(info.get("dragging", false)) or _point_in_card(panel, info["base_pos"], mouse_global, box_tf)
+				_step_card_gyro(panel, _card_gyro_target(panel, mouse_global, staged_active, true), delta)
+			continue
+		if info.get("shaking", false) or info.get("flying", false):
 			continue  # 抖动 / 飞行期间不要抢它的 position
+		if info.get("dragging", false):
+			_step_card_gyro(panel, _card_gyro_target(panel, mouse_global, true, true), delta)
+			continue
 		var hovering: bool = (i == hovered_idx)
 		info["hovered"] = hovering
 		panel.get_theme_stylebox("panel").set_meta("card_outline", hovering or info["selected"])
@@ -6844,15 +7295,19 @@ func _update_card_hover(delta: float, mouse_override: Vector2 = Vector2.INF) -> 
 		var raised: bool = hovering or info["selected"]
 		# 弹起方向：沿径向向外（远离圆心，即向上弹出）
 		var target: Vector2 = info["base_pos"] + info["radial"] * (CARD_RAISE if raised else 0.0)
-		panel.position = panel.position.lerp(target, 1.0 - exp(-12.0 * delta))
-		var s: float = 1.06 if hovering else 1.0
-		panel.scale = panel.scale.lerp(Vector2(s, s), 1.0 - exp(-14.0 * delta))
+		if _card_dragging:
+			target += _card_drag_neighbor_offset(info)
+		# Preserve momentum when the pointer changes cards quickly. Retargeting the
+		# same spring each frame keeps hover/selection handoffs continuous.
+		MotionSpring.to(panel, "position", target, 430.0, 32.0)
+		var s: float = 1.08 if hovering else 1.0
+		MotionSpring.to(panel, "scale", Vector2(s, s), 390.0, 30.0)
 		var tilt: float = info["theta"]
 		if hovering:
 			tilt *= 0.65
-		panel.rotation = lerp_angle(panel.rotation, tilt, 1.0 - exp(-15.0 * delta))
+		MotionSpring.to(panel, "rotation", tilt, 460.0, 34.0)
 		# 陀螺仪：悬停那一张跟着鼠标做 3D 透视倾斜（与牌库 / 知识卡图鉴同一套系数）
-		_step_card_gyro(panel, _card_gyro_target(panel, mouse_global, hovering), delta)
+		_step_card_gyro(panel, _card_gyro_target(panel, mouse_global, hovering, true), delta)
 	_update_card_stack()
 
 
@@ -6865,6 +7320,23 @@ func _decay_hand_gyro(delta: float) -> void:
 		_step_card_gyro(panel, Vector2.ZERO, delta)
 
 
+## Give cards near the moving card room to breathe; spring targets return to the fan on release.
+func _card_drag_neighbor_offset(info: Dictionary) -> Vector2:
+	if not _card_dragging or info.get("dragging", false) or not _is_hand_drop_target(_card_drag_mouse):
+		return Vector2.ZERO
+	var panel: PanelContainer = info["panel"]
+	var drag_x := _screen_to_card_box(_card_drag_mouse).x
+	var card_x: float = float(info["base_pos"].x) + panel.pivot_offset.x
+	var delta_x := card_x - drag_x
+	if is_zero_approx(delta_x):
+		return Vector2.ZERO
+	var reach := 150.0
+	var influence := 1.0 - clampf(absf(delta_x) / reach, 0.0, 1.0)
+	# Ease the pressure so neighbours peel away progressively instead of snapping to slots.
+	influence = influence * influence * (3.0 - 2.0 * influence)
+	return Vector2(signf(delta_x) * 30.0 * influence, -7.0 * influence)
+
+
 ## 手牌分三层叠放（像斗地主那样，选中的牌整体浮起一排）：
 ##   底层 = 未选中的牌 → 中层 = 已选中的牌 → 顶层 = 鼠标正悬停的那张
 ## Godot 里兄弟节点越靠后越晚绘制、也就越在上层，所以把三组按这个顺序排进子列表即可。
@@ -6875,9 +7347,14 @@ func _update_card_stack() -> void:
 		return
 	var front: PanelContainer = null
 	for info in card_infos:
-		if info.get("hovered", false) and is_instance_valid(info["panel"]):
+		if info.get("dragging", false) and is_instance_valid(info["panel"]):
 			front = info["panel"]
 			break
+	if front == null:
+		for info in card_infos:
+			if info.get("hovered", false) and is_instance_valid(info["panel"]):
+				front = info["panel"]
+				break
 	var plain: Array = []   # 未选中
 	var picked: Array = []  # 已选中
 	for info in card_infos:
@@ -6916,9 +7393,9 @@ func _apply_gold_frame(panel: PanelContainer) -> void:
 	_stop_card_glow(panel)
 	var sb := VisualTheme.card_style(true)
 	panel.add_theme_stylebox_override("panel", sb)
-	var tw := panel.create_tween().set_loops()
+	var tw := Motion.tween(panel, "pulse", "selection").set_loops()
 	panel.set_meta("selection_glow", tw)
-	tw.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+	Motion.curve(tw, "sine.inOut")
 	tw.tween_property(sb, "border_color", Color("fff3b0"), 0.8)
 	tw.tween_property(sb, "border_color", VisualTheme.GOLD, 0.8)
 
@@ -6945,24 +7422,21 @@ func _finish_turn() -> void:
 	#   注意与下面那个 before 的区别 —— 那个取在 execute_action 之后，是弹窗文案用的旧口径。
 	var before_all: Dictionary = GameState.metrics.duplicate()
 	var failed: Array = []
-	var played: Array = []      # 成功执行的卡片下标（甩牌与逐张弹分用）
+	var played: Array = []      # 按桌面摆放顺序成功执行的卡片下标
+	var staged_indices := _ordered_staged_indices()
 	# ★ 必须在 execute_action 之前置位：否则每张牌 emit 的 metrics_changed
 	#   会把指标条先刷到中途值，动画还没开始就已经跳过了。
 	_score_animating = true
-	for i in card_infos.size():
+	for i in staged_indices:
 		var info: Dictionary = card_infos[i]
-		if info["selected"]:
-			if GameState.execute_action(info["card_id"], _info_tier(info)):
-				info["sandpan_state"] = wetland.capture_state()
-				played.append(i)
-			else:
-				failed.append(info["card_id"])
-			if GameState.game_over:
-				break   # 已经判负，剩下的牌不再执行
-
-	# 紧急调度买下的牌：不占行动位，所以不进上面那个循环；
-	# 但**要和手牌一起进同一段算分动画**（这是这一手牌的一部分），见 _spawn_dispatched_cards。
-	_spawn_dispatched_cards(played)
+		var is_dispatched: bool = info.get("dispatched", false)
+		if GameState.execute_action(info["card_id"], _info_tier(info), is_dispatched):
+			info["sandpan_state"] = wetland.capture_state()
+			played.append(i)
+		else:
+			failed.append(info["card_id"])
+		if GameState.game_over:
+			break   # 已经判负，剩下的牌不再执行
 
 	# 成就判定放在判负早退**之前**：玩家确实打出了三张同类别，
 	# 哪怕这一手同时把自己打崩了，成就也该照给。
@@ -7150,14 +7624,14 @@ func _play_score_animation(ledger: Array, before_all: Dictionary, played: Array,
 		var slot := Vector2(vp.x * 0.5 + (float(k) - float(n_played - 1) * 0.5) * spacing, slot_y)
 		var target: Vector2 = _screen_to_card_box(slot) - panel.pivot_offset
 		var d: float = k * FLY_LAG * ds
-		var tw := panel.create_tween()
-		tw.set_trans(Tween.TRANS_QUART).set_ease(Tween.EASE_OUT)
+		var tw := Motion.tween(panel, "linear")
+		Motion.curve(tw, "power3.out")
 		tw.tween_property(panel, "position", target + Vector2(0, -FLY_LEAD), FLY_DUR * 0.70 * ds).set_delay(d)
 		# 末段换成 BACK/EASE_OUT：越过落点再弹回来 —— 这一下就是「砸在桌上」
-		tw.set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+		Motion.curve(tw, "back.out")
 		tw.tween_property(panel, "position", target, FLY_DUR * 0.30 * ds)
-		var tw_rot := panel.create_tween()
-		tw_rot.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+		var tw_rot := Motion.tween(panel, "linear")
+		Motion.curve(tw_rot, "power2.out")
 		tw_rot.tween_property(panel, "rotation", 0.0, FLY_DUR * 0.85 * ds).set_delay(d)
 		# 甩牌落桌：闷响，比叮低一档，做"拍在桌上"的质感
 		play_sfx("land", 1.0 + 0.05 * float(k), -4.0)
@@ -7178,9 +7652,9 @@ func _play_score_animation(ledger: Array, before_all: Dictionary, played: Array,
 		# 最后一张的延迟会拖过 T_FLY_END，跟后面第一处代次校验抢时序。
 		var du: float = float(dismissed) * DISMISS_LAG
 		dismissed += 1
-		var tw_u := panel_u.create_tween()
+		var tw_u := Motion.tween(panel_u, "linear")
 		tw_u.set_parallel(true)
-		tw_u.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_IN)
+		Motion.curve(tw_u, "power2.in")
 		tw_u.tween_property(panel_u, "position:y", panel_u.position.y + DISMISS_DY, DISMISS_DUR).set_delay(du)
 		tw_u.tween_property(panel_u, "modulate:a", 0.0, DISMISS_DUR * 0.75).set_delay(du)
 		tw_u.tween_property(panel_u, "scale", Vector2(0.88, 0.88), DISMISS_DUR).set_delay(du)
@@ -7278,15 +7752,15 @@ func _play_metric_settle(metric: String, by_phase: Dictionary, before_all: Dicti
 	# 图标 pivot 必须运行时取：容器会把图标纵向拉伸，写死尺寸会绕着错的点缩放
 	if is_instance_valid(icon):
 		icon.pivot_offset = icon.size * 0.5
-		var ti := icon.create_tween()
-		ti.set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+		var ti := Motion.tween(icon, "linear")
+		Motion.curve(ti, "back.out")
 		ti.tween_property(icon, "scale", Vector2(ICON_SCALE, ICON_SCALE), ICON_UP * ms)
-		ti.set_trans(Tween.TRANS_SINE)
+		Motion.curve(ti, "sine.inOut")
 		for r in 3:
 			ti.tween_property(icon, "rotation", deg_to_rad(7.0), ICON_SHAKE * ms)
 			ti.tween_property(icon, "rotation", deg_to_rad(-7.0), ICON_SHAKE * ms)
 		ti.tween_property(icon, "rotation", 0.0, ICON_SHAKE * ms)
-		ti.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+		Motion.curve(ti, "power2.out")
 		ti.tween_property(icon, "scale", Vector2.ONE, ICON_DOWN * ms)
 
 	# 四类来源：按展示顺序累计真值，最后一段强制对齐录制真值
@@ -7320,8 +7794,8 @@ func _play_metric_settle(metric: String, by_phase: Dictionary, before_all: Dicti
 		play_sfx("ding", 1.15 - 0.05 * float(i), -11.0)
 		var seg: float = gap
 		var target_v: int = int(shown[i]["target"])
-		var tbs := bar.create_tween()
-		tbs.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+		var tbs := Motion.tween(bar, "linear", "value")
+		Motion.curve(tbs, "power2.out")
 		tbs.tween_property(bar, "value", float(target_v), seg)
 		await get_tree().create_timer(seg).timeout
 
@@ -7336,12 +7810,12 @@ func _play_metric_settle(metric: String, by_phase: Dictionary, before_all: Dicti
 	# 合计的那一声是整段里最"重"的落定音（0dB 层里最低频），
 	# 其余都压在它之下，听感才是"噼啪数完 → 咚，落定"
 	play_sfx("ding", 0.85, -3.0)
-	var tbf := bar.create_tween()
-	tbf.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+	var tbf := Motion.tween(bar, "linear", "value")
+	Motion.curve(tbf, "power2.out")
 	tbf.tween_property(bar, "value", float(true_end), maxf(0.10 * ms, step * 0.25))
 	val.text = str(true_end)
-	var tv := val.create_tween()
-	tv.set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	var tv := Motion.tween(val, "linear")
+	Motion.curve(tv, "back.out")
 	tv.tween_property(val, "scale", Vector2(1.25, 1.25), 0.06 * ms)
 	tv.tween_property(val, "scale", Vector2.ONE, 0.08 * ms)
 	await get_tree().create_timer(maxf(0.0, step * 0.38)).timeout
@@ -7419,8 +7893,8 @@ func _place_receipt(row: VBoxContainer) -> void:
 	var target := Vector2(
 		rg.position.x - score_receipt.size.x - 10.0,
 		clampf(rg.get_center().y - score_receipt.size.y * 0.5, 6.0, vp.y - score_receipt.size.y - 6.0))
-	var tw := score_receipt.create_tween()
-	tw.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+	var tw := Motion.tween(score_receipt, "linear", "position")
+	Motion.curve(tw, "power2.out")
 	tw.tween_property(score_receipt, "position", target, 0.12 / METRIC_SPEED)
 
 
@@ -7428,8 +7902,8 @@ func _place_receipt(row: VBoxContainer) -> void:
 func _play_card_shake(panel: PanelContainer, amp: float) -> void:
 	const SHAKE_T := 0.035
 	var base: Vector2 = panel.position
-	var tw := panel.create_tween()
-	tw.set_trans(Tween.TRANS_SINE)
+	var tw := Motion.tween(panel, "linear")
+	Motion.curve(tw, "sine.inOut")
 	for i in 3:
 		tw.tween_property(panel, "position:x", base.x + amp, SHAKE_T)
 		tw.tween_property(panel, "position:x", base.x - amp, SHAKE_T)
@@ -7448,12 +7922,12 @@ func _play_delta_float(text: String, color: Color, anchor: Vector2, delay: float
 	l.modulate.a = 0.0
 	l.scale = Vector2(0.6, 0.6)
 	score_floats.add_child(l)
-	var tw := l.create_tween()
+	var tw := Motion.tween(l, "linear")
 	tw.set_parallel(true)
-	tw.set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	Motion.curve(tw, "back.out")
 	tw.tween_property(l, "scale", Vector2.ONE, 0.10).set_delay(delay)
 	tw.tween_property(l, "modulate:a", 1.0, 0.08).set_delay(delay)
-	tw.chain().set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN)
+	Motion.curve(tw.chain(), "sine.in")
 	tw.tween_property(l, "position:y", l.position.y - 26.0, 0.30)
 	tw.parallel().tween_property(l, "modulate:a", 0.0, 0.30)
 
@@ -7516,8 +7990,8 @@ func _show_knowledge(card_id: String) -> void:
 		card.scale = Vector2(0.65, 0.65)
 		card.rotation = -0.12
 		card.modulate.a = 0.0
-		var arrival := card.create_tween().set_parallel(true)
-		arrival.set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+		var arrival := Motion.tween(card, "linear").set_parallel(true)
+		Motion.curve(arrival, "back.out")
 		arrival.tween_property(card, "scale", Vector2.ONE, 0.65)
 		arrival.tween_property(card, "rotation", 0.0, 0.65)
 		arrival.tween_property(card, "modulate:a", 1.0, 0.35)
@@ -7652,20 +8126,20 @@ func _show_popup(title: String, body: String, button_text: String, on_continue: 
 	# 弹窗淡入 + 面板轻微弹入（玩家等待中的反馈，用稍长时长更从容）
 	popup_root.modulate.a = 0.0
 	popup_panel.scale = Vector2(0.94, 0.94)
-	var tw := popup_root.create_tween()
-	tw.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+	var tw := Motion.tween(popup_root, "linear", "opacity")
+	Motion.curve(tw, "power2.out")
 	tw.tween_property(popup_root, "modulate:a", 1.0, 0.18)
-	var tw2 := popup_panel.create_tween()
-	tw2.set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	var tw2 := Motion.tween(popup_panel, "linear", "scale")
+	Motion.curve(tw2, "back.out")
 	tw2.tween_property(popup_panel, "scale", Vector2.ONE, 0.24)
 	# 正文打字机效果：逐字从左到右、从上到下依次打出
 	popup_body.visible_ratio = 1.0
 	popup_body.visible_characters = 0
 	var total := popup_body.get_total_character_count()
 	var reveal_time: float = clampf(total * 0.016, 0.3, 2.5)
-	var tw3 := popup_body.create_tween()
+	var tw3 := Motion.tween(popup_body, "linear", "text_reveal")
 	_popup_reveal = tw3
-	tw3.set_trans(Tween.TRANS_LINEAR)
+	Motion.curve(tw3, "none")
 	tw3.tween_property(popup_body, "visible_characters", total, reveal_time).set_delay(0.1)
 
 
@@ -7723,9 +8197,9 @@ func _slide_side_panels(out: bool) -> void:
 	const GAP := 24.0
 	if left_panel == null or right_panel == null:
 		return
-	var tw := create_tween()
+	var tw := Motion.tween(self, "linear")
 	tw.set_parallel(true)
-	tw.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_IN_OUT)
+	Motion.curve(tw, "power2.inOut")
 	if out:
 		var lw := left_panel.offset_right - left_panel.offset_left
 		var rw := right_panel.offset_right - right_panel.offset_left

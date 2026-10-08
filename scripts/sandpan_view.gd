@@ -1,4 +1,6 @@
 extends Node
+
+const Motion = preload("res://scripts/motion.gd")
 ## Presentation only: no changes to cards, tiers, selection or game saves.
 var game: Node
 var hand_layer: Control
@@ -146,8 +148,7 @@ func _animate_hand(hide_hand: bool) -> void:
 		hand_layer.position = target
 		if hide_hand: hand_layer.hide()
 		return
-	hand_tween = create_tween()
-	hand_tween.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+	hand_tween = Motion.tween(self, "focus", "hand")
 	hand_tween.tween_property(hand_layer, "position", target, 0.26)
 	if hide_hand: hand_tween.tween_callback(hand_layer.hide)
 
@@ -160,8 +161,7 @@ func _animate_hud(hide_hud: bool) -> void:
 		hud_layer.position = target
 		if hide_hud: hud_layer.hide()
 		return
-	hud_tween = create_tween()
-	hud_tween.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+	hud_tween = Motion.tween(self, "focus", "hud")
 	hud_tween.tween_property(hud_layer, "position", target, 0.26)
 	if hide_hud: hud_tween.tween_callback(hud_layer.hide)
 
