@@ -1652,8 +1652,8 @@ const SITUATION_TEXT := {
 	"drought": "【自然预警】气象预报未来一季降水显著偏少，湖区面临干旱风险。",
 	"flood": "【自然预警】上游持续降雨，水文站预计湖区水位快速上涨，有洪水风险。",
 	"birds_field": "【社区报告】农户报告白鹤进入稻田取食，人鸟冲突初现端倪。",
-	"calm_safe": "【湖区简报】水位落在本季参考区间内，六项指标暂无异常。",
-	"calm_off": "【湖区简报】水位略偏离本季参考区间，其余各项暂无异常。",
+	"calm_safe": "【湖区简报】暂未触发明显洪旱预警或候鸟进田情况。",
+	"calm_off": "【湖区简报】水位略偏离本季参考区间，暂未触发明显洪旱预警或候鸟进田情况。",
 }
 # 弹窗里在横幅那句话后面，再补一句它意味着什么（同样只描述，不给数字）
 const SITUATION_WHY := {
@@ -2682,8 +2682,8 @@ func natural_evolution() -> void:
 ##   min/max = 叠加难度负向倍率后，玩家真正会看到的区间
 ##   kind    = random / loss / gain / none
 ## roll_random=false 时不去动水位那次随机（HUD 每帧查它，绝不能扰动全局随机序列）
-func natural_evolution_plan(roll_random: bool = true, water_delta_override: int = 999) -> Array:
-	var sim: Dictionary = metrics.duplicate()   # 推演副本：后一步的条件要看前几步之后的值（与原执行顺序一致）
+func natural_evolution_plan(roll_random: bool = true, water_delta_override: int = 999, source_metrics: Dictionary = {}) -> Array:
+	var sim: Dictionary = (source_metrics if not source_metrics.is_empty() else metrics).duplicate()   # 推演副本：后一步的条件要看前几步之后的值（与原执行顺序一致）
 	var out: Array = []
 
 	# 1) 水位按**季节节律**变化 —— 贴鄱阳湖的水文现实：春涨水、夏高水、秋落水、冬枯水。
@@ -2792,13 +2792,14 @@ func _evolution_delta(e: Dictionary) -> int:
 	return clampi(_scaled_delta(int(e["delta"])), int(e["min"]), int(e["max"]))
 
 ## 枚举全部水文随机值，逐条夹取，保留水质/植被门槛联动，悬停推演不消耗随机数。
-func natural_evolution_outcomes() -> Array:
+func natural_evolution_outcomes(source_metrics: Dictionary = {}) -> Array:
 	var drift: Array = water_drift_range()
 	var outcomes: Array = []
+	var starting_metrics: Dictionary = (source_metrics if not source_metrics.is_empty() else metrics).duplicate()
 	for wl in range(int(drift[0]), int(drift[1]) + 1):
-		var snapshot: Dictionary = metrics.duplicate()
+		var snapshot: Dictionary = starting_metrics.duplicate()
 		var pressure_losses: Dictionary = {}
-		for e in natural_evolution_plan(false, wl):
+		for e in natural_evolution_plan(false, wl, starting_metrics):
 			var metric: String = str(e["metric"])
 			var d := _evolution_delta(e)
 			snapshot[metric] = clampi(int(snapshot.get(metric, 0)) + d, 0, 100)
@@ -2813,10 +2814,18 @@ func natural_evolution_outcomes() -> Array:
 func metric_hover_preview(metric: String) -> Dictionary:
 	var cur: int = int(metrics.get(metric, 0))
 	var line: int = failure_threshold_for(metric)
+	var conflict: Dictionary = bird_conflict_state()
+	var conflict_penalty: int = int(conflict["penalty"]) if bool(conflict["active"]) else 0
+	# 回合结算先扣人鸟矛盾，再推进自然演化。自然演化可能因此跨过社区信任等指标的衰减门槛，
+	# 所以要在这份只读推演副本上先扣分，再重新计算全链自然变化，不能只从最终结果减一个常数。
+	var projected_metrics: Dictionary = metrics.duplicate(true)
+	if conflict_penalty > 0:
+		for affected in ["community", "birds"]:
+			projected_metrics[affected] = clampi(int(projected_metrics.get(affected, 0)) - conflict_penalty, 0, 100)
 
 	var end_min := 100
 	var end_max := 0
-	for outcome in natural_evolution_outcomes():
+	for outcome in natural_evolution_outcomes(projected_metrics):
 		var value: int = int(outcome["metrics"].get(metric, cur))
 		end_min = mini(end_min, value)
 		end_max = maxi(end_max, value)
@@ -2846,7 +2855,7 @@ func metric_hover_preview(metric: String) -> Dictionary:
 		"penalty_mult": PENALTY_MULT[difficulty],
 		# 人鸟矛盾 / 候鸟进田的判定原样带上：悬停小窗要显示「回合末会扣多少」，
 		# 数字必须和回合末真正结算的那一次同源（两侧都调 bird_conflict_state）。
-		"conflict": bird_conflict_state(),
+		"conflict": conflict,
 	}
 
 

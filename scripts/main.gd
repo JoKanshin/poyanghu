@@ -5661,10 +5661,8 @@ func _fill_metric_tip(metric: String) -> void:
 	var cf_pen: int = 0
 	if bool(cf.get("active", false)) and (metric == "community" or metric == "birds"):
 		cf_pen = int(cf["penalty"])
-		nat_min -= cf_pen
-		nat_max -= cf_pen
-		end_min -= cf_pen
-		end_max -= cf_pen
+	# p 的自然预测已经先应用人鸟扣分，再按实际顺序推演，所以这里仅列明暗线扣分，
+	# 不再把它从预测结果重复扣一次。
 
 	# ① 本回合自然演化会掉多少（水位是随机，给区间）
 	var dtxt := ""
