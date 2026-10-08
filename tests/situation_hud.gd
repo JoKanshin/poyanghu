@@ -141,7 +141,7 @@ func _ready() -> void:
 	game.set_process(true)
 	await _set_metrics({"water_level": 55, "vegetation": 60, "water_quality": 60, "fish": 55, "birds": 45, "community": 60})
 	print("BANNER_SAFE " + game.event_label.text)
-	check(game.event_label.text.contains("暂无异常"), "水位 55（春 49–61 区间内）应描述成暂无异常，实际「" + game.event_label.text + "」")
+	check(game.event_label.text.contains("暂未触发明显洪旱预警或候鸟进田情况"), "水位 55（春 49–61 区间内）应显示没有明显洪旱预警或候鸟进田，实际「" + game.event_label.text + "」")
 	await capture("0.1.17-顶部态势-平稳")
 
 	# ⑥ 第 15 回合：横幅必须是收官那句（同样按反馈要求放在事件幅里）
