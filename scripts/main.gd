@@ -3512,6 +3512,8 @@ func _start_card_drag() -> void:
 	_card_drag_last_mouse = _card_drag_mouse
 	_card_drag_grab_offset = _card_press_panel.position + _card_press_panel.pivot_offset - _screen_to_card_box(_card_drag_mouse)
 	_card_press_panel.set_meta("drag_old_z", _card_press_panel.z_index)
+	Motion.cancel(_card_press_panel, "deal")
+	_card_press_panel.modulate.a = 1.0
 	_card_press_panel.z_index = 1000
 	card_box.move_child(_card_press_panel, card_box.get_child_count() - 1)
 	MotionSpring.stop(_card_press_panel, "position")
@@ -6792,6 +6794,8 @@ func _layout_staged_cards(staged_infos: Array) -> void:
 		info["base_pos"] = target
 		info["theta"] = 0.0
 		info["radial"] = Vector2.UP
+		Motion.cancel(panel, "deal")
+		panel.modulate.a = 1.0
 		# Keep table cards above the hand while retaining the queue order.
 		panel.z_index = 100 + i
 		MotionSpring.stop(panel, "rotation")
@@ -6812,7 +6816,7 @@ func _play_deal_animation() -> void:
 		var target: Vector2 = info["base_pos"]
 		panel.position = target + Vector2(0, 90.0)
 		panel.modulate.a = 0.0
-		var tw := Motion.tween(panel, "linear")
+		var tw := Motion.tween(panel, "linear", "deal")
 		tw.set_parallel(true)
 		Motion.curve(tw, "power2.out")
 		tw.tween_property(panel, "position", target, 0.34).set_delay(deal_index * 0.045)
@@ -6822,7 +6826,7 @@ func _play_deal_animation() -> void:
 
 ## 容器尺寸变化时重排（确保扇形始终居中）
 func _on_card_box_resized() -> void:
-	if not _card_dragging and not card_infos.is_empty():
+	if not _score_animating and not _card_dragging and not card_infos.is_empty():
 		_layout_fan()
 
 
@@ -7558,7 +7562,7 @@ func _play_score_animation(ledger: Array, before_all: Dictionary, played: Array,
 	const FLY_DUR := 0.26          # 单张牌飞行时长
 	const FLY_LAG := 0.035         # 相邻牌甩出的错开间隔
 	const FLY_LEAD := 10.0         # 砸桌过冲高度 —— 「重量感」的来源：先冲过头再砸下来
-	const FLY_SPACING := 132.0     # 落点间距（牌宽 122 + 10）
+	const FLY_SPACING := STAGED_CARD_SPACING # 与已打出区保持相同牌边间距
 	const CARD_BUDGET := 1.30      # 逐张弹分总预算（0.35 → 1.65）
 	const CARD_BEAT_MIN := 0.24
 	const CARD_BEAT_MAX := 0.45
@@ -7610,9 +7614,17 @@ func _play_score_animation(ledger: Array, before_all: Dictionary, played: Array,
 		metric_bars[metric]["bar"].value = float(before_all.get(metric, 0))
 		metric_bars[metric]["val"].text = str(int(before_all.get(metric, 0)))
 
+	# Settlement owns the pose: queued movement and hand arrival must stop first,
+	# including springs that still carry velocity after rapid consecutive drops.
+	for info in card_infos:
+		var panel: PanelContainer = info["panel"]
+		if not is_instance_valid(panel): continue
+		for key in ["position", "rotation", "scale"]: MotionSpring.stop(panel, key)
+		Motion.cancel(panel, "deal")
+	var landing_targets: Dictionary = {}
 	var n_played: int = played.size()
-	# 落点间距：默认 FLY_SPACING（牌宽 122 + 10 的余量）。简单模式一回合最多可能出现
-	# **5 张**（4 个行动位 + 1 张紧急调度），此时整行 4×132 + 122 = 650px，1280 宽下放得下；
+	# 落点间距：默认 FLY_SPACING（牌宽 122 + 24 的余量）。简单模式一回合最多可能出现
+	# **5 张**（4 个行动位 + 1 张紧急调度），此时整行 4×146 + 122 = 706px，1280 宽下放得下；
 	# 但仍按可用宽度收一道口子 —— 以后若放宽行动位、或窗口比例变化，不至于把牌挤出屏幕。
 	# 行本身是**居中**排的（下面 slot 用 k - (n-1)/2 算），所以收紧后左右余量仍然相等。
 	var spacing: float = FLY_SPACING
@@ -7629,16 +7641,19 @@ func _play_score_animation(ledger: Array, before_all: Dictionary, played: Array,
 		info["flying"] = true          # 让 _update_card_hover 让出控制权（照抄 shaking 的既有模式）
 		panel.z_index = 5              # 保证甩出去的牌画在最上层
 		panel.scale = Vector2.ONE
+		panel.modulate.a = 1.0
+		_step_card_gyro(panel, Vector2.ZERO, 1.0)
 		var slot := Vector2(vp.x * 0.5 + (float(k) - float(n_played - 1) * 0.5) * spacing, slot_y)
 		var target: Vector2 = _screen_to_card_box(slot) - panel.pivot_offset
+		landing_targets[panel] = target
 		var d: float = k * FLY_LAG * ds
-		var tw := Motion.tween(panel, "linear")
+		var tw := Motion.tween(panel, "linear", "score_flight")
 		Motion.curve(tw, "power3.out")
 		tw.tween_property(panel, "position", target + Vector2(0, -FLY_LEAD), FLY_DUR * 0.70 * ds).set_delay(d)
 		# 末段换成 BACK/EASE_OUT：越过落点再弹回来 —— 这一下就是「砸在桌上」
 		Motion.curve(tw, "back.out")
 		tw.tween_property(panel, "position", target, FLY_DUR * 0.30 * ds)
-		var tw_rot := Motion.tween(panel, "linear")
+		var tw_rot := Motion.tween(panel, "linear", "score_rotation")
 		Motion.curve(tw_rot, "power2.out")
 		tw_rot.tween_property(panel, "rotation", 0.0, FLY_DUR * 0.85 * ds).set_delay(d)
 		# 甩牌落桌：闷响，比叮低一档，做"拍在桌上"的质感
@@ -7667,9 +7682,21 @@ func _play_score_animation(ledger: Array, before_all: Dictionary, played: Array,
 		tw_u.tween_property(panel_u, "modulate:a", 0.0, DISMISS_DUR * 0.75).set_delay(du)
 		tw_u.tween_property(panel_u, "scale", Vector2(0.88, 0.88), DISMISS_DUR).set_delay(du)
 
-	await get_tree().create_timer(T_FLY_END * ds).timeout
+	# The fifth card starts later: wait for the last flight, not just the first beat.
+	var fly_end := maxf(T_FLY_END, FLY_DUR + float(maxi(0, n_played - 1)) * FLY_LAG)
+	await get_tree().create_timer(fly_end * ds).timeout
 	if _score_anim_id != my_id:
 		return _score_anim_cleanup()
+
+	# Resolve sub-frame tween timing at the shared landing pose before any score pop.
+	for panel in landing_targets:
+		if not is_instance_valid(panel): continue
+		Motion.cancel(panel, "score_flight")
+		Motion.cancel(panel, "score_rotation")
+		panel.position = landing_targets[panel]
+		panel.rotation = 0.0
+		panel.scale = Vector2.ONE
+		_step_card_gyro(panel, Vector2.ZERO, 1.0)
 
 	# ---- ② 逐张弹分（0.35 → 1.40）----
 	var card_beat: float = clampf(CARD_BUDGET * ds / float(maxi(1, n_played)), CARD_BEAT_MIN * ds, CARD_BEAT_MAX * ds)
@@ -7950,6 +7977,8 @@ func _score_anim_cleanup() -> void:
 		if not is_instance_valid(panel):
 			continue
 		if info.get("flying", false):
+			Motion.cancel(panel, "score_flight")
+			Motion.cancel(panel, "score_rotation")
 			info["flying"] = false
 			panel.z_index = 0
 			panel.scale = Vector2.ONE
