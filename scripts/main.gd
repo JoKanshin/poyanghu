@@ -3480,8 +3480,11 @@ func _input(event: InputEvent) -> void:
 			_update_card_drag_pose(mouse, event.relative)
 			get_viewport().set_input_as_handled()
 	elif event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and not event.pressed:
-		_finish_card_pointer(get_viewport().get_mouse_position())
-		get_viewport().set_input_as_handled()
+		_finish_card_pointer(event.position)
+		# The GUI must also receive this release to clear its mouse capture.
+		# Consuming it leaves tooltips bound to the previously pressed card even
+		# after the pointer moves over another card. Release does not stage/click
+		# another card: _on_card_gui_input responds only to a pressed button.
 
 
 func _process_card_drag(delta: float) -> void:
