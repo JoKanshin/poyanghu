@@ -143,6 +143,7 @@ var _overlay_inverse := Transform2D.IDENTITY
 var _shadow_unit_rings: Dictionary = {}
 var _static_items: Array[Dictionary] = []
 var _static_key: Array = []
+var _scenery_revision := 0
 var _shadow_key: Array = []
 var _relief_values := PackedFloat32Array()
 var _relief_cache: Dictionary = {}
@@ -737,6 +738,7 @@ func _near_water(uv: Vector2, baseline: bool = false) -> bool:
 	return false
 
 func _make_house_sites() -> void:
+	_scenery_revision += 1
 	# Sample land immediately beside water, then pick evenly spaced points all
 	# around the actual shoreline. The choice is map-dependent, not RNG-dependent.
 	var candidates: Array[Vector2] = []
@@ -773,6 +775,7 @@ func _make_house_sites() -> void:
 
 ## 唯一停车位，靠社区增长后出现的房屋外侧，采样确保落在陆地。
 func _make_car_site() -> void:
+	_scenery_revision += 1
 	if house_sites.size() <= CAR_HOUSE_INDEX: return
 	var home := house_sites[CAR_HOUSE_INDEX]
 	var target := home + Vector2(0.038, 0.016)
@@ -840,6 +843,7 @@ func _scatter_site(kind: String, placed: Array[Vector2]) -> Vector2:
 	return SHORE_ANCHORS[placed.size() % SHORE_ANCHORS.size()]
 
 func _reset_scenery() -> void:
+	_scenery_revision += 1
 	visual_seed = GameState.run_seed
 	visual_rng.seed = int(GameState.run_seed) ^ 0x5EED5A7
 	for i in house_progress.size():
@@ -1129,6 +1133,7 @@ func _draw_yangtze_boats(c: Control) -> void:
 		_draw_fishing_boat(c, p, sample["heading"], direction)
 
 func _build_meadow_scenery() -> void:
+	_scenery_revision += 1
 	# Original code-drawn pixel props: grass, flowers, shrubs, stones and pines.
 	var palette := {"d": Color("456244"), "g": Color("668650"), "l": Color("9bb364"),
 		"t": Color("73593e"), "r": Color("727b73"), "s": Color("a6ad97"),
@@ -1165,7 +1170,7 @@ func _build_meadow_scenery() -> void:
 	scenery_props.sort_custom(func(a: Dictionary, b: Dictionary): return a["pos"].x + a["pos"].y < b["pos"].x + b["pos"].y)
 
 func _scenery_draw_order() -> Array[Dictionary]:
-	var key: Array = [hash(scenery_props), hash(plant_sites), hash(summer_flowers), hash(house_sites),
+	var key: Array = [_scenery_revision,
 		displayed_plants.duplicate(), displayed_islands, _lake_offset(), season, previous_season, season_progress,
 		size if season_progress < 1.0 else Vector2.ZERO,
 		_screen_projection if season_progress < 1.0 else Transform2D.IDENTITY]
@@ -1181,24 +1186,12 @@ func _scenery_draw_order() -> Array[Dictionary]:
 		moving[i]["depth"] = _scenery_depth(moving[i]["uv"])
 		moving[i]["order"] = _static_items.size() + i
 	moving.sort_custom(_scenery_before)
-	# Merge already sorted fixed scenery with the small moving population.
-	# Insertion indices preserve the original equal-depth ordering.
-	var items: Array[Dictionary] = []
-	var i := 0
-	var j := 0
-	while i < _static_items.size() and j < moving.size():
-		if _scenery_before(_static_items[i], moving[j]):
-			items.append(_static_items[i])
-			i += 1
-		else:
-			items.append(moving[j])
-			j += 1
-	while i < _static_items.size():
-		items.append(_static_items[i])
-		i += 1
-	while j < moving.size():
-		items.append(moving[j])
-		j += 1
+	# Copy the fixed list in native code; insert the small moving population by
+	# binary search instead of traversing hundreds of static items in GDScript
+	# every frame. The same comparator preserves ties and occlusion order.
+	var items: Array[Dictionary] = _static_items.duplicate()
+	for item in moving:
+		items.insert(items.bsearch_custom(item, _scenery_before), item)
 	return items
 
 func _scenery_depth(uv: Vector2) -> float:
@@ -1557,6 +1550,7 @@ func _draw_bird_actor(c: Control, bird: Dictionary) -> void:
 
 ## Flood-fill from the map edges: isolated lake islands stay outside this mask.
 func _build_exterior_seasons() -> void:
+	_scenery_revision += 1
 	const N := 256
 	exterior_image = Image.create(N, N, false, Image.FORMAT_R8)
 	var open := PackedByteArray()

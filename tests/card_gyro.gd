@@ -364,7 +364,16 @@ func _ready() -> void:
 	check(queued_order.size() == 2 and game.card_infos[queued_order[0]] == queue_a
 		and game.card_infos[queued_order[1]] == queue_b, "Settlement queue follows the order cards were dropped onto the table")
 	check(not game._score_animating, "Queued cards wait for the existing execute action button")
-	await settle(0.45)
+	# Fast consecutive releases retain real spring momentum. Wait for the
+	# bounded convergence rather than treating a fixed 450 ms as exact rest.
+	var reflow_deadline := Time.get_ticks_msec() + 1000
+	while Time.get_ticks_msec() < reflow_deadline:
+		var converged := true
+		for remaining in game.card_infos:
+			if not remaining.get("staged_by_drag", false) and remaining.panel.position.distance_to(remaining.base_pos) >= 1.0:
+				converged = false
+		if converged: break
+		await get_tree().process_frame
 	for remaining in game.card_infos:
 		if not remaining.get("staged_by_drag", false):
 			check(remaining.panel.position.distance_to(remaining.base_pos) < 1.0,

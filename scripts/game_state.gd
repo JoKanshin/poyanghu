@@ -1704,6 +1704,9 @@ var carry: int = 0          # 结转下回合
 var last_metric_funding: int = 0   # 上一回合由六项指标换来的额外拨款（结算里显示用，仅结果不给解释）
 var research_points: int = 0
 var metrics: Dictionary = {}
+# Bounded read-only HUD cache; excluded from saves and simulation state.
+var _hover_preview_key: Array = []
+var _hover_previews: Dictionary = {}
 var species_pop: Dictionary = {}     # 每物种数量 0-100
 var plant_pop: Dictionary = {}       # 每植物数量 0-100
 var effects_queue: Array = []       # 延迟效果 {metric, delta, remaining, source}
@@ -2819,6 +2822,18 @@ func natural_evolution_outcomes(source_metrics: Dictionary = {}) -> Array:
 ## 只读，不改状态。数据来源：natural_evolution_plan()（回合末自然演化）+ pending_crisis（下回合结算时爆发的危机）
 ## 枚举水位随机值，汇总同一指标的全部变动，包含越界压力及后续生态联动。
 func metric_hover_preview(metric: String) -> Dictionary:
+	# Snapshot all inputs used by the deterministic forecast. Comparing small
+	# values catches in-place changes as well as new games and loaded saves.
+	var key: Array = [metrics, difficulty, turn, run_seed, used_action_ids, pending_crisis]
+	if key != _hover_preview_key:
+		_hover_preview_key = key.duplicate(true)
+		_hover_previews.clear()
+	if not _hover_previews.has(metric):
+		_hover_previews[metric] = _compute_metric_hover_preview(metric)
+	# Callers may freely edit their returned copy without poisoning the cache.
+	return _hover_previews[metric].duplicate(true)
+
+func _compute_metric_hover_preview(metric: String) -> Dictionary:
 	var cur: int = int(metrics.get(metric, 0))
 	var line: int = failure_threshold_for(metric)
 	var conflict: Dictionary = bird_conflict_state()
