@@ -1707,7 +1707,8 @@ var metrics: Dictionary = {}
 var species_pop: Dictionary = {}     # 每物种数量 0-100
 var plant_pop: Dictionary = {}       # 每植物数量 0-100
 var effects_queue: Array = []       # 延迟效果 {metric, delta, remaining, source}
-var used_action_ids: Array = []     # 本回合已执行的卡
+var used_action_ids: Array = []     # 本回合已执行的卡（含调度，供协同与知识卡判定）
+var free_actions_executed: int = 0  # 调度牌不消耗普通行动位
 var knowledge_unlocked: Array = []
 var pending_knowledge: Array = []   # 待弹出的知识卡 id
 ## 知识卡随机赠送用**独立**随机源：不消耗对局主随机流，
@@ -1781,6 +1782,7 @@ func serialize() -> Dictionary:
 		"plant_pop": plant_pop.duplicate(),
 		"effects_queue": effects_queue.duplicate(true),
 		"used_action_ids": used_action_ids.duplicate(),
+		"free_actions_executed": free_actions_executed,
 		"ever_played": ever_played.duplicate(),
 		# 紧急调度：待结算的调度牌与冷却回合都要带回来，否则中途读档会白丢那 40 万
 		"dispatched_cards": dispatched_cards.duplicate(true),
@@ -1823,6 +1825,7 @@ func load_state(d: Dictionary) -> void:
 	plant_pop = _int_dict(d.get("plant_pop", {}))
 	effects_queue = d.get("effects_queue", [])
 	used_action_ids = d.get("used_action_ids", [])
+	free_actions_executed = clampi(int(d.get("free_actions_executed", 0)), 0, used_action_ids.size())
 	ever_played = d.get("ever_played", {})
 	dispatched_cards = d.get("dispatched_cards", [])
 	dispatch_last_turn = int(d.get("dispatch_last_turn", -99))
@@ -1876,6 +1879,7 @@ func reset_game() -> void:
 	floating_islands = 0
 	effects_queue = []
 	used_action_ids = []
+	free_actions_executed = 0
 	knowledge_unlocked = []
 	pending_knowledge = []
 	knowledge_last_turn = -99
@@ -2029,6 +2033,7 @@ func _metric_funding() -> int:
 func start_new_turn() -> void:
 	turn += 1
 	used_action_ids = []
+	free_actions_executed = 0
 	clear_dispatch()          # 上一轮的调度牌已在回合末结算完，这里清空待办清单
 	log_messages = []
 
@@ -2564,7 +2569,7 @@ func _crisis_counter_set() -> Dictionary:
 ## 能否执行：资金够 + 行动位够
 func can_execute(card_id: String, tier: String) -> bool:
 	var max_actions := action_slots()
-	if used_action_ids.size() >= max_actions:
+	if used_action_ids.size() - free_actions_executed >= max_actions:
 		return false
 	return funds >= tier_cost(card_id, tier)
 
@@ -2593,6 +2598,8 @@ func execute_action(card_id: String, tier: String, free: bool = false) -> bool:
 	# 行动位上限只在 free=false 时拦；但两种路径都要记进 used_action_ids ——
 	# 它同时是「本回合打过什么」的依据（自然演化的条件、协同触发都读它）。
 	used_action_ids.append(card_id)
+	if free:
+		free_actions_executed += 1
 	# 全局累计（**跨回合不清零**）：结算报告的「转产与补偿覆盖率」要按整局口径算，
 	# 而 used_action_ids 每回合开始都会被清空，拿它统计等于只看最后一回合。
 	ever_played[card_id] = int(ever_played.get(card_id, 0)) + 1
