@@ -6,18 +6,19 @@ const SUITS := {
 	"social": preload("res://assets/art/card-suits/social.png"),
 	"manage": preload("res://assets/art/card-suits/manage.png"),
 }
-## 知识卡卡面（0.1.17）：按类别换成画好的**整张卡面**（assets/art/knowledge/）。
-## 图上已经印着「类别 / 知识卡 / 点击查看」这些固定字，所以这一类卡面**只往上写卡名**，
-## 不再写 footer；没列进来的类别继续走老的「空白纸 + 写卡名 + 写知识卡」。
-## 换图：把同名文件覆盖到 assets/art/knowledge/ 即可（kd-08 植物 / kd-09 鸟类 /
-## kd-11 未解锁 / kd-07 彩蛋）。
-## 彩蛋卡的旧底图（assets/art/card-suits/dixinhu.png）已被 assets/art/knowledge/kd-07.png 取代，
-## 两者逐像素相同，代码里统一走 KNOWLEDGE_FACE_EGG，别再新引 DIXINHU。
+## 图鉴使用完整知识卡牌面，与普通手牌和紧急调度分别取材。
 const KNOWLEDGE_FACES := {
 	"植物": preload("res://assets/art/knowledge/kd-08.png"),
 	"鸟类": preload("res://assets/art/knowledge/kd-09.png"),
 }
 ## 未解锁统一用这张：图上自带「未知 / ？ / UNKNOW」，一个字都不用再写。
+const KNOWLEDGE_FACE_BLANK := preload("res://assets/art/knowledge/category-blank.png")
+const KNOWLEDGE_CATEGORIES := ["地理", "水生动物", "外来物种", "机制", "保护行动", "案例", "管理策略"]
+const DISPATCH_SUITS := {
+	"ecology": preload("res://assets/art/dispatch/ecology.png"),
+	"social": preload("res://assets/art/dispatch/social.png"),
+	"manage": preload("res://assets/art/dispatch/manage.png"),
+}
 const KNOWLEDGE_FACE_LOCKED := preload("res://assets/art/knowledge/kd-11.png")
 ## 彩蛋卡：整张画好的卡面（含内页插画与名字），与旧的 card-suits/dixinhu.png 逐像素相同。
 const KNOWLEDGE_FACE_EGG := preload("res://assets/art/knowledge/kd-07.png")
@@ -33,6 +34,7 @@ static var glyph_image: Image
 static var paper_image: Image
 static var textures: Dictionary = {}
 static var suit_images: Dictionary = {}
+static var knowledge_category_faces: Dictionary = {}
 
 static func _load_pixels() -> void:
 	if paper_image != null:
@@ -63,9 +65,42 @@ static func base_image(category: String) -> Image:
 	return suit_images.get(category, paper_image)
 
 
-## 这一类知识卡有没有画好的整张卡面；没有就返回 null（调用方回落到空白纸那条老路）。
+## 全部已收集知识卡都有无便签纸的完整卡面。
 static func knowledge_face(category: String) -> Texture2D:
-	return KNOWLEDGE_FACES.get(category)
+	_load_pixels()
+	if KNOWLEDGE_FACES.has(category):
+		return KNOWLEDGE_FACES[category]
+	if category not in KNOWLEDGE_CATEGORIES:
+		return null
+	if not knowledge_category_faces.has(category):
+		var image := KNOWLEDGE_FACE_BLANK.get_image().duplicate() as Image
+		image.convert(Image.FORMAT_RGBA8)
+		image.resize(400, 600, Image.INTERPOLATE_NEAREST)
+		_write(image, category, 72, Color("557530"), -1, 2)
+		knowledge_category_faces[category] = ImageTexture.create_from_image(image)
+	return knowledge_category_faces[category]
+
+## 专用素材牌库按 id 读取整张副本；生成素材时只写名称，不写费用。
+static func dispatch_texture(card: Dictionary, baked: bool = true) -> Texture2D:
+	_load_pixels()
+	var key := "dispatch\n" + str(card["id"])
+	if baked and textures.has(key):
+		return textures[key]
+	var path := "res://assets/art/dispatch/cards/%s.png" % str(card["id"])
+	if baked and ResourceLoader.exists(path):
+		textures[key] = load(path)
+		return textures[key]
+	var image := (DISPATCH_SUITS[str(card["category"])] as Texture2D).get_image().duplicate() as Image
+	image.convert(Image.FORMAT_RGBA8)
+	image.resize(400, 600, Image.INTERPOLATE_NEAREST)
+	var lines := _lines(str(card["name"]))
+	var top := 133 if lines.size() >= 4 else 167
+	var spacing := 71 if lines.size() >= 4 else 75
+	for i in lines.size():
+		_write(image, lines[i], top + i * spacing, INK, -1, 4)
+	var result := ImageTexture.create_from_image(image)
+	if baked: textures[key] = result
+	return result
 
 
 ## 用画好的卡面做一张知识卡：只写卡名，按行数垂直居中放在卡面中间那块空白里
@@ -75,7 +110,7 @@ static func knowledge_texture(title: String, category: String) -> Texture2D:
 	var key := "kface\n" + title + "\n" + category
 	if textures.has(key):
 		return textures[key]
-	var source: Texture2D = KNOWLEDGE_FACES[category]
+	var source: Texture2D = knowledge_face(category)
 	var image := source.get_image().duplicate() as Image
 	image.convert(Image.FORMAT_RGBA8)
 	var lines := _lines(title)
@@ -166,7 +201,7 @@ static func add_face(panel: PanelContainer, title: String, footer: String = "", 
 		art = KNOWLEDGE_FACE_EGG
 	elif locked and KNOWLEDGE_FACE_LOCKED != null:
 		art = KNOWLEDGE_FACE_LOCKED
-	elif KNOWLEDGE_FACES.has(knowledge_category):
+	elif knowledge_face(knowledge_category) != null:
 		art = knowledge_texture(title, knowledge_category)
 	face.texture = art if art != null else texture(title, footer, category)
 	face.expand_mode = TextureRect.EXPAND_IGNORE_SIZE

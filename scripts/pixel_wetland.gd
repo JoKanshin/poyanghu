@@ -40,6 +40,10 @@ const HOUSE_ART := [
 	preload("res://assets/houses/house4.png"),
 ]
 ## 房子贴图被画进 76×76 的方框、锚点纵向在 0.86 —— 必须和 _draw_houses 的绘制一致。
+const COMMUNITY_CAR := preload("res://assets/houses/community-car.png")
+const CAR_COMMUNITY_THRESHOLD := 75
+const CAR_HOUSE_INDEX := 11
+const CAR_EXTENT := Vector2(44, 31)
 const HOUSE_BOX := 76.0
 const HOUSE_ANCHOR_Y := 0.86
 ## 影子按对象分开关。反馈历史：先"太诡异，把影子都删掉" → 再"船不加影子，建筑物加回来"。
@@ -178,6 +182,8 @@ var interest_captures := 0
 var house_sites: Array[Vector2] = []
 var house_progress: Array[float] = []
 var house_target_count := 0
+var car_site := Vector2.ZERO
+var car_progress := 0.0
 var yangtze_route: Array[Vector2] = []
 var gan_route: Array[Vector2] = []
 var scenery_props: Array[Dictionary] = []
@@ -211,6 +217,7 @@ func _ready() -> void:
 	shore_image = SHORE_DISTANCE.get_image()
 	_build_river_routes()
 	_make_house_sites()
+	_make_car_site()
 	_measure_house_art()
 	_build_exterior_seasons()
 	_build_meadow_scenery()
@@ -550,6 +557,8 @@ func _process(delta: float) -> void:
 	for i in house_progress.size():
 		var target := 1.0 if i < house_target_count else 0.0
 		house_progress[i] = target if reduced_motion else move_toward(house_progress[i], target, delta * (1.8 if target > house_progress[i] else 2.2))
+	var car_target := 1.0 if _community_car_visible() else 0.0
+	car_progress = car_target if reduced_motion else move_toward(car_progress, car_target, delta * 1.8)
 	_redraw_scenery()
 
 ## Actual lake gestures drive scenery, never gameplay funds/populations/RNG.
@@ -761,6 +770,32 @@ func _make_house_sites() -> void:
 		if index < clockwise_sites.size():
 			house_sites.append(clockwise_sites[index])
 	house_progress.resize(house_sites.size())
+
+## 唯一停车位，靠社区增长后出现的房屋外侧，采样确保落在陆地。
+func _make_car_site() -> void:
+	if house_sites.size() <= CAR_HOUSE_INDEX: return
+	var home := house_sites[CAR_HOUSE_INDEX]
+	var target := home + Vector2(0.038, 0.016)
+	var best := INF
+	for y in range(-5, 6):
+		for x in range(-5, 6):
+			var candidate := home + Vector2(x, y) * 0.01
+			if not _is_land(candidate) or home.distance_to(candidate) < 0.035 or home.distance_to(candidate) > 0.06: continue
+			var clear := true
+			for other in house_sites:
+				if other.distance_to(candidate) < 0.033: clear = false
+			if clear and candidate.distance_to(target) < best:
+				best = candidate.distance_to(target)
+				car_site = candidate
+
+func _community_car_visible() -> bool:
+	return car_site != Vector2.ZERO and int(metrics.get("community", 0)) >= CAR_COMMUNITY_THRESHOLD and house_target_count > CAR_HOUSE_INDEX
+
+func _draw_community_car(c: Control) -> void:
+	if car_progress <= 0.01: return
+	var p := _wildlife_point(car_site)
+	var extent := CAR_EXTENT
+	c.draw_texture_rect(COMMUNITY_CAR, Rect2((p - extent * Vector2(0.5, 0.88)).round(), extent), false, Color(1, 1, 1, car_progress))
 
 func sync_community_targets() -> void:
 	# 社区指数决定可见村落规模，使用全部环湖位置；不再由围垦强度决定栋数。
@@ -1194,6 +1229,7 @@ func _build_static_scenery() -> Array[Dictionary]:
 	for i in mini(ISLAND_ANCHORS.size(), ceili(displayed_islands)):
 		items.append({"kind": "island", "uv": ISLAND_ANCHORS[i], "index": i})
 	for i in house_sites.size(): items.append({"kind": "house", "uv": house_sites[i], "index": i})
+	if car_site != Vector2.ZERO: items.append({"kind": "community_car", "uv": car_site})
 	for i in items.size():
 		items[i]["depth"] = _scenery_depth(items[i]["uv"])
 		items[i]["order"] = i
@@ -1235,6 +1271,7 @@ func _draw_wildlife(c: Control) -> void:
 			"plant": _draw_plant(c, p, str(item["pid"]), float(item["growth"]), item["uv"])
 			"island": _draw_island(c, int(item["index"]))
 			"house": _draw_house(c, int(item["index"]))
+			"community_car": _draw_community_car(c)
 			"bird": _draw_bird_actor(c, item["bird"])
 			"boat":
 				p.x += round(sin(elapsed * 0.06) * 4)

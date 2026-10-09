@@ -385,6 +385,9 @@ var _deck_sort_by_category: bool = false
 ## _update_card_hover 每帧用它，手牌排序的飞行落点也要用同一个值 ——
 ## 写死两处早晚会漂移，抬起高度一变排序落点就不对了。
 const CARD_RAISE := 26.0
+const STAGED_CARD_WIDTH := 122.0
+const STAGED_CARD_GAP := 24.0
+const STAGED_CARD_SPACING := STAGED_CARD_WIDTH + STAGED_CARD_GAP
 var _sort_animating: bool = false
 var _sort_cooldown_ms: int = -6000   # 上次排序的时间戳；初始值只要足够久远即可（开局就能排序）
 const SORT_COOLDOWN_MS := 3000       # 两次切换排序方式的最低间隔（毫秒），冷却期间按钮禁用并显示倒计时
@@ -2170,7 +2173,7 @@ func _build_menu() -> void:
 	menu_root.add_child(bg)
 
 	# --- 左上角：标题 ---
-	var title := _make_label("保卫鄱阳湖", 48, VisualTheme.GOLD)
+	var title := _make_label("鄱阳归翎-生态修复手记", 32, VisualTheme.GOLD)
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
 	title.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	title.anchor_left = 0.0
@@ -3544,7 +3547,7 @@ func _staged_row_without_drag() -> Array:
 func _staged_insert_slot(point: Vector2, count: int) -> int:
 	if count <= 1:
 		return 0
-	var spacing := minf(132.0, maxf(96.0, (card_box.size.x - 122.0) / float(count - 1)))
+	var spacing := STAGED_CARD_SPACING
 	var first_center := card_box.size.x * 0.5 - float(count - 1) * 0.5 * spacing
 	# Use fixed slot centers: animated neighbours must not feed back into picking.
 	return clampi(roundi((_screen_to_card_box(point).x - first_center) / spacing), 0, count - 1)
@@ -6473,14 +6476,12 @@ func _open_dispatch_panel() -> void:
 	_fill_dispatch_grid()
 
 
-## 调度面板顶部那句说明。**价格逐次递增**，所以每次开面板都要按当前价重写。
+## 面板显示实际调度费；专用牌面不显示普通牌的定价。
 func _dispatch_hint_text() -> String:
-	var used: int = GameState.dispatch_used_count
-	var price: String = "本次调度费 %d 万" % GameState.dispatch_cost()
-	if used > 0:
-		price += "（本局已用过 %d 次，每再用一次 +%d 万）" % [used, GameState.DISPATCH_PRICE_STEP]
-	return "%s·一律按「有效投入」档结算·卡面数字是它的定价不是调度费·不占行动位、回合末与手牌一起算分·每用一次后要空 %d 个回合" % [
-		price, GameState.DISPATCH_COOLDOWN_TURNS]
+	var price := "本次调度费 %d 万" % GameState.dispatch_cost()
+	if GameState.dispatch_used_count > 0:
+		price += "（本局已用过 %d 次，每再用一次 +%d 万）" % [GameState.dispatch_used_count, GameState.DISPATCH_PRICE_STEP]
+	return "%s · 按「有效投入」档结算 · 不占行动位、回合末与手牌一起算分 · 每用一次后要空 %d 个回合" % [price, GameState.DISPATCH_COOLDOWN_TURNS]
 
 
 func _close_dispatch_panel() -> void:
@@ -6529,9 +6530,6 @@ func _build_dispatch_panel() -> void:
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	box.add_child(title)
 
-	# ⚠ 卡面写的是这张牌自己的定价，不是调度费（调度费是 DISPATCH_COST 起、逐次递增）——
-	#   不写清楚的话，玩家会以为「卡面 42 万」就是要付的钱。
-	# 价格每次用都会变，所以这句文案在 _open_dispatch_panel() 里按当前价重写。
 	dispatch_hint = _make_label("", 12, Color(0.86, 0.88, 0.90))
 	dispatch_hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	dispatch_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -6572,7 +6570,7 @@ func _fill_dispatch_grid() -> void:
 	pool.sort_custom(func(a, b): return _card_dict_less(a, b, _deck_sort_by_category))
 	var views: Array = []
 	for card in pool:
-		var made := _make_card(card, GameState.DISPATCH_TIER)
+		var made := _make_card(card, GameState.DISPATCH_TIER, true)
 		var panel: PanelContainer = made["panel"]
 		var view := _make_gyro_card_view(panel)
 		view.set_meta("card", card)
@@ -6620,7 +6618,7 @@ func _sync_dispatched_stage_cards() -> void:
 		var card: Dictionary = GameState.card_by_id(cid)
 		if card.is_empty():
 			continue
-		var made: Dictionary = _make_card(card, str(d["tier"]))
+		var made: Dictionary = _make_card(card, str(d["tier"]), true)
 		var panel: PanelContainer = made["panel"]
 		panel.custom_minimum_size = Vector2(122.0, 165.0)
 		panel.size = Vector2(122.0, 165.0)
@@ -6779,9 +6777,9 @@ func _layout_fan(animate_hand: bool = false) -> void:
 func _layout_staged_cards(staged_infos: Array) -> void:
 	if staged_infos.is_empty() or card_box == null:
 		return
-	var spacing := 132.0
-	if staged_infos.size() > 1:
-		spacing = minf(132.0, maxf(96.0, (card_box.size.x - 122.0) / float(staged_infos.size() - 1)))
+	# A fixed edge gap keeps the played row parallel and evenly spread, including
+	# four ordinary actions plus a dispatched card. Never squeeze slots together.
+	var spacing := STAGED_CARD_SPACING
 	var row_y := -198.0
 	for i in staged_infos.size():
 		var info: Dictionary = staged_infos[i]
@@ -6794,9 +6792,7 @@ func _layout_staged_cards(staged_infos: Array) -> void:
 		info["base_pos"] = target
 		info["theta"] = 0.0
 		info["radial"] = Vector2.UP
-		# Keep the newest queue slots visually above overlapping earlier cards.
-		# _update_card_stack can reorder children for hand picking, so use an explicit
-		# staged z band as well as the ordered position targets.
+		# Keep table cards above the hand while retaining the queue order.
 		panel.z_index = 100 + i
 		MotionSpring.stop(panel, "rotation")
 		MotionSpring.stop(panel, "scale")
@@ -7026,7 +7022,7 @@ func _refresh_lever_visuals(animate: bool) -> void:
 ## 建一张卡（手牌 / 牌库网格 / 详情大图共用）。
 ## 返回 {panel, cost_label}；牌面按 tier 先填一遍，
 ## tier 传空则用当前拉杆档位。手牌那边之后还会由 _update_card_face() 反复重填。
-func _make_card(card: Dictionary, tier: String = "") -> Dictionary:
+func _make_card(card: Dictionary, tier: String = "", dispatched: bool = false) -> Dictionary:
 	var panel := PanelContainer.new()
 	panel.set_script(preload("res://scripts/card_hit_panel.gd"))
 	panel.custom_minimum_size = Vector2(122, 165)
@@ -7039,6 +7035,9 @@ func _make_card(card: Dictionary, tier: String = "") -> Dictionary:
 		use_tier = "effective"
 	var cost: int = GameState.tier_cost(str(card["id"]), use_tier)
 	PixelCardArt.add_face(panel, str(card["name"]), str(cost), false, str(card["category"]))
+	panel.set_meta("dispatched", dispatched)
+	if dispatched:
+		panel.get_meta("pixel_face").texture = PixelCardArt.dispatch_texture(card)
 	# Preserve the existing price-state interface; this Label never draws the card text.
 	var cost_l := Label.new()
 	cost_l.name = "PriceState"
@@ -7047,6 +7046,9 @@ func _make_card(card: Dictionary, tier: String = "") -> Dictionary:
 	panel.add_child(cost_l)
 	panel.tooltip_text = "%s\n\n%s（%d 万）：%s" % [card["desc"], GameState.TIER_NAMES[use_tier],
 		cost, _tier_effects_text(card, use_tier)]
+	if dispatched:
+		cost_l.text = "调度"
+		panel.tooltip_text = "%s\n\n紧急调度 · 有效投入：%s" % [card["desc"], _tier_effects_text(card, use_tier)]
 	return {"panel": panel, "cost_label": cost_l}
 
 
@@ -7100,12 +7102,18 @@ func _update_card_face(info: Dictionary) -> void:
 	var cost_l: Label = info["cost_label"]
 	cost_l.text = "%s%d" % [tag, cost]
 	var face: TextureRect = info["panel"].get_meta("pixel_face")
-	face.texture = PixelCardArt.texture(str(card["name"]), str(cost), str(card["category"]))
+	if bool(info.get("dispatched", false)):
+		cost_l.text = "调度"
+		face.texture = PixelCardArt.dispatch_texture(card)
+	else:
+		face.texture = PixelCardArt.texture(str(card["name"]), str(cost), str(card["category"]))
 	# 锁定的牌用更亮的金色，一眼看出「这张是按哪个档锁住的」
 	cost_l.add_theme_color_override("font_color",
 		Color("956523") if locked else Color("6f542a"))
 	info["panel"].tooltip_text = "%s\n\n%s（%d 万）：%s" % [
 		card["desc"], GameState.TIER_NAMES[tier], cost, _tier_effects_text(card, tier)]
+	if bool(info.get("dispatched", false)):
+		info["panel"].tooltip_text = "%s\n\n紧急调度 · 有效投入：%s" % [card["desc"], _tier_effects_text(card, tier)]
 
 
 ## 拉杆一动就把**还没选中**的牌全部刷新；已选中的保持锁定档位不动
