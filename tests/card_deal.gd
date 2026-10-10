@@ -64,12 +64,31 @@ func _ready() -> void:
 	game._layout_fan()
 	await wait_for(0.4)
 	var staged_pose: Vector2 = staged.panel.position
+	var old_hand: Array = []
+	for info in game.card_infos:
+		if not info.get("staged_by_drag", false): old_hand.append(info.panel)
+	var old_center: Vector2 = old_hand[0].get_global_transform() * (old_hand[0].size * 0.5)
 	GameState.funds = 1000
 	game._on_refresh_hand()
+	game._on_refresh_hand()
 	await get_tree().process_frame
+	check(GameState.funds == 995, "Repeated refresh during collection pays only once")
+	check(game._sort_animating and is_instance_valid(old_hand[0]), "Old cards remain visible during collection")
 	check(game.card_infos.has(staged), "Refresh keeps the existing table card")
 	check(not staged.get("dealing", false), "Refresh deals only the new hand")
 	check(staged.panel.position.distance_to(staged_pose) < 0.1, "Table card stays in place while new cards fly")
+	await wait_for(0.12)
+	var deck_center: Vector2 = game.deck_backs.back().get_global_transform() * (game.deck_backs.back().size * 0.5)
+	var moving_center: Vector2 = old_hand[0].get_global_transform() * (old_hand[0].size * 0.5)
+	check(moving_center.distance_to(deck_center) < old_center.distance_to(deck_center), "Old hand flies back toward the deck before replacements exist")
+	await shot("03-refresh-return")
+	await wait_for(0.25)
+	check(not is_instance_valid(old_hand[0]), "Old cards are removed only after reaching the deck")
+	check(not game._sort_animating, "Collection releases the refresh lock")
+	var new_deal := false
+	for info in game.card_infos:
+		if not info.get("staged_by_drag", false) and info.get("dealing", false): new_deal = true
+	check(new_deal, "Replacements are dealt after collection completes")
 	await wait_for(0.9)
 	get_window().size = Vector2i(960, 540)
 	new_hand()

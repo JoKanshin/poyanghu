@@ -3101,6 +3101,7 @@ func _show_menu() -> void:
 	# 不这样做的话，回到主菜单后那段协程会继续改已经不该动的节点。
 	_score_anim_id += 1
 	_score_animating = false
+	_sort_animating = false
 	# 收掉可能在播的成就提示，别让它杵在主菜单上。
 	# 它的协程会自己跑完（时序用的是 create_timer，不会挂死），
 	# 跑完时再设一次 visible=false 也无害。
@@ -5836,6 +5837,7 @@ func _on_start_pressed() -> void:
 	_score_anim_id += 1
 	_score_animating = false
 	_playing = true
+	_sort_animating = false
 	_hide_menu()
 	GameState.reset_game()
 	# 新的一局：拉杆回到默认的有效档（直接赋值 + 只刷拉杆外观 ——
@@ -6482,12 +6484,44 @@ func _on_refresh_hand() -> void:
 	if not GameState.spend(GameState.REFRESH_HAND_COST):
 		return
 	_refresh_used_turn = GameState.turn
+	var refresh_id := _score_anim_id
+	_sort_animating = true # Gathering owns the old hand until it reaches the deck.
+	_play_refresh_break_animation()
+	await _gather_refresh_hand()
+	if refresh_id != _score_anim_id: return
+	_sort_animating = false
 	current_hand = GameState.draw_cards(7 + int(Talents.get_bonus("cards")))
 	play_deal_anim = true
 	_build_hand_panel(true)
-	_play_refresh_break_animation()
 	_update_hud()
 
+## Refresh returns only unplayed cards before drawing their replacements.
+func _gather_refresh_hand() -> void:
+	if wetland and wetland.reduced_motion: return
+	var source := deck_root.get_global_rect().position + Vector2(50, 43)
+	if not deck_backs.is_empty():
+		var back: Control = deck_backs.back()
+		source = back.get_global_transform() * (back.size * 0.5)
+	var pile := _screen_to_card_box(source)
+	var count := 0
+	for info in card_infos:
+		if info.get("staged_by_drag", false): continue
+		var panel: PanelContainer = info["panel"]
+		if not is_instance_valid(panel): continue
+		Motion.cancel(panel, "deal")
+		info["dealing"] = false
+		info["returning"] = true
+		info["flying"] = true
+		for key in ["position", "rotation", "scale"]: MotionSpring.stop(panel, key)
+		var target := pile - panel.pivot_offset + (panel.pivot_offset - panel.size * 0.5) * 0.52
+		var tw := Motion.tween(panel, "linear", "refresh_gather")
+		Motion.curve(tw, "power2.in")
+		tw.tween_property(panel, "position", target, 0.24).set_delay(float(count) * 0.016)
+		tw.parallel().tween_property(panel, "rotation", 0.0, 0.24).set_delay(float(count) * 0.016)
+		tw.parallel().tween_property(panel, "scale", Vector2(0.52, 0.52), 0.24).set_delay(float(count) * 0.016)
+		count += 1
+	if count > 0:
+		await get_tree().create_timer(0.24 + float(count - 1) * 0.016 + 0.03).timeout
 
 ## UI 根：_build_ui() 里那个 CanvasLayer（名字 "UICanvas"）。
 ## 碎片、全屏遮罩这类「要盖住所有面板」的节点都往它上面加 ——
@@ -6796,7 +6830,7 @@ func _layout_fan(animate_hand: bool = false) -> void:
 		panel.size = Vector2(card_w, card_h)
 		panel.custom_minimum_size = Vector2(card_w, card_h)
 		panel.pivot_offset = Vector2(card_w / 2.0, card_h)
-		if not animate_hand and not fan_infos[i].get("dealing", false):
+		if not animate_hand and not fan_infos[i].get("dealing", false) and not fan_infos[i].get("returning", false):
 			panel.rotation = theta
 
 	# 第二遍：算出旋转后整体的真实包围盒（不依赖手算常数）
@@ -6826,7 +6860,7 @@ func _layout_fan(animate_hand: bool = false) -> void:
 		fan_infos[i]["base_pos"] = target
 		fan_infos[i]["theta"] = thetas[i]
 		fan_infos[i]["radial"] = Vector2(sin(thetas[i]), -cos(thetas[i]))
-		if fan_infos[i].get("dealing", false):
+		if fan_infos[i].get("dealing", false) or fan_infos[i].get("returning", false):
 			continue # The arrival callback uses the latest layout after a resize.
 		if animate_hand:
 			# Retarget from the current pose, preserving spring momentum even when
