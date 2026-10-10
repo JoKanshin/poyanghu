@@ -2023,6 +2023,8 @@ func _build_ui() -> void:
 	drag_play_hint.add_theme_color_override("font_outline_color", Color(0.03, 0.08, 0.06, 0.95))
 	drag_play_hint.add_theme_constant_override("outline_size", 5)
 	drag_play_hint.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	drag_play_hint.z_as_relative = false
+	drag_play_hint.z_index = 2000
 	drag_play_hint.visible = false
 	canvas.add_child(drag_play_hint)
 
@@ -3739,14 +3741,24 @@ func _update_drag_play_hint(point: Vector2) -> void:
 		return
 	var reason := "" if not info.is_empty() and info["selected"] else _card_selection_error(info)
 	if undo or reason.is_empty():
-		drag_play_hint.text = ("松手退回牌库并退费" if info.get("dispatched", false) else "松手回到手牌") if undo else ("松手换位" if info.get("selected", false) else "松手出牌")
+		drag_play_hint.text = ("松手退回牌库并退费" if info.get("dispatched", false) else "松手回到手牌") if undo else ("松手放下" if info.get("selected", false) else "松手出牌")
 		drag_play_hint.add_theme_color_override("font_color", Color("a8f0c1"))
 	else:
 		drag_play_hint.text = reason + " · 松手返回手牌"
 		drag_play_hint.add_theme_color_override("font_color", Color("ff9185"))
 	var vp_width := get_viewport().get_visible_rect().size.x
-	drag_play_hint.size.x = 380.0
-	drag_play_hint.position = Vector2(clampf(point.x - 190.0, 8.0, vp_width - 388.0), maxf(8.0, point.y - 130.0))
+	drag_play_hint.size = drag_play_hint.get_combined_minimum_size()
+	var hint_center_x := point.x
+	var hint_y := point.y - 130.0
+	if not info.is_empty():
+		var panel: Control = info["panel"]
+		var transform := panel.get_global_transform()
+		hint_center_x = (transform * (panel.size * 0.5)).x
+		var top := INF
+		for corner in [Vector2.ZERO, Vector2(panel.size.x, 0), panel.size, Vector2(0, panel.size.y)]:
+			top = minf(top, (transform * corner).y)
+		hint_y = top - maxf(drag_play_hint.size.y, 24.0) - 12.0
+	drag_play_hint.position = Vector2(clampf(hint_center_x - drag_play_hint.size.x * 0.5, 8.0, maxf(8.0, vp_width - drag_play_hint.size.x - 8.0)), maxf(8.0, hint_y))
 
 
 func _is_board_drop_target(point: Vector2) -> bool:
@@ -7093,7 +7105,7 @@ func _build_staged_board(canvas: CanvasLayer) -> void:
 	staged_board.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	canvas.add_child(staged_board)
 	_ui_slide_origin[staged_board] = [-562.0, 18.0, -222.0, 142.0]
-	staged_board_count = _make_label("待执行  0 / 5", 12, Color("f0d7ab"))
+	staged_board_count = _make_label("待执行", 12, Color("f0d7ab"))
 	staged_board_count.position = Vector2(18, 9)
 	staged_board_count.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	staged_board.add_child(staged_board_count)
@@ -7140,7 +7152,7 @@ func _layout_staged_cards(staged_infos: Array) -> void:
 			MotionSpring.to(panel, "position", target, 440.0, 32.0)
 	if staged_board_count:
 		var count := _ordered_staged_indices().size()
-		staged_board_count.text = "待执行  %d / %d" % [count, BOARD_CAPACITY]
+		staged_board_count.text = "待执行"
 
 
 func _process_staged_cards(delta: float) -> void:

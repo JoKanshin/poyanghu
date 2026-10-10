@@ -77,7 +77,7 @@ func configure(owner_game: Node, canvas: CanvasLayer) -> void:
 	view_button.hide()
 
 func _blocked() -> bool:
-	return game._deck_open or game.popup_root.visible or game.crisis_root.visible or (game.dispatch_panel != null and game.dispatch_panel.visible)
+	return game._cards_waiting_for_board() or game._deck_open or game.popup_root.visible or game.crisis_root.visible or (game.dispatch_panel != null and game.dispatch_panel.visible)
 
 func invalidate_layout() -> void:
 	_last_layout.clear()
