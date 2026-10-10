@@ -2538,6 +2538,13 @@ func _build_menu() -> void:
 	motion_credit.text = "[center]动效机制：[url=https://github.com/feitangyuan/motion-web]motion-web · feitangyuan[/url]\n[url=https://github.com/feitangyuan/motion-web/blob/main/LICENSE]CC BY-NC 4.0[/url] · 已改为 Godot 原生实现[/center]"
 	motion_credit.meta_clicked.connect(func(link: Variant): OS.shell_open(str(link)))
 	cvb.add_child(motion_credit)
+	var card_credit := RichTextLabel.new()
+	card_credit.bbcode_enabled = true
+	card_credit.fit_content = true
+	card_credit.add_theme_font_size_override("normal_font_size", 12)
+	card_credit.text = "[center]卡牌燃烧：[url=https://godotshaders.com/shader/2d-dissolve-with-burn-edge/]mreliptik · CC0[/url]\n[url=https://github.com/MrEliptik/godot_ui_components]godot_ui_components[/url] · MIT[/center]"
+	card_credit.meta_clicked.connect(func(link: Variant): OS.shell_open(str(link)))
+	cvb.add_child(card_credit)
 	var c_back := _make_button("返回", _on_credits_back, 16)
 	c_back.custom_minimum_size = Vector2(0, 40)
 	cvb.add_child(c_back)
@@ -7816,6 +7823,15 @@ func _play_score_animation(ledger: Array, before_all: Dictionary, played: Array,
 		if _score_anim_id != my_id:
 			return _score_anim_cleanup()
 
+	# 已执行的卡在完整计分后燃烧退场；未出的手牌仍按原来的收牌路径离开。
+	if n_played > 0 and wetland and not wetland.reduced_motion:
+		for k in n_played:
+			var panel: PanelContainer = card_infos[played[k]]["panel"]
+			if is_instance_valid(panel):
+				preload("res://scripts/card_burn.gd").play(panel, 0.48 * ds, float(k) * 0.025 * ds)
+		await get_tree().create_timer((0.48 + float(n_played - 1) * 0.025) * ds).timeout
+		if _score_anim_id != my_id:
+			return _score_anim_cleanup()
 	# ---- 收尾 ----
 	await get_tree().create_timer(0.12 * ds).timeout
 	if _score_anim_id != my_id:
@@ -8042,6 +8058,7 @@ func _score_anim_cleanup() -> void:
 		var panel: PanelContainer = info.get("panel")
 		if not is_instance_valid(panel):
 			continue
+		preload("res://scripts/card_burn.gd").reset(panel)
 		if info.get("flying", false):
 			Motion.cancel(panel, "score_flight")
 			Motion.cancel(panel, "score_rotation")
