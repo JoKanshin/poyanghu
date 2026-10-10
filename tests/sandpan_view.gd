@@ -89,6 +89,7 @@ func _ready() -> void:
 	await settle()
 	game._set_play_tier("deep", false)
 	var selected: Dictionary = game.card_infos[0]
+	var before_play_focus: Vector2 = game.wetland.hand_view_state
 	var press: Vector2 = selected.panel.get_global_transform() * (selected.panel.size * 0.5)
 	game._card_press_panel = selected.panel
 	game._card_press_origin = press
@@ -97,6 +98,7 @@ func _ready() -> void:
 	game._finish_card_pointer(press + Vector2(0, -28))
 	await settle(3.0)
 	check(selected.selected and selected.get("stage_zone", "") == "board", "Selected card must park before testing HUD visibility")
+	check(game.wetland.hand_view_state.is_equal_approx(before_play_focus), "Parking a card must not move map")
 	var expected_hand := hand_state()
 	var expected_metrics: Dictionary = GameState.metrics.duplicate()
 	var expected_funds: int = GameState.funds

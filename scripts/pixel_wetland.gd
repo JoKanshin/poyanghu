@@ -149,6 +149,7 @@ var camera_zoom_factor := GAME_CAMERA_ZOOM
 var camera_tween: Tween
 var hand_view_tween: Tween
 var hand_view_state := Vector2(0.0, 1.0)
+var _hand_view_target := Vector2(0.0, 1.0)
 var _screen_projection := Transform2D.IDENTITY
 var _shadow_projection := Transform2D.IDENTITY
 var _overlay_inverse := Transform2D.IDENTITY
@@ -436,6 +437,8 @@ func _set_camera_zoom(value: float) -> void:
 
 func set_hand_view(focus_fraction: float, zoom_multiplier: float, animate: bool = true) -> void:
 	var target := Vector2(focus_fraction, zoom_multiplier)
+	if animate and target.is_equal_approx(_hand_view_target): return
+	_hand_view_target = target
 	if hand_view_tween and hand_view_tween.is_valid(): hand_view_tween.kill()
 	if not animate or reduced_motion:
 		_set_hand_view_state(target)
@@ -713,10 +716,26 @@ func _ground_position(uv: Vector2) -> Vector3:
 	return Vector3((uv.x - 0.5) * GROUND_SIZE, 0.0, (uv.y - 0.5) * GROUND_SIZE)
 
 func _bird_facing(bird: Dictionary) -> float:
-	# Heading is stored in map coordinates; facing must follow screen motion.
-	var direction := Vector2.from_angle(float(bird["angle"]))
-	var screen_direction := (_screen_projection.x * direction.x + _screen_projection.y * direction.y) * 0.01
-	return -1.0 if screen_direction.x < -0.0001 else 1.0
+	return float(bird.get("facing", 1.0))
+
+func _update_bird_facing(bird: Dictionary, displacement: Vector2, delta: float) -> void:
+	# Near-vertical movement and brief steering corrections retain the last facing.
+	var screen_motion := _screen_projection.basis_xform(displacement)
+	if screen_motion.length_squared() < 0.00000001 or absf(screen_motion.x) < screen_motion.length() * 0.16:
+		bird["facing_age"] = 0.0
+		return
+	var desired := -1.0 if screen_motion.x < 0.0 else 1.0
+	if desired == _bird_facing(bird):
+		bird["facing_age"] = 0.0
+		return
+	if desired != float(bird.get("facing_candidate", 0.0)):
+		bird["facing_age"] = 0.0
+		bird["facing_candidate"] = desired
+	var age := float(bird.get("facing_age", 0.0)) + delta
+	bird["facing_age"] = age
+	if age >= 0.12:
+		bird["facing"] = desired
+		bird["facing_age"] = 0.0
 
 func _terrain_color(uv: Vector2) -> Color:
 	if uv.x < 0.0 or uv.x > 1.0 or uv.y < 0.0 or uv.y > 1.0: return LAND_COLOR
@@ -984,6 +1003,7 @@ func _process_birds(delta: float) -> void:
 					bird["angle"] = to_target.angle()
 			if bird["timer"] <= 0.0:
 				_choose_bird_state(bird)
+		_update_bird_facing(bird, (bird["pos"] as Vector2) - pos, delta)
 		var animation_state := int(bird.get("animation_state", 0))
 		if animation_state != int(bird["state"]):
 			bird["animation_previous_state"] = animation_state

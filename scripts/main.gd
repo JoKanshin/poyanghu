@@ -4673,13 +4673,15 @@ func _build_deck_ui(canvas: CanvasLayer) -> void:
 
 	deck_root = Control.new()
 	deck_root.anchor_left = 1.0
-	deck_root.anchor_top = 0.0
+	deck_root.anchor_top = 0.5
 	deck_root.anchor_right = 1.0
-	deck_root.anchor_bottom = 0.0
-	deck_root.offset_left = -210
-	deck_root.offset_right = -18
-	deck_root.offset_top = 327
-	deck_root.offset_bottom = 431
+	deck_root.anchor_bottom = 0.5
+	deck_root.offset_left = -161
+	# Closed stack spans x=12..82; keep the same 12px margin on both sides.
+	deck_root.offset_right = -67
+	# Visible stack center (local y=43) bisects the gap from y=266 to H-190.
+	deck_root.offset_top = -5
+	deck_root.offset_bottom = 99
 	deck_root.mouse_filter = Control.MOUSE_FILTER_STOP
 	canvas.add_child(deck_root)
 
@@ -4712,10 +4714,6 @@ func _build_deck_ui(canvas: CanvasLayer) -> void:
 	deck_root.mouse_exited.connect(_on_deck_mouse_exited)
 	deck_root.gui_input.connect(_on_deck_gui_input)
 	deck_root.tooltip_text = "查看全部行动卡 · 点击打开牌库"
-	var caption := _make_label("行动图鉴\n点击查看", 12, VisualTheme.PAPER)
-	caption.position = Vector2(100, 35)
-	caption.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	deck_root.add_child(caption)
 
 
 func _on_deck_mouse_entered() -> void:

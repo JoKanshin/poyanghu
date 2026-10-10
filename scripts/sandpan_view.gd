@@ -103,7 +103,8 @@ func _process(_delta: float) -> void:
 	var focus := 0.0
 	var zoom := 1.0
 	if active and not collapsed:
-		var hand_top := _hand_top()
+		# Reserve a stable hand footprint; playing/retracting cards must not move the map.
+		var hand_top := _rest_position(game.hand_panel).y + 55.0
 		var clearance := viewport_size.y - hand_top
 		focus = minf(clampf(clearance * 0.34, 48.0, 100.0), viewport_size.y * 0.12) / viewport_size.y
 		if get_window().size.y <= 600: zoom = 1.08
