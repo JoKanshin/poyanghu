@@ -20,6 +20,6 @@ func verify() -> void:
 	if not FileAccess.file_exists("res://licenses/snkrx.txt"): failures += 1
 	if not FileAccess.file_exists("res://licenses/godot-vfx-library.txt"): failures += 1
 	print("FRAME_LIMIT: ", Engine.max_fps)
-	print("ART_EXPORT: 52 dispatch cards, all knowledge categories and car; %d failures" % failures)
+	print("ART_EXPORT: %d dispatch cards, all knowledge categories and car; %d failures" % [state.ACTION_CARDS.size(), failures])
 	print("PLAYER_PROFILE: ", OS.get_user_data_dir())
 	quit(0 if failures == 0 else 1)

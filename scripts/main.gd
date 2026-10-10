@@ -317,6 +317,7 @@ var clear_status_label: Label
 var bgm_player: AudioStreamPlayer
 var bgm_index: int = 0
 var _bgm_danger: bool = false
+const BGM_RISK_THRESHOLD_OFFSET := -3 # 音频临界线比生态红线低 3 点，减少轻微风险时切曲。
 var _bgm_streams: Array[AudioStream] = []
 var _bgm_recovery_tween: Tween
 var _bgm_risk_key: Array = []
@@ -3435,7 +3436,9 @@ func _update_bgm_state() -> void:
 					_bgm_risk_key = key.duplicate(true)
 					_bgm_risk = false
 					for metric in GameState.METRIC_NAMES:
-						if bool(GameState.metric_hover_preview(metric)["break_total"]):
+						if metric == "water_level": continue
+						var risk: Dictionary = GameState.metric_hover_preview(metric)
+						if int(risk["worst"]) < int(risk["line"]) + BGM_RISK_THRESHOLD_OFFSET:
 							_bgm_risk = true
 							break
 				danger = danger or _bgm_risk
@@ -6376,6 +6379,8 @@ func _fill_metric_tip(metric: String) -> void:
 		dcol = "#ff8f7a"
 	var rows: Array = []
 	rows.append("[color=#cfd6dc]自然演化（含洪旱）[/color]   [color=%s][b]%s[/b][/color]" % [dcol, dtxt])
+	if metric == "birds":
+		rows.append("[color=#8e9aa4]· 其中季节迁徙 %+d[/color]" % int(GameState.BIRD_MIGRATION_DELTA[GameState.current_season()]))
 	# 刻意不写「为什么」：水质怎么拖累植被、植被怎么影响候鸟这一类因果，是留给玩家自己悟的隐性参数。
 	# 人鸟矛盾同理：只报一个安静的小计，不给公式、不给原因
 	if cf_pen > 0:

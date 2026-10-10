@@ -108,6 +108,24 @@
 		"texture": "res://assets/art/dispatch/cards/flood_release.png"
 	},
 	{
+		"category": "manage",
+		"id": "emergency_drainage",
+		"name": "应急排涝",
+		"texture": "res://assets/art/dispatch/cards/emergency_drainage.png"
+	},
+	{
+		"category": "manage",
+		"id": "outlet_clearance",
+		"name": "泄水口疏通",
+		"texture": "res://assets/art/dispatch/cards/outlet_clearance.png"
+	},
+	{
+		"category": "ecology",
+		"id": "floodplain_diversion",
+		"name": "滞洪区分流",
+		"texture": "res://assets/art/dispatch/cards/floodplain_diversion.png"
+	},
+	{
 		"category": "ecology",
 		"id": "wetland_restore",
 		"name": "退田还湿（湿地生态修复）",

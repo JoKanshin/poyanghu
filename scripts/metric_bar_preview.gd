@@ -1,4 +1,5 @@
 extends Control
+const LOSS_COLOR := Color("ef5350")
 var effects_owner: Node
 var bar: ProgressBar
 var tint := Color.WHITE
@@ -9,6 +10,7 @@ var _background: ProgressBar
 var _fill: ProgressBar
 var _join_clip: Control
 var _join_fill: ProgressBar
+var _loss_fill: StyleBoxFlat
 
 func _ready() -> void:
 	_clip = Control.new()
@@ -25,6 +27,10 @@ func _ready() -> void:
 		_clip.add_child(layer)
 	_background.add_theme_stylebox_override("background", bar.get_theme_stylebox("background"))
 	_fill.add_theme_stylebox_override("fill", bar.get_theme_stylebox("fill"))
+	# Only the forecast loss segment uses red; keep the live bar style untouched.
+	_loss_fill = bar.get_theme_stylebox("fill").duplicate() as StyleBoxFlat
+	_loss_fill.bg_color = LOSS_COLOR
+	_loss_fill.border_color = LOSS_COLOR.lightened(0.2)
 	# Cover the old rounded tip with the body of the longer fill. Clipping
 	# only after the old endpoint leaves its inward curve visible as a gap.
 	_join_clip = Control.new()
@@ -78,7 +84,9 @@ func configure(before: float, after: float) -> void:
 	visible = not is_equal_approx(current, predicted)
 	set_process(visible)
 	_layout_segment()
-	if is_instance_valid(_fill): _fill.modulate.a = blink_alpha()
+	if is_instance_valid(_fill):
+		_fill.add_theme_stylebox_override("fill", _loss_fill if predicted < current else bar.get_theme_stylebox("fill"))
+		_fill.modulate.a = blink_alpha()
 
 func blink_alpha() -> float:
 	var reduce: bool = effects_owner.wetland != null and effects_owner.wetland.reduced_motion

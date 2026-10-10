@@ -187,11 +187,18 @@ func direct_board_preview() -> void:
 		check(overlay.tint == game.METRIC_COLORS[metric] and overlay.mouse_filter == Control.MOUSE_FILTER_IGNORE, "Preview uses metric color and cannot intercept card input")
 		check(is_equal_approx(overlay.current, float(GameState.metrics[metric])) and is_equal_approx(overlay.predicted, float(game._metric_preview_values[metric])), "Overlay covers exactly the forecast difference")
 		check(overlay.segment_rect().size.y == game.metric_bars[metric].bar.size.y and overlay.segment_rect().position.y == 0.0, "Preview has the original bar's full thickness and baseline")
-		check(overlay._fill.get_theme_stylebox("fill") == game.metric_bars[metric].bar.get_theme_stylebox("fill"), "Preview reuses the original fill shape and border")
+		var original_fill: StyleBoxFlat = game.metric_bars[metric].bar.get_theme_stylebox("fill")
+		var preview_fill: StyleBoxFlat = overlay._fill.get_theme_stylebox("fill")
+		check(original_fill.bg_color == game.METRIC_COLORS[metric], "Preview cannot recolor the live metric bar")
+		if overlay.predicted < overlay.current:
+			check(preview_fill.bg_color == overlay.LOSS_COLOR and preview_fill.corner_radius_top_right == original_fill.corner_radius_top_right, "Loss preview is red with the original shape")
+		else:
+			check(preview_fill == original_fill, "Increasing preview retains its original fill and border")
 	var staggered := 0
 	for metric in game.metric_bars:
 		var overlay: Control = game.metric_bars[metric].preview
 		overlay.configure(30.0, 60.0 if staggered % 2 == 0 else 20.0)
+		check(overlay._fill.get_theme_stylebox("fill").bg_color == (game.METRIC_COLORS[metric] if staggered % 2 == 0 else overlay.LOSS_COLOR), "Forecast direction changes immediately select the correct color")
 		game._metric_preview_clock += 0.17
 		await get_tree().process_frame
 		staggered += 1

@@ -11,6 +11,14 @@ const TOTAL_TURNS := 16          # 一局 16 回合 = 4 年 × 4 季
 # 卡池分季的依据是鄱阳湖的水文节律：春涨水、夏高水、秋落水、冬枯水。
 const SEASONS := ["spring", "summer", "autumn", "winter"]
 const SEASON_NAMES := {"spring": "春", "summer": "夏", "autumn": "秋", "winter": "冬"}
+# 迁徙改变在湖候鸟数量，四季合计为零；自然迁出不按难度放大。
+const BIRD_MIGRATION_DELTA := {"spring": -4, "summer": -3, "autumn": 3, "winter": 4}
+const BIRD_MIGRATION_REASON := {
+	"spring": "春季迁出（越冬候鸟北迁）",
+	"summer": "夏季低谷（候鸟在北方繁殖）",
+	"autumn": "秋季迁入（越冬候鸟陆续抵达）",
+	"winter": "冬季越冬（在湖候鸟达到高峰）",
+}
 # 每季一句旁白：抽牌界面顶部用，把季节分类变成沉浸式科普
 const SEASON_TAGLINE := {
 	"spring": "五河来水，鱼群启程回家",
@@ -564,6 +572,42 @@ const ACTION_CARDS := [
 			"deep": {"effects": [{"metric": "water_level", "delta": -20, "delay": 0}, {"metric": "community", "delta": -3, "delay": 0}]},
 		},
 		"side_note": {"deep": "集中分洪占用沿岸作业空间，社区信任 -3；退水过度会加重干旱"},
+	},
+	{
+		"id": "emergency_drainage", "name": "应急排涝", "category": "manage",
+		"season": "all", "tags": ["洪水调度", "水工调控"],
+		"desc": "启用临时泵站与排水设施，快速降低偏高水位。投入较低、退水幅度较小，适合应急；低水位时慎用。",
+		"cost": 20,
+		"tiers": {
+			"basic": {"effects": [{"metric": "water_level", "delta": -4, "delay": 0}, {"metric": "community", "delta": -1, "delay": 0}]},
+			"effective": {"effects": [{"metric": "water_level", "delta": -7, "delay": 0}, {"metric": "community", "delta": -1, "delay": 0}]},
+			"deep": {"effects": [{"metric": "water_level", "delta": -12, "delay": 0}, {"metric": "community", "delta": -2, "delay": 0}]},
+		},
+		"side_note": {"deep": "泵站作业扰动沿岸生活，社区信任 -2；退水过度会加重干旱"},
+	},
+	{
+		"id": "outlet_clearance", "name": "泄水口疏通", "category": "manage",
+		"season": "all", "tags": ["洪水调度", "水体治理"],
+		"desc": "清理泄水口与排水通道的堵塞，恢复出流能力，即时降低湖区水位，并在下一回合改善水质。低水位时慎用。",
+		"cost": 30,
+		"tiers": {
+			"basic": {"effects": [{"metric": "water_level", "delta": -5, "delay": 0}, {"metric": "water_quality", "delta": 1, "delay": 1}, {"metric": "community", "delta": -1, "delay": 0}]},
+			"effective": {"effects": [{"metric": "water_level", "delta": -9, "delay": 0}, {"metric": "water_quality", "delta": 2, "delay": 1}, {"metric": "community", "delta": -2, "delay": 0}]},
+			"deep": {"effects": [{"metric": "water_level", "delta": -16, "delay": 0}, {"metric": "water_quality", "delta": 3, "delay": 1}, {"metric": "community", "delta": -3, "delay": 0}]},
+		},
+		"side_note": {"effective": "疏通施工影响沿岸作业，社区信任 -2；水质改善在下一回合生效"},
+	},
+	{
+		"id": "floodplain_diversion", "name": "滞洪区分流", "category": "ecology",
+		"season": "summer", "tags": ["洪水调度", "生态修复"],
+		"desc": "汛期启用滞洪区与分流沟渠，分担湖区高水位压力，退水后恢复浅滩植被。夏季可用，需兼顾滞洪区居民利益。",
+		"cost": 40,
+		"tiers": {
+			"basic": {"effects": [{"metric": "water_level", "delta": -4, "delay": 0}, {"metric": "vegetation", "delta": 2, "delay": 1}, {"metric": "community", "delta": -1, "delay": 0}]},
+			"effective": {"effects": [{"metric": "water_level", "delta": -10, "delay": 0}, {"metric": "vegetation", "delta": 3, "delay": 1}, {"metric": "community", "delta": -2, "delay": 0}]},
+			"deep": {"effects": [{"metric": "water_level", "delta": -18, "delay": 0}, {"metric": "vegetation", "delta": 6, "delay": 1}, {"metric": "community", "delta": -4, "delay": 0}]},
+		},
+		"side_note": {"deep": "扩大滞洪区占用沿岸土地，社区信任 -4；植被在下一回合恢复"},
 	},
 	{
 		"id": "wetland_restore", "name": "退田还湿（湿地生态修复）", "category": "ecology",
@@ -2867,7 +2911,12 @@ func natural_evolution_plan(roll_random: bool = true, water_delta_override: int 
 		out.append({"metric": "vegetation", "delta": 0, "min": 0, "max": 0, "kind": "none",
 			"why": "水质 %d（45~70）→ 植被本回合不变" % q})
 
-	# 4) 植被是候鸟食物基础（看推演后的植被）
+	# 4) 季节迁徙与栖息地变化共同决定候鸟值，预览和实际结算共用。
+	var migration: int = BIRD_MIGRATION_DELTA[season]
+	out.append({"metric": "birds", "delta": migration, "applied_delta": migration,
+		"min": migration, "max": migration, "kind": "loss" if migration < 0 else "gain",
+		"why": BIRD_MIGRATION_REASON[season]})
+	# 植被仍是候鸟食物基础（看推演后的植被）。
 	var veg: int = int(sim.get("vegetation", 0))
 	if veg < 42:
 		out.append({"metric": "birds", "delta": -3,
