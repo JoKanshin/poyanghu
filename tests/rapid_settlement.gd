@@ -92,6 +92,8 @@ func _ready() -> void:
 	check(game.card_infos[order.back()].card_id == "research", "A regular hand card now occupies the final slot")
 	if "--fast-score" in OS.get_cmdline_user_args(): game.score_speed = game.SCORE_SPEED_MAX
 	if "--slow-score" in OS.get_cmdline_user_args(): game.score_speed = game.SCORE_SPEED_MIN
+	game._process_staged_cards(2.2)
+	await get_tree().create_timer(0.8).timeout
 	game._finish_turn()
 	game._on_card_box_resized() # Layout callbacks must not restart springs during scoring.
 	for i in 160:

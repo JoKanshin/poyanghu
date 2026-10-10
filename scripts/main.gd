@@ -5,6 +5,7 @@ const MotionWeb = preload("res://scripts/motion_web.gd")
 const MotionSpring = preload("res://scripts/motion_spring.gd")
 const MotionScroll = preload("res://scripts/motion_scroll.gd")
 const WoodenTierLever = preload("res://scripts/wooden_tier_lever.gd")
+const CardFlight = preload("res://scripts/card_flight.gd")
 
 const VisualTheme = preload("res://scripts/visual_theme.gd")
 const PixelCardArt = preload("res://scripts/pixel_card_art.gd")
@@ -209,6 +210,9 @@ var research_label: Label
 var event_label: Label
 var right_panel: PanelContainer
 var metric_bars: Dictionary = {}
+var _metric_preview_dirty := true
+var _metric_preview_values: Dictionary = {}
+var _metric_preview_clock := 0.0
 # 指标悬停小窗（跟随鼠标：本回合会掉多少 / 红线在哪）
 var metric_tip: PanelContainer = null
 var metric_tip_title: Label = null
@@ -222,6 +226,8 @@ var bottom_right: VBoxContainer
 var card_box: Control
 var selected_label: Label
 var drag_play_hint: Label = null
+var staged_board: NinePatchRect
+var staged_board_count: Label
 var action_hint: Label         # 已移除常驻提示，保留隐藏节点供旧测试兼容
 var current_hand: Array = []   # 当前手牌（card dict 数组）
 var card_infos: Array = []     # {panel, card_id, base_pos, theta, radial, selected, tier, cost_label}
@@ -234,8 +240,18 @@ var _card_drag_index := -1
 var _card_drag_mouse := Vector2.ZERO
 var _card_drag_last_mouse := Vector2.ZERO
 var _card_drag_grab_offset := Vector2.ZERO
+var _card_drag_grab_point := Vector2.ZERO
+var _card_drag_scale_velocity := 0.0
+var _card_drag_rotation_velocity := 0.0
+var _card_drag_lean := 0.0
 const CARD_DRAG_HOLD_SEC := 0.14
 const CARD_DRAG_THRESHOLD := 7.0
+const CARD_PLAY_SWIPE := 24.0
+const CARD_UNDO_SWIPE := 34.0
+const STAGED_PREVIEW_SEC := 1.0
+const BOARD_CARD_SCALE := 0.50
+const BOARD_CARD_SPACING := 63.0
+const BOARD_CAPACITY := 5
 var play_deal_anim: bool = false              # 下次布局时播放发牌入场动画
 ## 左下角「出牌档位」拉杆（局内 UI）：向左拨 = 基础投入（半价），中间 = 有效投入，向右拨 = 深度投入（双倍价）。
 ## ⚠ 档位是**选牌那一刻**记进 card_infos 的（info["tier"]）——选中之后再拨拉杆，
@@ -1303,6 +1319,8 @@ func _process(delta: float) -> void:
 		wetland.set_process(not _paused)
 	if _paused:
 		return
+	if not _metric_preview_values.is_empty() and not (wetland and wetland.reduced_motion):
+		_metric_preview_clock += delta
 	# 开场 PPT 计时：不按键则 8 秒自动过一张
 	if _intro_playing:
 		_intro_elapsed += delta
@@ -1310,6 +1328,9 @@ func _process(delta: float) -> void:
 			_advance_intro()
 	_update_card_hover(delta)
 	_process_card_drag(delta)
+	_process_staged_cards(delta)
+	_update_metric_preview()
+	_update_execute_button()
 	_process_deck_gyro(delta)
 	_process_detail_gyro(delta)   # 点开的那张放大牌：指针压上去时同样要晃
 	_update_sort_cooldown()
@@ -1951,6 +1972,7 @@ func _build_ui() -> void:
 	rv.add_child(r_title)
 	for metric in GameState.METRIC_NAMES:
 		rv.add_child(_make_metric_row(metric))
+	_build_staged_board(canvas)
 
 	# --- 顶部事件横幅（单行、居中、不遮挡沙盘）---
 	event_label = _make_label("暂无", 13, Color(0.95, 0.95, 0.92))
@@ -1961,7 +1983,7 @@ func _build_ui() -> void:
 	event_label.anchor_top = 0.0
 	event_label.anchor_right = 1.0
 	event_label.offset_left = 240
-	event_label.offset_right = -230
+	event_label.offset_right = -602
 	event_label.offset_top = 25
 	event_label.offset_bottom = 53
 	event_label.add_theme_color_override("font_outline_color", Color(0.05, 0.08, 0.06, 0.8))
@@ -3552,7 +3574,7 @@ func _input(event: InputEvent) -> void:
 	if _card_press_panel == null:
 		return
 	if event is InputEventMouseMotion:
-		var mouse := get_viewport().get_mouse_position()
+		var mouse: Vector2 = event.position
 		if not _card_dragging and mouse.distance_to(_card_press_origin) >= CARD_DRAG_THRESHOLD:
 			_start_card_drag()
 		if _card_dragging:
@@ -3567,7 +3589,20 @@ func _input(event: InputEvent) -> void:
 
 
 func _process_card_drag(delta: float) -> void:
-	if _card_press_panel == null or _card_dragging:
+	if _card_press_panel == null:
+		return
+	if _card_dragging:
+		var info := _find_card_info(_card_press_panel)
+		var on_board: bool = info.get("stage_zone", "preview") == "board"
+		var s := BOARD_CARD_SCALE * 1.08 if on_board and not _is_undo_drop_target(_card_drag_mouse, info) else 1.12
+		var grow := MotionWeb.step(_card_press_panel.scale.x, _card_drag_scale_velocity, s, delta, 430.0, 30.0)
+		var lean := MotionWeb.step(_card_press_panel.rotation, _card_drag_rotation_velocity, _card_drag_lean, delta, 500.0, 34.0)
+		_card_drag_scale_velocity = grow.y
+		_card_drag_rotation_velocity = lean.y
+		_card_press_panel.scale = Vector2(grow.x, grow.x)
+		_card_press_panel.rotation = lean.x
+		_card_drag_lean *= exp(-10.0 * delta)
+		_place_dragged_card()
 		return
 	if not Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT):
 		return
@@ -3582,17 +3617,25 @@ func _start_card_drag() -> void:
 	if _card_press_panel == null or _score_animating or _sort_animating or _paused:
 		return
 	var info := _find_card_info(_card_press_panel)
-	if info.is_empty() or info.get("shaking", false) or info.get("flying", false):
+	if info.is_empty() or info.get("shaking", false) or (info.get("flying", false) and not info.get("queue_flying", false)):
 		return
+	if info.get("queue_flying", false):
+		CardFlight.stop(_card_press_panel)
+		info["queue_flying"] = false
+		info["flying"] = false
+		info["returning"] = false
 	_card_drag_index = card_infos.find(info)
 	if _card_drag_index < 0:
 		return
 	_card_dragging = true
 	info["dragging"] = true
 	info["hovered"] = false
-	_card_drag_mouse = get_viewport().get_mouse_position()
+	_card_drag_mouse = _card_press_origin if _card_press_origin != Vector2.ZERO else get_viewport().get_mouse_position()
 	_card_drag_last_mouse = _card_drag_mouse
 	_card_drag_grab_offset = _card_press_panel.position + _card_press_panel.pivot_offset - _screen_to_card_box(_card_drag_mouse)
+	_card_drag_grab_point = _card_press_panel.get_global_transform().affine_inverse() * _card_drag_mouse
+	if _card_press_origin == Vector2.ZERO:
+		_card_press_origin = _card_press_panel.get_global_transform() * (_card_press_panel.size * 0.5)
 	_card_press_panel.set_meta("drag_old_z", _card_press_panel.z_index)
 	Motion.cancel(_card_press_panel, "deal")
 	_card_press_panel.modulate.a = 1.0
@@ -3601,6 +3644,9 @@ func _start_card_drag() -> void:
 	MotionSpring.stop(_card_press_panel, "position")
 	MotionSpring.stop(_card_press_panel, "rotation")
 	MotionSpring.stop(_card_press_panel, "scale")
+	_card_drag_scale_velocity = 0.0
+	_card_drag_rotation_velocity = 0.0
+	_card_drag_lean = 0.0
 	_update_card_stack()
 
 
@@ -3609,14 +3655,19 @@ func _update_card_drag_pose(mouse_global: Vector2, mouse_delta: Vector2) -> void
 		return
 	_card_drag_mouse = mouse_global
 	var panel := _card_press_panel
-	panel.position = _screen_to_card_box(mouse_global) + _card_drag_grab_offset - panel.pivot_offset
-	var lean := clampf(mouse_delta.x * 0.012, -0.20, 0.20)
-	MotionSpring.to(panel, "rotation", lean, 500.0, 34.0)
-	MotionSpring.to(panel, "scale", Vector2(1.15, 1.15), 430.0, 30.0)
+	if mouse_delta != Vector2.ZERO:
+		_card_drag_lean = clampf(mouse_delta.x * 0.012, -0.20, 0.20)
+	_place_dragged_card()
 	_step_card_gyro(panel, _card_gyro_target(panel, mouse_global, true, true), get_process_delta_time())
 	_card_drag_last_mouse = mouse_global
 	_update_drag_play_hint(mouse_global)
 	_update_staged_drag_preview(mouse_global)
+
+
+func _place_dragged_card() -> void:
+	var panel := _card_press_panel
+	# Size, angle and grabbed-point placement are updated by the same frame owner.
+	panel.position = _screen_to_card_box(_card_drag_mouse) - panel.pivot_offset - ((_card_drag_grab_point - panel.pivot_offset) * panel.scale).rotated(panel.rotation)
 
 
 func _staged_row_without_drag() -> Array:
@@ -3631,10 +3682,22 @@ func _staged_row_without_drag() -> Array:
 func _staged_insert_slot(point: Vector2, count: int) -> int:
 	if count <= 1:
 		return 0
-	var spacing := STAGED_CARD_SPACING
-	var first_center := card_box.size.x * 0.5 - float(count - 1) * 0.5 * spacing
+	var on_board := _is_board_drop_target(point)
+	var spacing := BOARD_CARD_SPACING if on_board else STAGED_CARD_SPACING
+	var center := _screen_to_card_box(staged_board.get_global_rect().get_center()).x if on_board else card_box.size.x * 0.5
+	var first_center := center - float(count - 1) * 0.5 * spacing
 	# Use fixed slot centers: animated neighbours must not feed back into picking.
 	return clampi(roundi((_screen_to_card_box(point).x - first_center) / spacing), 0, count - 1)
+
+
+func _staged_queue_insert_index(point: Vector2, row: Array) -> int:
+	var zone := "board" if _is_board_drop_target(point) else "preview"
+	var visible: Array = []
+	for entry in row:
+		if entry.get("stage_zone", "preview") == zone: visible.append(entry)
+	if visible.is_empty(): return row.size()
+	var slot := _staged_insert_slot(point, visible.size() + 1)
+	return row.find(visible[slot]) if slot < visible.size() else row.find(visible.back()) + 1
 
 
 func _update_staged_drag_preview(point: Vector2) -> void:
@@ -3642,8 +3705,8 @@ func _update_staged_drag_preview(point: Vector2) -> void:
 	var dragged := _find_card_info(_card_press_panel)
 	if dragged.is_empty():
 		return
-	if _is_play_drop_target(point):
-		var slot := _staged_insert_slot(point, row.size() + 1) if dragged.get("staged_by_drag", false) else row.size()
+	if _is_play_drop_target(point) and not _is_undo_drop_target(point, dragged):
+		var slot := _staged_queue_insert_index(point, row) if dragged.get("staged_by_drag", false) else row.size()
 		row.insert(slot, dragged)
 	elif dragged.get("staged_by_drag", false):
 		row.append(dragged)
@@ -3654,6 +3717,12 @@ func _update_staged_drag_preview(point: Vector2) -> void:
 func _is_play_drop_target(point: Vector2) -> bool:
 	if card_box == null or not is_instance_valid(card_box):
 		return false
+	if _is_board_drop_target(point): return true
+	var info := _find_card_info(_card_press_panel)
+	if not info.is_empty() and not info.get("selected", false):
+		var swipe := point - _card_press_origin
+		if swipe.y <= -CARD_PLAY_SWIPE and absf(swipe.x) < -swipe.y * 2.5 + 18.0:
+			return true
 	var hand_rect := card_box.get_global_rect()
 	return point.x >= hand_rect.position.x and point.x <= hand_rect.end.x \
 		and point.y >= hand_rect.position.y - 274.0 and point.y < hand_rect.position.y - 8.0
@@ -3662,20 +3731,33 @@ func _is_play_drop_target(point: Vector2) -> bool:
 func _update_drag_play_hint(point: Vector2) -> void:
 	if drag_play_hint == null or not is_instance_valid(drag_play_hint):
 		return
-	var show_hint := _card_dragging and _is_play_drop_target(point)
+	var info := _find_card_info(_card_press_panel)
+	var undo := _is_undo_drop_target(point, info)
+	var show_hint := _card_dragging and (_is_play_drop_target(point) or undo)
 	drag_play_hint.visible = show_hint
 	if not show_hint:
 		return
-	var info := _find_card_info(_card_press_panel)
 	var reason := "" if not info.is_empty() and info["selected"] else _card_selection_error(info)
-	if reason.is_empty():
-		drag_play_hint.text = "松手落到桌面 · 待打出"
+	if undo or reason.is_empty():
+		drag_play_hint.text = ("松手退回牌库并退费" if info.get("dispatched", false) else "松手回到手牌") if undo else ("松手换位" if info.get("selected", false) else "松手出牌")
 		drag_play_hint.add_theme_color_override("font_color", Color("a8f0c1"))
 	else:
 		drag_play_hint.text = reason + " · 松手返回手牌"
 		drag_play_hint.add_theme_color_override("font_color", Color("ff9185"))
 	var vp_width := get_viewport().get_visible_rect().size.x
-	drag_play_hint.position = Vector2(vp_width * 0.5 - 190.0, card_box.global_position.y - 270.0)
+	drag_play_hint.size.x = 380.0
+	drag_play_hint.position = Vector2(clampf(point.x - 190.0, 8.0, vp_width - 388.0), maxf(8.0, point.y - 130.0))
+
+
+func _is_board_drop_target(point: Vector2) -> bool:
+	return is_instance_valid(staged_board) and staged_board.is_visible_in_tree() and staged_board.get_global_rect().grow(12.0).has_point(point)
+
+
+func _is_undo_drop_target(point: Vector2, info: Dictionary) -> bool:
+	if info.is_empty() or not info.get("staged_by_drag", false): return false
+	var swipe := point - _card_press_origin
+	return swipe.y >= CARD_UNDO_SWIPE and swipe.y > absf(swipe.x) * 0.65 \
+		and not _is_board_drop_target(point)
 
 
 func _finish_card_pointer(mouse_global: Vector2) -> void:
@@ -3686,6 +3768,7 @@ func _finish_card_pointer(mouse_global: Vector2) -> void:
 		var info := _find_card_info(panel)
 		_update_card_drag_pose(mouse_global, mouse_global - _card_drag_last_mouse)
 		var drop_to_table := _is_play_drop_target(mouse_global)
+		var undo := _is_undo_drop_target(mouse_global, info)
 		if not info.is_empty():
 			info["dragging"] = false
 		_card_dragging = false
@@ -3693,8 +3776,10 @@ func _finish_card_pointer(mouse_global: Vector2) -> void:
 		if drag_play_hint != null:
 			drag_play_hint.visible = false
 		panel.z_index = int(panel.get_meta("drag_old_z", 0))
-		if not info.is_empty():
-			if drop_to_table and not _paused and not _score_animating and not _sort_animating:
+		if not info.is_empty() and not _paused and not _score_animating and not _sort_animating:
+			if undo:
+				_return_staged_to_hand(info)
+			elif drop_to_table:
 				# Dragging onto the table is the only way to queue a hand card.
 				if not info.get("selected", false):
 					var reason := _card_selection_error(info)
@@ -3703,6 +3788,10 @@ func _finish_card_pointer(mouse_global: Vector2) -> void:
 						info["tier"] = play_tier
 						info["staged_by_drag"] = true
 						info["stage_order"] = _next_stage_order()
+						var direct := _is_board_drop_target(mouse_global)
+						info["stage_zone"] = "board" if direct else "preview"
+						info["preview_left"] = 0.0 if direct else STAGED_PREVIEW_SEC
+						if info.get("dispatched", false): info["tier"] = GameState.DISPATCH_TIER
 						_apply_gold_frame(panel)
 						_update_card_face(info)
 						var released_pos := panel.position
@@ -3714,27 +3803,23 @@ func _finish_card_pointer(mouse_global: Vector2) -> void:
 						play_sfx("land", 1.1, -12.0)
 						_update_selected_label()
 					else:
+						_layout_fan(true)
 						_reject_card(panel, reason)
 				elif info.get("staged_by_drag", false):
 					# A table card can be dragged to reorder the pending play row.
+					if _is_board_drop_target(mouse_global):
+						info["stage_zone"] = "board"
+						info["preview_left"] = 0.0
+					else:
+						info["stage_zone"] = "preview"
+						info["preview_left"] = STAGED_PREVIEW_SEC
 					info["stage_order"] = _stage_order_from_drop(mouse_global)
 					var released_pos := panel.position
 					_layout_fan(true)
 					panel.position = released_pos
 					MotionSpring.to(panel, "position", info["base_pos"], 410.0, 25.0)
 			else:
-				# Returning a staged card to the fan removes it from the queue.
-				if info.get("staged_by_drag", false) and not info.get("dispatched", false) and _is_hand_drop_target(mouse_global):
-					info["selected"] = false
-					info["staged_by_drag"] = false
-					info["stage_order"] = -1
-					info["tier"] = ""
-					panel.z_index = 0
-					_remove_gold_frame(panel)
-					_update_card_face(info)
-					_layout_fan(true)
-					_update_selected_label()
-				elif info.get("staged_by_drag", false):
+				if info.get("staged_by_drag", false):
 					var released_pos := panel.position
 					if drop_to_table:
 						_stage_order_from_drop(mouse_global)
@@ -3747,7 +3832,7 @@ func _finish_card_pointer(mouse_global: Vector2) -> void:
 				var entry_panel: PanelContainer = entry["panel"]
 				if not is_instance_valid(entry_panel):
 					continue
-				if entry.get("staged_by_drag", false) or entry.get("shaking", false):
+				if entry.get("staged_by_drag", false) or entry.get("shaking", false) or entry.get("flying", false):
 					continue
 				var goal: Vector2 = entry["base_pos"] + entry["radial"] * (CARD_RAISE if entry["selected"] else 0.0)
 				MotionSpring.to(entry_panel, "position", goal, 390.0, 24.0)
@@ -3774,6 +3859,45 @@ func _finish_card_pointer(mouse_global: Vector2) -> void:
 	_refresh_action_buttons()
 
 
+func _return_staged_to_hand(info: Dictionary) -> void:
+	var panel: PanelContainer = info["panel"]
+	if info.get("dispatched", false):
+		if not GameState.cancel_dispatch(str(info["card_id"])): return
+		card_infos.erase(info)
+		panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		info["selected"] = false
+		info["staged_by_drag"] = false
+		info["returning"] = true
+		var source := deck_root.get_global_rect().get_center()
+		if not deck_backs.is_empty():
+			var back: Control = deck_backs.back()
+			source = back.get_global_transform() * (back.size * 0.5)
+		info["base_pos"] = _screen_to_card_box(source) - panel.pivot_offset - (panel.size * 0.5 - panel.pivot_offset) * 0.32
+		_fly_queue_card(info, Vector2(0.32, 0.32), 0.0, 0.44, 54.0)
+		var flight := panel.get_node_or_null("CardFlight")
+		if flight: flight.completed = panel.queue_free
+		else: panel.queue_free()
+		_layout_fan(true)
+		_update_selected_label()
+		_update_hud()
+		play_sfx("land", 0.92, -15.0)
+		return
+	info["selected"] = false
+	info["staged_by_drag"] = false
+	info["stage_order"] = -1
+	info["stage_zone"] = "hand"
+	info["preview_left"] = 0.0
+	info["tier"] = GameState.DISPATCH_TIER if info.get("dispatched", false) else ""
+	info["returning"] = true
+	info["flying"] = true
+	_remove_gold_frame(panel)
+	_update_card_face(info)
+	_layout_fan(true)
+	_fly_queue_card(info, Vector2.ONE, float(info["theta"]), 0.44, 54.0)
+	play_sfx("land", 0.92, -15.0)
+	_update_selected_label()
+
+
 func _is_hand_drop_target(point: Vector2) -> bool:
 	return card_box != null and card_box.get_global_rect().has_point(point)
 
@@ -3788,7 +3912,7 @@ func _next_stage_order() -> int:
 
 func _stage_order_from_drop(point: Vector2) -> int:
 	var row_infos := _staged_row_without_drag()
-	var insert_at := _staged_insert_slot(point, row_infos.size() + 1)
+	var insert_at := _staged_queue_insert_index(point, row_infos)
 	row_infos.insert(insert_at, _find_card_info(_card_press_panel))
 	for i in row_infos.size():
 		row_infos[i]["stage_order"] = i
@@ -3855,6 +3979,8 @@ func _toggle_pause() -> void:
 
 
 func _pause_game() -> void:
+	if _card_press_panel != null:
+		_finish_card_pointer(_card_press_origin)
 	_paused = true
 	if sandpan_view: sandpan_view.set_paused(true)
 	if wetland: wetland.set_process(false)
@@ -3912,10 +4038,13 @@ func _clear_save() -> void:
 
 func save_game() -> void:
 	var hand_ids: Array = []
+	var dispatched_hand_ids: Array = []
 	var staged_queue: Array = []
 	for info in card_infos:
 		if not info.get("dispatched", false):
 			hand_ids.append(info["card_id"])
+		elif not info.get("selected", false):
+			dispatched_hand_ids.append(info["card_id"])
 	for idx in _ordered_staged_indices():
 		var staged: Dictionary = card_infos[idx]
 		staged_queue.append({
@@ -3925,6 +4054,7 @@ func save_game() -> void:
 		"state": GameState.serialize(),
 		"hand_ids": hand_ids,
 		"staged_queue": staged_queue,
+		"dispatched_hand_ids": dispatched_hand_ids,
 		"phase": _current_phase,
 		"event_text": _current_event,
 	}
@@ -3991,6 +4121,13 @@ func _restore_hand(data: Dictionary) -> void:
 	play_deal_anim = false
 	_build_hand_panel()
 	var restored_panels: Array[PanelContainer] = []
+	for info in card_infos:
+		if info.get("dispatched", false) and data.get("dispatched_hand_ids", []).has(info["card_id"]):
+			info["selected"] = false
+			info["staged_by_drag"] = false
+			info["stage_order"] = -1
+			info["stage_zone"] = "hand"
+			_remove_gold_frame(info["panel"])
 	for i in staged_queue.size():
 		var staged: Dictionary = staged_queue[i]
 		var cid: String = str(staged.get("card_id", ""))
@@ -4002,6 +4139,8 @@ func _restore_hand(data: Dictionary) -> void:
 				info["selected"] = true
 				info["staged_by_drag"] = true
 				info["stage_order"] = i
+				info["stage_zone"] = "board"
+				info["preview_left"] = 0.0
 				var saved_tier: String = str(staged.get("tier", ""))
 				info["tier"] = saved_tier if saved_tier != "" else _info_tier(info)
 				_update_card_face(info)
@@ -4715,7 +4854,7 @@ func _slide_main_ui(out: bool) -> void:
 			tw.kill()
 	_ui_slide_tweens.clear()
 	var vp := get_viewport().get_visible_rect().size
-	var ctrls: Array = [left_panel, right_panel, event_label, hand_panel, bottom_right, deck_root, tier_lever]
+	var ctrls: Array = [left_panel, right_panel, staged_board, event_label, hand_panel, bottom_right, deck_root, tier_lever]
 	for c in ctrls:
 		if c == null:
 			continue
@@ -4744,7 +4883,7 @@ func _slide_out_dir(c: Control) -> Vector2:
 		return Vector2(-1, 0)   # 左面板向左出
 	if c == right_panel or c == deck_root:
 		return Vector2(1, 0)    # 右面板 / 牌堆向右出
-	if c == event_label:
+	if c == event_label or c == staged_board:
 		return Vector2(0, -1)   # 顶部横幅向上出
 	if c == bottom_right:
 		return Vector2(1, 0)    # 结束回合按钮向右出
@@ -5652,14 +5791,14 @@ func _make_knowledge_card(kid: String, collected: bool) -> PanelContainer:
 		var rim := ColorRect.new()
 		rim.name = "KnowledgeFoil"
 		rim.set_meta("card_gyro_overlay", true)
-		rim.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+		rim.set_anchors_and_offsets_preset(Control.PRESET_TOP_LEFT)
 		rim.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		var foil := ShaderMaterial.new()
 		foil.shader = preload("res://scripts/knowledge_foil.gdshader")
 		foil.set_shader_parameter("card_mask", PixelCardArt.KNOWLEDGE_FACE_EGG)
 		rim.material = foil
 		panel.add_child(rim)
-		rim.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+		rim.set_anchors_and_offsets_preset(Control.PRESET_TOP_LEFT)
 	return panel
 
 
@@ -5984,6 +6123,17 @@ func _make_metric_row(metric: String) -> VBoxContainer:
 	ripple.offset_top = 2
 	ripple.offset_bottom = -2
 	wrap.add_child(ripple)
+	var preview := Control.new()
+	preview.set_script(preload("res://scripts/metric_bar_preview.gd"))
+	preview.name = "MetricPreview"
+	preview.effects_owner = self
+	preview.bar = bar
+	preview.tint = METRIC_COLORS[metric]
+	preview.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	preview.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	preview.hide()
+	preview.set_process(false)
+	wrap.add_child(preview)
 
 	var band: ColorRect
 	var high_line: ColorRect
@@ -6022,7 +6172,7 @@ func _make_metric_row(metric: String) -> VBoxContainer:
 		vb.add_child(reference_label)
 
 	metric_bars[metric] = {"bar": bar, "val": val, "line": line, "row": vb, "icon": icon,
-		"band": band, "high_line": high_line, "reference_label": reference_label, "ripple": ripple}
+		"band": band, "high_line": high_line, "reference_label": reference_label, "ripple": ripple, "preview": preview}
 	return vb
 
 
@@ -6328,6 +6478,7 @@ func _place_metric_tip(mp: Vector2) -> void:
 
 
 func _update_hud() -> void:
+	_metric_preview_dirty = true
 	_update_threshold_lines()
 	var m: Dictionary = GameState.metrics
 	# 算分动画期间**只**冻结指标条与数值 —— 这两样由动画逐项驱动，
@@ -6546,7 +6697,7 @@ func _gather_refresh_hand() -> void:
 	var pile := _screen_to_card_box(source)
 	var count := 0
 	for info in card_infos:
-		if info.get("staged_by_drag", false): continue
+		if info.get("staged_by_drag", false) or info.get("dispatched", false): continue
 		var panel: PanelContainer = info["panel"]
 		if not is_instance_valid(panel): continue
 		Motion.cancel(panel, "deal")
@@ -6776,6 +6927,7 @@ func _sync_dispatched_stage_cards() -> void:
 			"panel": panel, "card_id": cid, "cost_label": made["cost_label"],
 			"base_pos": panel.position, "theta": 0.0, "radial": Vector2.UP,
 			"selected": true, "staged_by_drag": true, "stage_order": _next_stage_order(),
+			"stage_zone": "preview", "preview_left": STAGED_PREVIEW_SEC,
 			"shaking": false, "hovered": false, "tier": str(d["tier"]), "dispatched": true,
 		})
 	_layout_fan()
@@ -6790,7 +6942,7 @@ func _build_hand_panel(preserve_staged: bool = false) -> void:
 	_card_drag_index = -1
 	var staged_infos: Array = []
 	for info in card_infos:
-		if preserve_staged and info.get("staged_by_drag", false):
+		if preserve_staged and (info.get("staged_by_drag", false) or info.get("dispatched", false)):
 			staged_infos.append(info)
 	for c in card_box.get_children():
 		var keep_panel := false
@@ -6808,6 +6960,7 @@ func _build_hand_panel(preserve_staged: bool = false) -> void:
 	for card in current_hand:
 		var made := _make_card(card)
 		var panel: PanelContainer = made["panel"]
+		panel.pivot_offset = Vector2(61.0, 165.0)
 		_bind_card_gyro(panel)
 		card_box.add_child(panel)
 		card_infos.append({
@@ -6921,33 +7074,120 @@ func _layout_fan(animate_hand: bool = false) -> void:
 		_play_deal_animation.call_deferred()
 
 
+func _build_staged_board(canvas: CanvasLayer) -> void:
+	staged_board = NinePatchRect.new()
+	staged_board.name = "StagedWoodenBoard"
+	var atlas := AtlasTexture.new()
+	atlas.atlas = preload("res://assets/ui/wooden_gui_32x32.png")
+	atlas.region = Rect2(448, 640, 96, 96)
+	staged_board.texture = atlas
+	staged_board.patch_margin_left = 12
+	staged_board.patch_margin_right = 12
+	staged_board.patch_margin_top = 12
+	staged_board.patch_margin_bottom = 12
+	staged_board.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+	staged_board.anchor_left = 1.0
+	staged_board.anchor_right = 1.0
+	staged_board.offset_left = -562
+	staged_board.offset_right = -222
+	staged_board.offset_top = 18
+	staged_board.offset_bottom = 142
+	staged_board.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	canvas.add_child(staged_board)
+	_ui_slide_origin[staged_board] = [-562.0, 18.0, -222.0, 142.0]
+	staged_board_count = _make_label("待执行  0 / 5", 12, Color("f0d7ab"))
+	staged_board_count.position = Vector2(18, 9)
+	staged_board_count.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	staged_board.add_child(staged_board_count)
+	staged_board.hide()
+
+
 func _layout_staged_cards(staged_infos: Array) -> void:
-	if staged_infos.is_empty() or card_box == null:
+	if card_box == null: return
+	if sandpan_view and sandpan_view.board_cards_attached: return
+	var board_infos: Array = []
+	var preview_infos: Array = []
+	for info in staged_infos:
+		if info.get("stage_zone", "preview") == "board": board_infos.append(info)
+		else: preview_infos.append(info)
+	for row in [preview_infos, board_infos]:
+		var docked: bool = row == board_infos
+		for i in row.size():
+			var info: Dictionary = row[i]
+			var panel: PanelContainer = info["panel"]
+			# A drag preview reserves a slot for neighbours only. The held card
+			# keeps its canonical hand position until release actually commits it.
+			if _card_dragging and panel == _card_press_panel:
+				panel.z_index = 1000
+				continue
+			var s := BOARD_CARD_SCALE if docked else 1.0
+			var spacing := BOARD_CARD_SPACING if docked else STAGED_CARD_SPACING
+			var center := Vector2(card_box.size.x * 0.5, -115.5)
+			if docked: center = _screen_to_card_box(staged_board.get_global_rect().position + Vector2(staged_board.size.x * 0.5, 66.0))
+			center.x += (float(i) - float(row.size() - 1) * 0.5) * spacing
+			var target := center - panel.pivot_offset - (panel.size * 0.5 - panel.pivot_offset) * s
+			info["base_pos"] = target
+			info["theta"] = 0.0
+			info["radial"] = Vector2.UP
+			if info.get("queue_flying", false):
+				var flight := panel.get_node_or_null("CardFlight")
+				if flight: flight.target_position = target
+				continue
+			if _score_animating or info.get("flying", false): continue
+			Motion.cancel(panel, "deal")
+			panel.modulate.a = 1.0
+			panel.z_index = 100 + int(info.get("stage_order", i))
+			MotionSpring.to(panel, "rotation", 0.0, 460.0, 34.0)
+			MotionSpring.to(panel, "scale", Vector2(s, s), 430.0, 32.0)
+			MotionSpring.to(panel, "position", target, 440.0, 32.0)
+	if staged_board_count:
+		var count := _ordered_staged_indices().size()
+		staged_board_count.text = "待执行  %d / %d" % [count, BOARD_CAPACITY]
+
+
+func _process_staged_cards(delta: float) -> void:
+	if staged_board:
+		staged_board.visible = _playing and hand_panel.visible and _current_phase == "allocate"
+	if _current_phase != "allocate" or _score_animating or _sort_animating or _deck_open \
+		or not hand_panel.visible or (sandpan_view and sandpan_view.collapsed) \
+		or (dispatch_panel and dispatch_panel.visible) or popup_root.visible or crisis_root.visible:
 		return
-	# A fixed edge gap keeps the played row parallel and evenly spread, including
-	# four ordinary actions plus a dispatched card. Never squeeze slots together.
-	var spacing := STAGED_CARD_SPACING
-	var row_y := -198.0
-	for i in staged_infos.size():
-		var info: Dictionary = staged_infos[i]
-		var panel: PanelContainer = info["panel"]
-		var center_x := card_box.size.x * 0.5 + (float(i) - float(staged_infos.size() - 1) * 0.5) * spacing
-		var target := Vector2(center_x - panel.pivot_offset.x, row_y)
-		if _card_dragging and panel == _card_press_panel:
-			panel.z_index = 1000
-			continue
-		info["base_pos"] = target
-		info["theta"] = 0.0
-		info["radial"] = Vector2.UP
-		Motion.cancel(panel, "deal")
-		panel.modulate.a = 1.0
-		# Keep table cards above the hand while retaining the queue order.
-		panel.z_index = 100 + i
-		MotionSpring.stop(panel, "rotation")
-		MotionSpring.stop(panel, "scale")
-		panel.rotation = 0.0
-		panel.scale = Vector2.ONE
-		MotionSpring.to(panel, "position", target, 440.0, 28.0)
+	var docking: Array = []
+	for info in card_infos:
+		if not info.get("staged_by_drag", false) or info.get("stage_zone", "preview") != "preview" \
+			or info.get("dragging", false) or info.get("flying", false) or info["panel"] == _card_press_panel: continue
+		info["preview_left"] = maxf(0.0, float(info.get("preview_left", STAGED_PREVIEW_SEC)) - delta)
+		if info["preview_left"] <= 0.0:
+			info["stage_zone"] = "board"
+			info["queue_flying"] = true
+			info["flying"] = true
+			docking.append(info)
+	if docking.is_empty(): return
+	_layout_fan(true)
+	for info in docking:
+		_fly_queue_card(info, Vector2(BOARD_CARD_SCALE, BOARD_CARD_SCALE), 0.0, 0.58, 92.0)
+
+
+func _fly_queue_card(info: Dictionary, goal_scale: Vector2, angle: float, duration: float, arc: float) -> void:
+	var panel: PanelContainer = info["panel"]
+	for key in ["position", "scale", "rotation"]: MotionSpring.stop(panel, key)
+	Motion.cancel(panel, "deal")
+	info["queue_flying"] = true
+	info["flying"] = true
+	panel.z_index = 900
+	_step_card_gyro(panel, Vector2.ZERO, 1.0)
+	CardFlight.play(panel, info["base_pos"], goal_scale, angle, duration, arc, _finish_queue_flight.bind(info, panel))
+
+
+func _finish_queue_flight(info: Dictionary, panel: PanelContainer) -> void:
+	_metric_preview_dirty = true
+	if not is_instance_valid(panel): return
+	info["queue_flying"] = false
+	info["returning"] = false
+	info["flying"] = false
+	panel.z_index = 100 + int(info.get("stage_order", 0)) if info.get("staged_by_drag", false) else 0
+	_step_card_gyro(panel, Vector2.ZERO, 1.0)
+	_update_execute_button()
 
 
 ## Balatro-style deal: leave the visible stack, rotate and spread into the fan.
@@ -7316,17 +7556,21 @@ func _find_card_info(panel: PanelContainer) -> Dictionary:
 func _on_card_gui_input(event: InputEvent, panel: PanelContainer) -> void:
 	if _score_animating or _sort_animating:
 		return      # 算分动画 / 手牌换位进行中，牌正在飞，不接受选中切换
+	if sandpan_view and (sandpan_view.collapsed or sandpan_view.board_cards_attached): return
 	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
 		if _card_press_panel != null:
 			return
 		_card_press_panel = panel
-		_card_press_origin = get_viewport().get_mouse_position()
+		_card_press_origin = panel.get_global_transform() * event.position
 		_card_press_elapsed = 0.0
 
 
 func _card_selection_error(info: Dictionary) -> String:
 	if info.is_empty():
 		return "无法识别这张牌"
+	if _ordered_staged_indices().size() >= BOARD_CAPACITY:
+		return "小牌桌已满（最多 5 张）"
+	if info.get("dispatched", false): return ""
 	var slots := GameState.action_slots()
 	if _selected_count() >= slots:
 		return "行动位已满（本难度每回合最多 %d 个）" % slots
@@ -7355,10 +7599,51 @@ func _selected_count() -> int:
 
 
 func _update_selected_label() -> void:
+	_metric_preview_dirty = true
 	if selected_label != null:
 		selected_label.text = ""
 		selected_label.visible = false
 	_update_turn_budget_label()
+	_update_execute_button()
+
+
+func _update_metric_preview() -> void:
+	var active := _playing and _current_phase == "allocate" and not _score_animating
+	if not active:
+		_metric_preview_dirty = true
+		if _metric_preview_values.is_empty(): return
+		_metric_preview_values.clear()
+		for metric in metric_bars:
+			metric_bars[metric]["preview"].configure(0.0, 0.0)
+			metric_bars[metric]["val"].tooltip_text = ""
+		return
+	if not _metric_preview_dirty: return
+	_metric_preview_dirty = false
+	var queue: Array = []
+	for index in _ordered_staged_indices():
+		var info: Dictionary = card_infos[index]
+		if info.get("stage_zone", "preview") != "board" or info.get("queue_flying", false): continue
+		queue.append({"card_id": info["card_id"], "tier": _info_tier(info), "dispatched": info.get("dispatched", false)})
+	_metric_preview_values = GameState.preview_settlement(queue) if not queue.is_empty() else {}
+	for metric in metric_bars:
+		var current := float(GameState.metrics[metric])
+		var predicted := float(_metric_preview_values.get(metric, current))
+		metric_bars[metric]["preview"].configure(current, predicted)
+		metric_bars[metric]["val"].tooltip_text = "结算预览：%d → %d（%+d）\n含本回合到期的遗留效果、协同、自然变化、六值联动与已预警危机；与实际结算共用本回合水位结果。" % [int(current), int(predicted), int(predicted - current)] if not queue.is_empty() else ""
+
+
+func _cards_waiting_for_board() -> bool:
+	for info in card_infos:
+		if info.get("staged_by_drag", false) and (info.get("stage_zone", "preview") != "board" or info.get("queue_flying", false) or info.get("dragging", false)):
+			return true
+	return false
+
+
+func _update_execute_button() -> void:
+	if end_turn_btn == null: return
+	var waiting := _cards_waiting_for_board()
+	end_turn_btn.disabled = waiting or _score_animating or _sort_animating
+	end_turn_btn.tooltip_text = "等待所有已打出的牌落到待执行区" if waiting else ""
 
 
 func _update_turn_budget_label() -> void:
@@ -7390,6 +7675,11 @@ func _reject_card(panel: PanelContainer, reason: String) -> void:
 		if is_instance_valid(sb):
 			sb.border_color = old_border
 		info["shaking"] = false)
+	impact.finished.connect(func() -> void:
+		if not is_instance_valid(panel) or _find_card_info(panel).is_empty() or _score_animating: return
+		MotionSpring.to(panel, "position", info["base_pos"], 430.0, 32.0)
+		MotionSpring.to(panel, "rotation", float(info["theta"]), 460.0, 34.0)
+		MotionSpring.to(panel, "scale", Vector2.ONE, 390.0, 30.0))
 	panel.add_child(impact)
 	_flash_hint(reason)
 
@@ -7410,7 +7700,7 @@ func _flash_hint(text: String) -> void:
 ## mouse_override 仅供自动化测试顶替真实鼠标（与 _update_metric_tip 同一个套路），
 ## 正常游戏不传 —— 但手牌陀螺仪要拍证据，就必须能凭空指定一个悬停点。
 func _update_card_hover(delta: float, mouse_override: Vector2 = Vector2.INF) -> void:
-	if sandpan_view and sandpan_view.collapsed: return
+	if sandpan_view and (sandpan_view.collapsed or sandpan_view.board_cards_attached): return
 	if hand_panel.visible == false or card_infos.is_empty():
 		return
 	if _score_animating:
@@ -7606,8 +7896,12 @@ func _remove_gold_frame(panel: PanelContainer) -> void:
 
 
 func _finish_turn() -> void:
-	if _score_animating or _sort_animating:
+	if _score_animating or _sort_animating or _cards_waiting_for_board():
 		return      # 算分动画 / 手牌排序进行中，忽略连点
+	_card_press_panel = null
+	_card_dragging = false
+	_card_drag_index = -1
+	if drag_play_hint: drag_play_hint.hide()
 	if sandpan_view: sandpan_view.prepare_settlement()
 
 	# 执行所有选中的卡（防御：资金/行动位不足的记录为失败，不静默吞掉）
@@ -7744,10 +8038,9 @@ func _finish_turn() -> void:
 ## ⚠ 本函数不做任何游戏逻辑、不碰任何随机数 —— 它只是「回放」已经算完的流水账。
 ##   一旦在这里调了带 roll_random 的推演，同种子复现就废了。
 func _play_score_animation(ledger: Array, before_all: Dictionary, played: Array, after: Dictionary) -> void:
-	const T_FLY_END := 0.35        # 甩牌节拍结束时刻
-	const FLY_DUR := 0.26          # 单张牌飞行时长
-	const FLY_LAG := 0.035         # 相邻牌甩出的错开间隔
-	const FLY_LEAD := 10.0         # 砸桌过冲高度 —— 「重量感」的来源：先冲过头再砸下来
+	const T_FLY_END := 0.55
+	const FLY_DUR := 0.48          # 从小牌桌连续放大回到结算区
+	const FLY_LAG := 0.045
 	const FLY_SPACING := STAGED_CARD_SPACING # 与已打出区保持相同牌边间距
 	const CARD_BUDGET := 1.30      # 逐张弹分总预算（0.35 → 1.65）
 	const CARD_BEAT_MIN := 0.24
@@ -7806,8 +8099,12 @@ func _play_score_animation(ledger: Array, before_all: Dictionary, played: Array,
 		var panel: PanelContainer = info["panel"]
 		if not is_instance_valid(panel): continue
 		for key in ["position", "rotation", "scale"]: MotionSpring.stop(panel, key)
+		CardFlight.stop(panel)
 		Motion.cancel(panel, "deal")
 		info["dealing"] = false
+		info["queue_flying"] = false
+		info["returning"] = false
+		info["dragging"] = false
 	var landing_targets: Dictionary = {}
 	var n_played: int = played.size()
 	# 落点间距：默认 FLY_SPACING（牌宽 122 + 24 的余量）。简单模式一回合最多可能出现
@@ -7826,23 +8123,14 @@ func _play_score_animation(ledger: Array, before_all: Dictionary, played: Array,
 		if not is_instance_valid(panel):
 			continue
 		info["flying"] = true          # 让 _update_card_hover 让出控制权（照抄 shaking 的既有模式）
-		panel.z_index = 5              # 保证甩出去的牌画在最上层
-		panel.scale = Vector2.ONE
+		panel.z_index = 900 + k
 		panel.modulate.a = 1.0
 		_step_card_gyro(panel, Vector2.ZERO, 1.0)
 		var slot := Vector2(vp.x * 0.5 + (float(k) - float(n_played - 1) * 0.5) * spacing, slot_y)
 		var target: Vector2 = _screen_to_card_box(slot) - panel.pivot_offset
 		landing_targets[panel] = target
 		var d: float = k * FLY_LAG * ds
-		var tw := Motion.tween(panel, "linear", "score_flight")
-		Motion.curve(tw, "power3.out")
-		tw.tween_property(panel, "position", target + Vector2(0, -FLY_LEAD), FLY_DUR * 0.70 * ds).set_delay(d)
-		# 末段换成 BACK/EASE_OUT：越过落点再弹回来 —— 这一下就是「砸在桌上」
-		Motion.curve(tw, "back.out")
-		tw.tween_property(panel, "position", target, FLY_DUR * 0.30 * ds)
-		var tw_rot := Motion.tween(panel, "linear", "score_rotation")
-		Motion.curve(tw_rot, "power2.out")
-		tw_rot.tween_property(panel, "rotation", 0.0, FLY_DUR * 0.85 * ds).set_delay(d)
+		CardFlight.play(panel, target, Vector2.ONE, 0.0, FLY_DUR * ds, 66.0, Callable(), d)
 		# 甩牌落桌：闷响，比叮低一档，做"拍在桌上"的质感
 		play_sfx("land", 1.0 + 0.05 * float(k), -4.0)
 
@@ -7878,6 +8166,7 @@ func _play_score_animation(ledger: Array, before_all: Dictionary, played: Array,
 	# Resolve sub-frame tween timing at the shared landing pose before any score pop.
 	for panel in landing_targets:
 		if not is_instance_valid(panel): continue
+		CardFlight.stop(panel)
 		Motion.cancel(panel, "score_flight")
 		Motion.cancel(panel, "score_rotation")
 		panel.position = landing_targets[panel]
@@ -8172,6 +8461,9 @@ func _score_anim_cleanup() -> void:
 		if not is_instance_valid(panel):
 			continue
 		preload("res://scripts/card_burn.gd").reset(panel)
+		CardFlight.stop(panel)
+		info["queue_flying"] = false
+		info["returning"] = false
 		if info.get("flying", false):
 			Motion.cancel(panel, "score_flight")
 			Motion.cancel(panel, "score_rotation")

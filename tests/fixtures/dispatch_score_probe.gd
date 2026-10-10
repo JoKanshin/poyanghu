@@ -10,7 +10,7 @@ func _play_score_animation(ledger: Array, before_all: Dictionary, played: Array,
 		replayed_cards.append(str(card_infos[index]["card_id"]))
 		replayed_panels.append(card_infos[index]["panel"])
 	await super._play_score_animation(ledger, before_all, played, after)
-func _play_card_shake(panel: PanelContainer, amp: float) -> void:
+func _play_card_shake(panel: PanelContainer, amp: float, strength: float = 1.0, duration_scale: float = 1.0) -> void:
 	var low := INF
 	var high := -INF
 	for card in replayed_panels:
@@ -23,4 +23,4 @@ func _play_card_shake(panel: PanelContainer, amp: float) -> void:
 			if spring and spring.is_processing(): active_settlement_springs += 1
 	row_y_spreads.append(high - low)
 	popped_cards.append(str(panel.get_meta("probe_card_id", "")))
-	super._play_card_shake(panel, amp)
+	super._play_card_shake(panel, amp, strength, duration_scale)

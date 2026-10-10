@@ -292,14 +292,14 @@ func _ready() -> void:
 	var before_funds: int = GameState.funds
 	var info: Dictionary = game.card_infos[0]
 	game._set_play_tier("basic", false)
-	game._toggle_card(info.panel)
+	preload("res://tests/card_input.gd").drop_on_board(game, info)
 	var locked_tier: String = info.tier
 	game._set_play_tier("deep", false)
 	check(info.tier == locked_tier, "Changing lever must preserve selected card tier")
 	check(GameState.funds == before_funds and GameState.metrics == before, "Selecting cards must not spend/apply effects")
 	await settle()
 	await capture("04-selected")
-	game._toggle_card(info.panel)
+	preload("res://tests/card_input.gd").retract(game, info)
 	game._set_play_tier("effective", false)
 	game._open_deck_viewer()
 	await settle(1.8)
@@ -347,7 +347,7 @@ func _ready() -> void:
 	game._resume_game()
 	# Resolve an actual turn, including the existing score choreography.
 	game._set_play_tier("basic", false)
-	game._toggle_card(game.card_infos[0].panel)
+	preload("res://tests/card_input.gd").drop_on_board(game, game.card_infos[0])
 	var turn_before: int = GameState.turn
 	game._finish_turn()
 	await settle(1.0)

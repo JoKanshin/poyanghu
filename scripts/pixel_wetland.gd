@@ -3,6 +3,18 @@ extends Control
 const Motion = preload("res://scripts/motion.gd")
 const MotionWeb = preload("res://scripts/motion_web.gd")
 const VisualTheme := preload("res://scripts/visual_theme.gd")
+var scenery_atlas := preload("res://scripts/scenery_atlas.gd").new()
+
+func _atlas_texture(source: Texture2D) -> Texture2D:
+	return scenery_atlas.texture(source)
+
+func _build_scenery_atlas() -> void:
+	var sources: Array = []
+	for group in [sprites, bird_sprites, BIRD_ACTIONS, HOUSE_ART, prop_textures, pine_seasons, seasonal_trees]:
+		sources.append_array(group)
+	for frames in tree_frames: sources.append_array(frames)
+	sources.append_array([FLOATING_ISLAND, COMMUNITY_CAR])
+	scenery_atlas.build(sources)
 ## Orthographic 45-degree wetland view, with upright scenery and wildlife.
 ## All decorative placement is deterministic; never consume gameplay RNG.
 const LANDSCAPE := preload("res://assets/art/poyang-terrain-base.png")
@@ -222,6 +234,7 @@ func _ready() -> void:
 	_measure_house_art()
 	_build_exterior_seasons()
 	_build_meadow_scenery()
+	_build_scenery_atlas()
 	_build_land_relief()
 	easter_rng.randomize()
 	var land_margin := ColorRect.new()
@@ -799,7 +812,7 @@ func _draw_community_car(c: Control) -> void:
 	if car_progress <= 0.01: return
 	var p := _wildlife_point(car_site)
 	var extent := CAR_EXTENT
-	c.draw_texture_rect(COMMUNITY_CAR, Rect2((p - extent * Vector2(0.5, 0.88)).round(), extent), false, Color(1, 1, 1, car_progress))
+	c.draw_texture_rect(_atlas_texture(COMMUNITY_CAR), Rect2((p - extent * Vector2(0.5, 0.88)).round(), extent), false, Color(1, 1, 1, car_progress))
 
 func sync_community_targets() -> void:
 	# 社区指数决定可见村落规模，使用全部环湖位置；不再由围垦强度决定栋数。
@@ -1122,7 +1135,7 @@ func _draw_fishing_boat(c: Control, p: Vector2, heading: float = 1.0, direction:
 		# Account for the artwork's diagonal bow; rotate around the hull, not its feet.
 		var mirror := -heading
 		c.draw_set_transform(p, _river_boat_rotation(direction, mirror), Vector2(mirror, 1.0))
-		c.draw_texture_rect(sprites[7], Rect2(-FISHING_BOAT_EXTENT * Vector2(0.5, 0.60), FISHING_BOAT_EXTENT), false)
+		c.draw_texture_rect(_atlas_texture(sprites[7]), Rect2(-FISHING_BOAT_EXTENT * Vector2(0.5, 0.60), FISHING_BOAT_EXTENT), false)
 	c.draw_set_transform(Vector2.ZERO)
 
 func _draw_yangtze_boats(c: Control) -> void:
@@ -1231,6 +1244,9 @@ func _build_static_scenery() -> Array[Dictionary]:
 	return items
 
 func _draw_wildlife(c: Control) -> void:
+	# In local camera coordinates, 96 px covers the largest sprite plus its
+	# seasonal leaves/sway. Offscreen items keep simulating and depth order.
+	var visible_rect: Rect2 = (c.get_global_transform().affine_inverse() * get_viewport_rect()).grow(96.0)
 	_draw_yangtze_boats(c)
 	for i in 28:
 		var uv: Vector2 = WATER_ANCHORS[i % WATER_ANCHORS.size()]
@@ -1246,6 +1262,7 @@ func _draw_wildlife(c: Control) -> void:
 		_draw_sprite(c, p, 3, Vector2(15, 24), Color(0.6, 0.85, 0.8, 0.45 * _visual_weight("metrics", "fish", i, 12.0)))
 	for item in _render_items:
 		var p := _wildlife_point(item["uv"])
+		if not visible_rect.has_point(p): continue
 		match str(item["kind"]):
 			"prop":
 				var prop: Dictionary = item["prop"]
@@ -1257,9 +1274,9 @@ func _draw_wildlife(c: Control) -> void:
 					var rect := Rect2((p - extent * Vector2(0.5, 0.9)).round(), extent.round())
 					if prop["kind"] == 4:
 						var amount := _tree_season_blend(item["uv"])
-						c.draw_texture_rect(pine_seasons[previous_season], rect, false)
-						c.draw_texture_rect(texture, rect, false, Color(1, 1, 1, amount))
-					else: c.draw_texture_rect(texture, rect, false, _season_prop_tint(item["uv"]))
+						c.draw_texture_rect(_atlas_texture(pine_seasons[previous_season]), rect, false)
+						c.draw_texture_rect(_atlas_texture(texture), rect, false, Color(1, 1, 1, amount))
+					else: c.draw_texture_rect(_atlas_texture(texture), rect, false, _season_prop_tint(item["uv"]))
 			"flower": _draw_summer_flower(c, p, item["uv"])
 			"tree": _draw_tree(c, p, 0.78, item["uv"])
 			"plant": _draw_plant(c, p, str(item["pid"]), float(item["growth"]), item["uv"])
@@ -1278,7 +1295,7 @@ func _draw_wildlife(c: Control) -> void:
 func _draw_plant(c: Control, p: Vector2, pid: String, growth: float, uv: Vector2 = Vector2.INF) -> void:
 	c.draw_set_transform(p, 0.0, Vector2.ONE * growth)
 	match pid:
-		"lian": c.draw_texture_rect(bird_sprites[5], Rect2(Vector2(-19, -21), Vector2(38, 38)), false)
+		"lian": c.draw_texture_rect(_atlas_texture(bird_sprites[5]), Rect2(Vector2(-19, -21), Vector2(38, 38)), false)
 		"luwei": _draw_sprite(c, Vector2.ZERO, 4, Vector2(36, 48))
 		"chishan": _draw_tree(c, Vector2.ZERO, 1.0, uv)
 		"kucao":
@@ -1294,7 +1311,7 @@ func _draw_island(c: Control, i: int) -> void:
 	if growth < 0.99: c.draw_arc(p, 9 + (1.0 - growth) * 15, 0, TAU, 16, Color(0.72, 0.93, 0.98, 1.0 - growth), 2.0)
 	var extent := Vector2(48, 48) * maxf(0.08, growth)
 	p.y += (1.0 - growth) * 14.0
-	c.draw_texture_rect(FLOATING_ISLAND, Rect2((p - extent * Vector2(0.5, 0.65)).round(), extent), false, Color(1, 1, 1, growth))
+	c.draw_texture_rect(_atlas_texture(FLOATING_ISLAND), Rect2((p - extent * Vector2(0.5, 0.65)).round(), extent), false, Color(1, 1, 1, growth))
 
 func _draw_action_effects(c: Control) -> void:
 	for interest in interests:
@@ -1431,8 +1448,40 @@ func _contact_shadow_specs(items: Array[Dictionary] = []) -> Array[Dictionary]:
 	return specs
 
 func _draw_contact_shadows(c: Control) -> void:
+	# The same translucent polygons, in the same order, share one mesh draw.
+	# Rebuild only when the existing shadow invalidation requests a redraw.
+	var vertices := PackedVector2Array()
+	var colors := PackedColorArray()
+	var indices := PackedInt32Array()
 	for spec in _render_shadow_specs:
-		_draw_shadow(c, spec["uv"], _px_to_uv(float(spec["radius"])), float(spec["alpha"]), float(spec["foot"]), str(spec["kind"]))
+		if not SHADOWS.get(str(spec.kind), false): continue
+		var uv: Vector2 = spec.uv
+		var radius := _px_to_uv(float(spec.radius))
+		if radius <= 0.0: continue
+		var pixel_radius := _shadow_point(uv + Vector2(radius, 0)).distance_to(_shadow_point(uv))
+		if pixel_radius < 1.0: continue
+		var alpha := float(spec.alpha) * clampf((pixel_radius - 1.0) / 3.0, 0.0, 1.0)
+		var offset := _wildlife_point(uv) - _shadow_point(uv) + Vector2(0.0, float(spec.foot))
+		for band in [[1.05, 0.18], [0.90, 0.32], [0.70, 0.45]]:
+			var points := Transform2D(0.0, offset) * _shadow_polygon(uv, radius * float(band[0]))
+			var start := vertices.size()
+			vertices.append_array(points)
+			var color := Color(0.08, 0.13, 0.11, alpha * float(band[1]))
+			for point in points: colors.append(color)
+			for i in range(1, points.size() - 1):
+				indices.append_array(PackedInt32Array([start, start + i, start + i + 1]))
+	if vertices.is_empty(): return
+	var arrays: Array = []
+	arrays.resize(Mesh.ARRAY_MAX)
+	arrays[Mesh.ARRAY_VERTEX] = vertices
+	arrays[Mesh.ARRAY_COLOR] = colors
+	arrays[Mesh.ARRAY_INDEX] = indices
+	var mesh := ArrayMesh.new()
+	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays, [], {}, Mesh.ARRAY_FLAG_USE_2D_VERTICES)
+	# Canvas draw commands hold a RID, not a Resource reference. Each canvas
+	# retains its own mesh until its next redraw or destruction.
+	c.set_meta("contact_shadow_mesh", mesh)
+	c.draw_mesh(mesh, null)
 
 func _draw_houses(c: Control) -> void:
 	for i in house_sites.size(): _draw_house(c, i)
@@ -1460,7 +1509,7 @@ func _draw_house(c: Control, i: int) -> void:
 			c.draw_rect(Rect2((p + offset).round(), Vector2(3, 3)), Color("e4ce9b"))
 	var extent := Vector2(HOUSE_BOX, HOUSE_BOX) * sc
 	var tint := Color.WHITE if i < lit else Color(0.66, 0.63, 0.56)
-	c.draw_texture_rect(HOUSE_ART[art_index], Rect2((p - extent * Vector2(0.5, HOUSE_ANCHOR_Y)).round(), extent.round()), false, tint)
+	c.draw_texture_rect(_atlas_texture(HOUSE_ART[art_index]), Rect2((p - extent * Vector2(0.5, HOUSE_ANCHOR_Y)).round(), extent.round()), false, tint)
 	if phase < 0.22 and i >= house_target_count:
 		_draw_sprite(c, p + Vector2(7, 0), 4, Vector2(16, 23))
 
@@ -1476,12 +1525,12 @@ func _draw_tree(c: Control, p: Vector2, scale_factor: float = 1.0, _uv: Vector2 
 	var rect := Rect2((p - extent * Vector2(0.5, 0.9)).round(), extent.round())
 	var amount := _tree_season_blend(_uv)
 	if amount >= 1.0 or previous_season == season:
-		c.draw_texture_rect(seasonal_trees[season], rect, false)
+		c.draw_texture_rect(_atlas_texture(seasonal_trees[season]), rect, false)
 	elif season == 0 and previous_season == 3:
 		# Fixed leaf-cluster masks grow real opaque leaves instead of fading a crown.
-		c.draw_texture_rect(tree_frames[0][clampi(roundi(amount * 16), 0, 16)], rect, false)
+		c.draw_texture_rect(_atlas_texture(tree_frames[0][clampi(roundi(amount * 16), 0, 16)]), rect, false)
 	elif season == 3:
-		c.draw_texture_rect(tree_frames[3][clampi(roundi(amount * 16), 0, 16)], rect, false)
+		c.draw_texture_rect(_atlas_texture(tree_frames[3][clampi(roundi(amount * 16), 0, 16)]), rect, false)
 		if not reduced_motion and amount > 0.02 and amount < 0.98:
 			for i in 6:
 				var fall := fposmod(amount * 1.7 + float(i) / 6.0, 1.0)
@@ -1490,8 +1539,8 @@ func _draw_tree(c: Control, p: Vector2, scale_factor: float = 1.0, _uv: Vector2 
 				if not _creeper_weather_exclusion().has_point(world_leaf):
 					c.draw_rect(Rect2(leaf.round(), Vector2(2, 2) * scale_factor), Color("dbb074", 1.0 - fall))
 	else:
-		c.draw_texture_rect(seasonal_trees[previous_season], rect, false)
-		c.draw_texture_rect(seasonal_trees[season], rect, false, Color(1, 1, 1, amount))
+		c.draw_texture_rect(_atlas_texture(seasonal_trees[previous_season]), rect, false)
+		c.draw_texture_rect(_atlas_texture(seasonal_trees[season]), rect, false, Color(1, 1, 1, amount))
 
 func _draw_marsh(c: Control, p: Vector2, pid: String) -> void:
 	var color := Color("a8b86a") if pid == "lihao" else Color("81a26d")
@@ -1500,7 +1549,7 @@ func _draw_marsh(c: Control, p: Vector2, pid: String) -> void:
 	c.draw_rect(Rect2(p + Vector2(5, -1), Vector2(3, 7)), color)
 
 func _draw_sprite(c: Control, p: Vector2, index: int, extent: Vector2, tint: Color = Color.WHITE) -> void:
-	c.draw_texture_rect(sprites[index], Rect2((p - extent * Vector2(0.5, 0.85)).round(), extent), false, tint)
+	c.draw_texture_rect(_atlas_texture(sprites[index]), Rect2((p - extent * Vector2(0.5, 0.85)).round(), extent), false, tint)
 
 func _bird_animation_frame(bird: Dictionary) -> int:
 	var state: int = bird["state"]
@@ -1550,7 +1599,7 @@ func _draw_bird_actor(c: Control, bird: Dictionary) -> void:
 	# Billboard sprites remain upright: only mirror horizontally, never rotate.
 	# Anchor the feet to the habitat point instead of the middle of the body.
 	c.draw_set_transform(p, 0.0, Vector2(_bird_facing(bird), 1.0))
-	c.draw_texture_rect_region(BIRD_ACTIONS[sprite_index], Rect2(-extent * Vector2(0.5, 0.875), extent), _bird_frame_region(sprite_index, frame), Color(1, 1, 1, visibility))
+	c.draw_texture_rect_region(_atlas_texture(BIRD_ACTIONS[sprite_index]), Rect2(-extent * Vector2(0.5, 0.875), extent), _bird_frame_region(sprite_index, frame), Color(1, 1, 1, visibility))
 	c.draw_set_transform(Vector2.ZERO)
 
 ## Flood-fill from the map edges: isolated lake islands stay outside this mask.

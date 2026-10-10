@@ -13,6 +13,30 @@ var _last_layout: Array = []
 var _paused_tweens: Array[Tween] = []
 var _was_paused := false
 var _rest_offsets: Dictionary = {}
+var board_cards_attached := false
+var _board_cards: Array[Control] = []
+
+func _attach_board_cards() -> void:
+	if board_cards_attached: return
+	board_cards_attached = true
+	for info in game.card_infos:
+		if info.get("stage_zone", "") != "board": continue
+		var panel: Control = info["panel"]
+		game.CardFlight.stop(panel)
+		game._finish_queue_flight(info, panel)
+		for key in ["position", "scale", "rotation"]: game.MotionSpring.stop(panel, key)
+		panel.reparent(game.staged_board, true)
+		_board_cards.append(panel)
+
+func _detach_board_cards() -> void:
+	if not board_cards_attached: return
+	for panel in _board_cards:
+		if is_instance_valid(panel): panel.reparent(game.card_box, true)
+	_board_cards.clear()
+	board_cards_attached = false
+	var staged: Array = []
+	for index in game._ordered_staged_indices(): staged.append(game.card_infos[index])
+	game._layout_staged_cards(staged)
 
 func configure(owner_game: Node, canvas: CanvasLayer) -> void:
 	game = owner_game
@@ -34,7 +58,7 @@ func configure(owner_game: Node, canvas: CanvasLayer) -> void:
 	hud_layer.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	canvas.add_child(hud_layer)
 	canvas.move_child(hud_layer, 0)
-	var hud_controls: Array = [game.left_panel, game.right_panel, game.event_label,
+	var hud_controls: Array = [game.left_panel, game.right_panel, game.staged_board, game.event_label,
 		game.bottom_right, game.tier_lever, game.deck_root, game.warn_bar]
 	for child in canvas.get_children():
 		if child is ColorRect: hud_controls.append(child)
@@ -94,12 +118,13 @@ func _hand_top() -> float:
 	if game.card_infos.is_empty(): return top
 	top = INF
 	for info in game.card_infos:
+		if info.get("staged_by_drag", false): continue
 		var panel: Control = info["panel"]
 		for corner in [Vector2.ZERO, Vector2(panel.size.x, 0), panel.size, Vector2(0, panel.size.y)]:
 			var point: Vector2 = game.card_box.global_position - hand_layer.position - slide_delta + info["base_pos"] + panel.pivot_offset
 			point += ((corner - panel.pivot_offset) * 1.06).rotated(float(info["theta"]))
 			top = minf(top, point.y - game.CARD_RAISE)
-	return top
+	return top if is_finite(top) else rest.y + 55.0
 
 func _rest_position(control: Control) -> Vector2:
 	var viewport_size := get_viewport().get_visible_rect().size
@@ -147,13 +172,16 @@ func _animate_hand(hide_hand: bool) -> void:
 	if game.wetland.reduced_motion:
 		hand_layer.position = target
 		if hide_hand: hand_layer.hide()
+		else: _detach_board_cards()
 		return
 	hand_tween = Motion.tween(self, "focus", "hand")
 	hand_tween.tween_property(hand_layer, "position", target, 0.26)
 	if hide_hand: hand_tween.tween_callback(hand_layer.hide)
+	else: hand_tween.tween_callback(_detach_board_cards)
 
 func _animate_hud(hide_hud: bool) -> void:
 	if hud_tween and hud_tween.is_valid(): hud_tween.kill()
+	_attach_board_cards()
 	hud_layer.show()
 	if hide_hud and game.metric_tip: game.metric_tip.hide()
 	var target := Vector2(get_viewport().get_visible_rect().size.x + 64.0 if hide_hud else 0.0, 0)
@@ -173,6 +201,7 @@ func _restore_hand_immediately() -> void:
 	collapsed = false
 	hand_layer.position = Vector2.ZERO
 	hand_layer.show()
+	_detach_board_cards()
 	game._update_sort_cooldown()
 	_last_layout.clear()
 

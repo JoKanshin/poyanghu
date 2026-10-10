@@ -1826,7 +1826,7 @@ func serialize() -> Dictionary:
 
 
 ## 从存档恢复全部运行时状态（不触发信号，由主场景随后刷新 HUD 与 3D）
-func load_state(d: Dictionary) -> void:
+func load_state(d: Dictionary, restore_talents: bool = true) -> void:
 	turn = int(d.get("turn", 0))
 	funds = int(d.get("funds", 0))
 	# 旧存档可由已调度记录恢复确定的调度费用。
@@ -1854,8 +1854,9 @@ func load_state(d: Dictionary) -> void:
 	game_over = bool(d.get("game_over", false))
 	total_spent = int(d.get("total_spent", 0))
 	run_seed = int(d.get("run_seed", 0))
-	Talents.set_granted(d.get("talents", []))
-	Talents.set_run_tree(d.get("tree_talents", {}), bool(d.get("tree_mastery", false)))
+	if restore_talents:
+		Talents.set_granted(d.get("talents", []))
+		Talents.set_run_tree(d.get("tree_talents", {}), bool(d.get("tree_mastery", false)))
 	settlement = int(d.get("settlement", 70))
 	difficulty = int(d.get("difficulty", 1 if d.get("hard_mode", false) else 0))
 	run_id = str(d.get("run_id", "legacy:%d:%d" % [run_seed, difficulty]))
@@ -2508,12 +2509,32 @@ func dispatch_card(card_id: String) -> bool:
 		return false
 	if _find_card(card_id).is_empty():
 		return false
-	if not spend(dispatch_cost(), true):
+	var paid := dispatch_cost()
+	var previous_last_turn := dispatch_last_turn
+	if not spend(paid, true):
 		return false
 	dispatch_used_count += 1     # 记在前头：下一次的报价立刻变贵
 	dispatch_last_turn = turn
-	dispatched_cards.append({"card_id": card_id, "tier": DISPATCH_TIER})
+	dispatched_cards.append({"card_id": card_id, "tier": DISPATCH_TIER,
+		"paid_cost": paid, "previous_last_turn": previous_last_turn})
 	return true
+
+
+## 撤销尚未结算的调度：按实际成交价退费，恢复报价及冷却。
+func cancel_dispatch(card_id: String) -> bool:
+	for i in dispatched_cards.size():
+		var entry: Dictionary = dispatched_cards[i]
+		if str(entry["card_id"]) != card_id: continue
+		var paid := int(entry.get("paid_cost", DISPATCH_COST + DISPATCH_PRICE_STEP * maxi(0, dispatch_used_count - 1)))
+		dispatched_cards.remove_at(i)
+		funds += paid
+		total_spent = maxi(0, total_spent - paid)
+		turn_card_spent = maxi(0, turn_card_spent - paid)
+		dispatch_used_count = maxi(0, dispatch_used_count - 1)
+		dispatch_last_turn = int(entry.get("previous_last_turn", -99))
+		funds_changed.emit()
+		return true
+	return false
 
 
 ## 每回合开始清掉上一轮的调度记录（dispatch_last_turn 要留着，冷却靠它算）
@@ -2736,6 +2757,15 @@ func natural_evolution() -> void:
 ##   min/max = 叠加难度负向倍率后，玩家真正会看到的区间
 ##   kind    = random / loss / gain / none
 ## roll_random=false 时不去动水位那次随机（HUD 每帧查它，绝不能扰动全局随机序列）
+func settlement_water_delta() -> int:
+	# Reserve one seasonal weather result per run/turn. Forecasts and reloads
+	# read the same roll, without consuming or rerolling the global RNG.
+	var drift := water_drift_range(current_season())
+	var weather := RandomNumberGenerator.new()
+	weather.seed = run_seed + turn * 104729 + 0x5455524E
+	return weather.randi_range(int(drift[0]), int(drift[1]))
+
+
 func natural_evolution_plan(roll_random: bool = true, water_delta_override: int = 999, source_metrics: Dictionary = {}) -> Array:
 	var sim: Dictionary = (source_metrics if not source_metrics.is_empty() else metrics).duplicate()   # 推演副本：后一步的条件要看前几步之后的值（与原执行顺序一致）
 	var out: Array = []
@@ -2757,7 +2787,7 @@ func natural_evolution_plan(roll_random: bool = true, water_delta_override: int 
 			wl_why = "秋季落水（水位回落，洲滩渐次露出）"
 		"winter":
 			wl_why = "冬季枯水（全年最低，碟形湖脱离主湖）"
-	var wl: int = _randi_range(wl_raw_lo, wl_raw_hi) if roll_random else roundi((wl_raw_lo + wl_raw_hi) / 2.0)
+	var wl: int = settlement_water_delta() if roll_random else roundi((wl_raw_lo + wl_raw_hi) / 2.0)
 	if water_delta_override != 999: wl = clampi(water_delta_override, wl_raw_lo, wl_raw_hi)
 	out.append({"metric": "water_level", "delta": wl,
 		"applied_delta": wl, "min": wl_raw_lo, "max": wl_raw_hi, "kind": "random",
@@ -3102,6 +3132,24 @@ func advance_effects() -> void:
 
 
 ## 回合结束：推进延迟、自然演化、结算协同、检查失败与知识卡
+## Isolated forecast: reuse settlement rules without signals to the live scene,
+## talent writes, purchases, or consuming the run's global random stream.
+var _is_settlement_preview := false
+
+func preview_settlement(cards: Array) -> Dictionary:
+	var forecast = get_script().new()
+	forecast.load_state(serialize().duplicate(true), false)
+	forecast._is_settlement_preview = true
+	for card in cards:
+		forecast.execute_action(str(card["card_id"]), str(card["tier"]), bool(card.get("dispatched", false)))
+		if forecast.game_over: break
+	if not forecast.game_over:
+		forecast.end_turn()
+	var result: Dictionary = forecast.metrics.duplicate(true)
+	forecast.free()
+	return result
+
+
 func end_turn() -> void:
 	advance_effects()
 	resolve_synergies()      # 卡牌协同（在自然演化前结算，让玩家看到组合收益）
@@ -3137,8 +3185,9 @@ func end_turn() -> void:
 	#   后面「打满回合」的 game_ended 就不会重复发一次报告。
 	_resolve_pending_crisis()
 	_promote_forecast_if_needed()
-	_maybe_warn_crisis()
-	_maybe_forecast_crisis()
+	if not _is_settlement_preview:
+		_maybe_warn_crisis()
+		_maybe_forecast_crisis()
 	# 统一 emit 一次：UI 弹窗要同时展示「下回合」与「再下一回合」两条，
 	# 所以必须等两场都定下来再通知（emit 在 _maybe_* 里发会导致弹窗只有前一条）。
 	if not pending_crisis.is_empty():
@@ -3148,7 +3197,8 @@ func end_turn() -> void:
 	if _check_failure():
 		return
 
-	_check_knowledge_triggers()
+	if not _is_settlement_preview:
+		_check_knowledge_triggers()
 
 	if turn >= TOTAL_TURNS:
 		game_over = true

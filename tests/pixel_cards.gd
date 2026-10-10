@@ -117,14 +117,14 @@ func _ready() -> void:
 	var info: Dictionary = game.card_infos[0]
 	var card: Dictionary = game._card_dict(info.card_id)
 	game._set_play_tier("basic", false)
-	game._toggle_card(info.panel)
+	preload("res://tests/card_input.gd").drop_on_board(game, info)
 	check(info.selected and info.tier == "basic", "Selection and tier locking work")
 	await settle(2.1)
 	game._set_play_tier("deep", false)
 	check(info.tier == "basic", "Changing lever preserves selected card price")
 	check(info.panel.get_meta("pixel_face").texture == PixelArt.texture(card.name,
 		str(GameState.tier_cost(card.id, "basic"))), "Locked bitmap price stays correct")
-	game._toggle_card(info.panel)
+	preload("res://tests/card_input.gd").retract(game, info)
 	check(info.panel.get_meta("pixel_face").texture == PixelArt.texture(card.name,
 		str(GameState.tier_cost(card.id, "deep"))), "Deselection refreshes bitmap price")
 	await capture("pixel-cards-hand")

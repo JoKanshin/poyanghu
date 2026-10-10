@@ -87,6 +87,8 @@ func _ready() -> void:
 	var order: Array = game._ordered_staged_indices()
 	check(game.card_infos[order[0]].get("dispatched", false), "Actual drag moves dispatch from last to first")
 	check(game.card_infos[order.back()].card_id == "research", "A regular hand card now occupies the final slot")
+	game._process_staged_cards(2.2)
+	await get_tree().create_timer(0.8).timeout
 	game._finish_turn()
 	for i in 160:
 		await get_tree().create_timer(0.05).timeout

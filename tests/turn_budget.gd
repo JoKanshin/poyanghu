@@ -90,6 +90,8 @@ func _ready() -> void:
 	var observed: Array[String] = []
 	GameState.funds_changed.connect(func() -> void: observed.append(game.funds_label.text))
 	game.score_speed = 3.0
+	game._process_staged_cards(2.2)
+	await settle(0.8)
 	game._finish_turn()
 	for i in 200:
 		if not game._score_animating: break

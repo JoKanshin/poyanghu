@@ -119,7 +119,8 @@ func _ready() -> void:
 	await drag_card("education", drop)
 	await drag_card("water_comanage", drop)
 	await tooltip_for("smart_patrol")
-	var reorder_drop := drop - Vector2(game.STAGED_CARD_SPACING, 0)
+	var other: Control = info_for("education").panel
+	var reorder_drop: Vector2 = other.get_global_transform() * (other.size * 0.5)
 	await drag_card("water_comanage", reorder_drop)
 	check(game._ordered_staged_indices().size() == 2, "Reordering preserves the played queue")
 	await tooltip_for("smart_patrol")

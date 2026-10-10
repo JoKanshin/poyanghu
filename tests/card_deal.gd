@@ -9,6 +9,10 @@ func check(ok: bool, message: String) -> void:
 		push_error(message)
 func wait_for(seconds: float) -> void:
 	await get_tree().create_timer(seconds).timeout
+func monitored_sort(mode: bool, completion: Array) -> void:
+	await game._sort_hand_cards(mode)
+	completion[0] = true
+	game._sort_animating = false
 func shot(name: String) -> void:
 	await RenderingServer.frame_post_draw
 	get_viewport().get_texture().get_image().save_png(OS.get_environment("POYANG_SCREENSHOT_DIR").path_join(name + ".png"))
@@ -126,8 +130,10 @@ func _ready() -> void:
 		game.card_infos[0].hovered = true
 		game._update_card_stack()
 		game._sort_animating = true
-		game._sort_hand_cards(mode)
-		for frame in 75:
+		var completion := [false]
+		monitored_sort(mode, completion)
+		var deadline := Time.get_ticks_msec() + 4000
+		while not completion[0] and Time.get_ticks_msec() < deadline:
 			await get_tree().process_frame
 			var changed := false
 			for i in game.card_infos.size():
@@ -138,7 +144,7 @@ func _ready() -> void:
 				var right: Control = game.card_infos[i].panel
 				if left.z_index > right.z_index: correct_layers = false
 				if not game.card_infos[0].get("flying", false) and left.get_index() > right.get_index(): correct_rest = false
-		game._sort_animating = false
+		check(completion[0], "Sort finishes before rebuilding another hand")
 		check(saw_redeal, "Sort changes order while cards are dealt back")
 		check(correct_layers, "Right cards stay above left cards throughout both sort modes")
 		check(correct_rest, "Resting draw order is restored before the next hover update")
