@@ -40,6 +40,7 @@ static var glyph_image: Image
 static var paper_image: Image
 static var textures: Dictionary = {}
 static var suit_images: Dictionary = {}
+static var glyph_stamps: Dictionary = {}
 
 static func _load_pixels() -> void:
 	if paper_image != null:
@@ -151,14 +152,21 @@ static func _write(image: Image, text: String, top: int, ink: Color = INK, left_
 		var color := SHADOW if pass_index == 0 else ink
 		for character in text:
 			var glyph: Array = mapping.get(character, mapping["？"])
-			for y in 16:
-				for gx in int(glyph[2]):
-					if glyph_image.get_pixel(int(glyph[0]) + gx, int(glyph[1]) + y).a > 0.5:
-						for sy in glyph_scale:
-							for sx in glyph_scale:
-								image.set_pixel(x + gx * glyph_scale + offset + sx, top + y * glyph_scale + offset + sy, color)
+			var stamp := _glyph_stamp(glyph, color, glyph_scale)
+			image.blend_rect(stamp, Rect2i(Vector2i.ZERO, stamp.get_size()), Vector2i(x + offset, top + offset))
 			x += int(glyph[2]) * glyph_scale
 
+static func _glyph_stamp(glyph: Array, color: Color, scale: int) -> Image:
+	var key := "%d:%d:%d:%d:%s" % [glyph[0], glyph[1], glyph[2], scale, color.to_html()]
+	if glyph_stamps.has(key): return glyph_stamps[key]
+	var stamp := Image.create(int(glyph[2]), 16, false, Image.FORMAT_RGBA8)
+	for y in 16:
+		for x in int(glyph[2]):
+			if glyph_image.get_pixel(int(glyph[0]) + x, int(glyph[1]) + y).a > 0.5:
+				stamp.set_pixel(x, y, color)
+	if scale != 1: stamp.resize(stamp.get_width() * scale, 16 * scale, Image.INTERPOLATE_NEAREST)
+	glyph_stamps[key] = stamp
+	return stamp
 static func texture(title: String, footer: String = "", category: String = "") -> Texture2D:
 	_load_pixels()
 	if category.is_empty():

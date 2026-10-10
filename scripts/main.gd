@@ -453,6 +453,7 @@ var score_receipt: PanelContainer = null   # 算分小票：滑到当前结算�
 var score_receipt_box: VBoxContainer = null
 var _score_anim_id: int = 0                # 动画代次：每个 await 回来校验，被作废就立刻退出
 var _score_animating: bool = false         # 动画中：锁输入 + 冻结指标 HUD/3D + 抑制悬停与小窗
+var impact_feedback: Node2D
 
 # ==================== 成就解锁提示 ====================
 var ach_layer: CanvasLayer = null          # 独立层，盖在 HUD 与算分动画之上
@@ -2129,6 +2130,12 @@ func _build_ui() -> void:
 ## 该层 transform 是单位阵、与主 canvas 同坐标系，所以可以直接用
 ## metric_bars[...]["row"].get_global_rect() 定位小票，不必做坐标换算。
 func _build_score_layer() -> void:
+	var impact_layer := CanvasLayer.new()
+	impact_layer.name = "ImpactLayer"
+	impact_layer.layer = 8
+	add_child(impact_layer)
+	impact_feedback = preload("res://scripts/impact_feedback.gd").new()
+	impact_layer.add_child(impact_feedback)
 	score_layer = CanvasLayer.new()
 	score_layer.name = "ScoreLayer"
 	score_layer.layer = 7
@@ -2545,6 +2552,13 @@ func _build_menu() -> void:
 	card_credit.text = "[center]卡牌燃烧：[url=https://godotshaders.com/shader/2d-dissolve-with-burn-edge/]mreliptik · CC0[/url]\n[url=https://github.com/MrEliptik/godot_ui_components]godot_ui_components[/url] · MIT[/center]"
 	card_credit.meta_clicked.connect(func(link: Variant): OS.shell_open(str(link)))
 	cvb.add_child(card_credit)
+	var impact_credit := RichTextLabel.new()
+	impact_credit.bbcode_enabled = true
+	impact_credit.fit_content = true
+	impact_credit.add_theme_font_size_override("normal_font_size", 12)
+	impact_credit.text = "[center]打击反馈参考：[url=https://github.com/a327ex/SNKRX]SNKRX · a327ex[/url] · MIT\n特效与闪光改编：[url=https://github.com/haowg/GODOT-VFX-LIBRARY]GODOT-VFX-LIBRARY · haowg[/url] · MIT[/center]"
+	impact_credit.meta_clicked.connect(func(link: Variant): OS.shell_open(str(link)))
+	cvb.add_child(impact_credit)
 	var c_back := _make_button("返回", _on_credits_back, 16)
 	c_back.custom_minimum_size = Vector2(0, 40)
 	cvb.add_child(c_back)
@@ -3097,6 +3111,7 @@ DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD""",
 
 
 func _show_menu() -> void:
+	if impact_feedback != null: impact_feedback.clear()
 	# 作废可能还在跑的算分动画：代次 +1，它每个 await 回来都会发现 ID 变了而立即退出。
 	# 不这样做的话，回到主菜单后那段协程会继续改已经不该动的节点。
 	_score_anim_id += 1
@@ -3694,6 +3709,9 @@ func _finish_card_pointer(mouse_global: Vector2) -> void:
 						_layout_fan(true)
 						panel.position = released_pos
 						MotionSpring.to(panel, "position", info["base_pos"], 410.0, 25.0)
+						if impact_feedback != null:
+							impact_feedback.pulse(panel, Color("e0cf7b"), 0.7)
+						play_sfx("land", 1.1, -12.0)
 						_update_selected_label()
 					else:
 						_reject_card(panel, reason)
@@ -5104,7 +5122,6 @@ func _sort_hand_cards(by_category: bool) -> void:
 	var pile_center := _screen_to_card_box(pile_screen)
 	# 收牌落点按 **panel** 存 —— _layout_fan() 会重排位置，排完序下标就换人了
 	var pile_pos: Dictionary = {}
-	var old_z: Dictionary = {}
 	for i in n:
 		var info: Dictionary = hand_infos[i]
 		var p: PanelContainer = info["panel"]
@@ -5113,8 +5130,8 @@ func _sort_hand_cards(by_category: bool) -> void:
 		# 让 _update_card_hover 让出控制权：它每帧把牌拽回 base_pos，
 		# 会和飞行 tween 逐帧打架（照抄 shaking / 算分飞牌的既有做法）
 		info["flying"] = true
+		info["hovered"] = false
 		_kill_card_tweens(p)
-		old_z[p] = p.z_index
 		p.z_index = 1000 + i
 		var spot: Vector2 = pile_center - p.pivot_offset + (p.pivot_offset - p.size * 0.5) * pile_scale \
 			+ Vector2(-float(i) * PILE_SPREAD, 0.0)
@@ -5143,6 +5160,9 @@ func _sort_hand_cards(by_category: bool) -> void:
 		var p: PanelContainer = info["panel"]
 		if not is_instance_valid(p):
 			continue
+		# The fan now has a new left-to-right order. Old gather ranks would put
+		# some left cards above their right neighbours until the last deal lands.
+		p.z_index = 1000 + i
 		var target: Vector2 = info["base_pos"]
 		# 已选中的牌最终是「抬起来」的：直接发到抬起后的落点，
 		# 别先落平再由 _update_card_hover 抬一次（那样会多一次起落）
@@ -5165,7 +5185,9 @@ func _sort_hand_cards(by_category: bool) -> void:
 		info["flying"] = false
 		var p: PanelContainer = info["panel"]
 		if is_instance_valid(p):
-			p.z_index = int(old_z.get(p, 0))
+			p.z_index = 0
+	# Restore sibling order in this same frame, before hover resumes.
+	_update_card_stack()
 
 
 ## 按 card_id 比较（手牌排序用 —— card_infos 里存的是 id，不是卡牌字典）
@@ -5832,6 +5854,7 @@ func _on_start_pressed() -> void:
 		menu_hint.text = "种子需为非负整数（留空则随机）"
 		return
 	_clear_save()           # 放弃（判负）上一局暂停的进度
+	if impact_feedback != null: impact_feedback.clear()
 	# 作废可能还在跑的算分动画（代次 +1）。新局的手牌稍后会由 _build_hand_panel()
 	# 整体重建并清空 card_infos，所以这里不必手工复位卡牌状态。
 	_score_anim_id += 1
@@ -6426,6 +6449,11 @@ func _enter_allocate() -> void:
 	_slide_side_panels(false)  # 新回合开始，侧边栏弹回
 	# 季节首回合保底：保证每年开局手上有当季专属卡（见 GameState._ensure_one_season_card）
 	current_hand = GameState.draw_cards(7 + int(Talents.get_bonus("cards")), GameState.is_season_opener())
+	var deal_id := _score_anim_id
+	_sort_animating = true
+	await _prepare_hand_art(current_hand)
+	if deal_id != _score_anim_id: return
+	_sort_animating = false
 	play_deal_anim = true
 	_build_hand_panel()
 	_sync_dispatched_stage_cards()
@@ -6489,11 +6517,24 @@ func _on_refresh_hand() -> void:
 	_play_refresh_break_animation()
 	await _gather_refresh_hand()
 	if refresh_id != _score_anim_id: return
-	_sort_animating = false
 	current_hand = GameState.draw_cards(7 + int(Talents.get_bonus("cards")))
+	await _prepare_hand_art(current_hand)
+	if refresh_id != _score_anim_id: return
+	_sort_animating = false
 	play_deal_anim = true
 	_build_hand_panel(true)
 	_update_hud()
+
+## At most one cold texture upload per frame; cached faces need no delay.
+func _prepare_hand_art(hand: Array) -> void:
+	var generation := _score_anim_id
+	for card in hand:
+		if generation != _score_anim_id: return
+		var cost := str(GameState.tier_cost(str(card["id"]), play_tier))
+		var key := str(card["name"]) + "\n" + cost + "\n" + str(card["category"])
+		if not PixelCardArt.textures.has(key):
+			PixelCardArt.texture(str(card["name"]), cost, str(card["category"]))
+			await get_tree().process_frame
 
 ## Refresh returns only unplayed cards before drawing their replacements.
 func _gather_refresh_hand() -> void:
@@ -7851,7 +7892,7 @@ func _play_score_animation(ledger: Array, before_all: Dictionary, played: Array,
 		var panel: PanelContainer = info["panel"]
 		if not is_instance_valid(panel):
 			continue
-		_play_card_shake(panel, SHAKE_A)
+		_play_card_shake(panel, SHAKE_A, 1.0 + 0.12 * float(k), ds)
 		# 连击音阶：逐张升高半音，是小丑牌那种层层叠加感的听觉来源
 		# 逐张弹分的叮：连击音阶是灵魂，但**不要给满音量** ——
 		# 3~4 张牌各响一次 0dB，和指标合计的 0dB 叠起来能到 9 次满音量，玩测反馈"吵"。
@@ -8000,6 +8041,10 @@ func _play_metric_settle(metric: String, by_phase: Dictionary, before_all: Dicti
 	# 合计的那一声是整段里最"重"的落定音（0dB 层里最低频），
 	# 其余都压在它之下，听感才是"噼啪数完 → 咚，落定"
 	play_sfx("ding", 0.85, -3.0)
+	var delta := true_end - int(before_all.get(metric, 0))
+	if delta != 0 and impact_feedback != null:
+		impact_feedback.pulse(val, METRIC_COLORS.get(metric, Color.WHITE) if delta > 0 else Color("e78272"),
+			clampf(0.65 + absf(float(delta)) * 0.04, 0.65, 1.5))
 	var tbf := Motion.tween(bar, "linear", "value")
 	Motion.curve(tbf, "power2.out")
 	tbf.tween_property(bar, "value", float(true_end), maxf(0.10 * ms, step * 0.25))
@@ -8089,15 +8134,9 @@ func _place_receipt(row: VBoxContainer) -> void:
 
 
 ## 卡牌抖动：在**当前位置**上抖（甩牌后牌已经不在 base_pos 了）
-func _play_card_shake(panel: PanelContainer, amp: float) -> void:
-	const SHAKE_T := 0.035
-	var base: Vector2 = panel.position
-	var tw := Motion.tween(panel, "linear")
-	Motion.curve(tw, "sine.inOut")
-	for i in 3:
-		tw.tween_property(panel, "position:x", base.x + amp, SHAKE_T)
-		tw.tween_property(panel, "position:x", base.x - amp, SHAKE_T)
-	tw.tween_property(panel, "position:x", base.x, SHAKE_T * 1.2)
+func _play_card_shake(panel: PanelContainer, _amp: float, strength: float = 1.0, duration_scale: float = 1.0) -> void:
+	if impact_feedback != null:
+		impact_feedback.pulse(panel, Color("f3d584"), strength, true, duration_scale)
 
 
 ## 卡牌上方弹出「+N」飘字：弹入 → 停留 → 上升淡出
@@ -8126,6 +8165,7 @@ func _play_delta_float(text: String, color: Color, anchor: Vector2, delay: float
 ## ⚠ _update_hud() 必须在 _score_animating = false **之后**调，
 ##   否则会被它自己的抑制逻辑吞掉，指标条永远停在动画中途的值。
 func _score_anim_cleanup() -> void:
+	if impact_feedback != null: impact_feedback.clear()
 	_score_animating = false
 	for info in card_infos:
 		var panel: PanelContainer = info.get("panel")

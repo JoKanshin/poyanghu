@@ -16,6 +16,10 @@ func verify() -> void:
 		if art.knowledge_face(category) == null: failures += 1
 	if ProjectSettings.get_setting("application/config/name") != "鄱阳归翎-生态修复手记": failures += 1
 	if not ResourceLoader.exists("res://assets/houses/community-car.png"): failures += 1
+	if not ResourceLoader.exists("res://assets/effects/impact-atlas.png"): failures += 1
+	if not FileAccess.file_exists("res://licenses/snkrx.txt"): failures += 1
+	if not FileAccess.file_exists("res://licenses/godot-vfx-library.txt"): failures += 1
+	print("FRAME_LIMIT: ", Engine.max_fps)
 	print("ART_EXPORT: 52 dispatch cards, all knowledge categories and car; %d failures" % failures)
 	print("PLAYER_PROFILE: ", OS.get_user_data_dir())
 	quit(0 if failures == 0 else 1)

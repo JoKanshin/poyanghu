@@ -36,6 +36,19 @@ func _ready() -> void:
 		if game.popup_root.visible: game._on_popup_button()
 		await wait_for(0.1)
 	game.set_process(false) # Keep the user's current pointer from raising a test card.
+	var art: GDScript = load("res://scripts/pixel_card_art.gd")
+	art.textures.clear()
+	var warm_hand: Array = []
+	for id in ["patrol", "research", "education", "guard_team", "water_control", "veg_restore", "community_comp"]:
+		warm_hand.append(GameState.card_by_id(id))
+	var texture_counts: Array = []
+	var monitor := func() -> void: texture_counts.append(art.textures.size())
+	get_tree().process_frame.connect(monitor)
+	await game._prepare_hand_art(warm_hand)
+	get_tree().process_frame.disconnect(monitor)
+	check(texture_counts.size() >= 6, "Cold hand generation is spread across frames")
+	for i in range(1, texture_counts.size()):
+		check(int(texture_counts[i]) - int(texture_counts[i - 1]) <= 1, "At most one new face upload per frame")
 	new_hand()
 	await get_tree().process_frame
 	for i in game.card_infos.size():
@@ -82,7 +95,7 @@ func _ready() -> void:
 	var moving_center: Vector2 = old_hand[0].get_global_transform() * (old_hand[0].size * 0.5)
 	check(moving_center.distance_to(deck_center) < old_center.distance_to(deck_center), "Old hand flies back toward the deck before replacements exist")
 	await shot("03-refresh-return")
-	await wait_for(0.25)
+	await wait_for(0.45)
 	check(not is_instance_valid(old_hand[0]), "Old cards are removed only after reaching the deck")
 	check(not game._sort_animating, "Collection releases the refresh lock")
 	var new_deal := false
@@ -101,6 +114,34 @@ func _ready() -> void:
 	for info in game.card_infos:
 		check(not info.get("dealing", false) and info.panel.modulate.a == 1.0, "Reduced motion shows complete cards immediately")
 	game.wetland.reduced_motion = false
+	new_hand()
+	await wait_for(0.9)
+	for mode in [true, false]:
+		var saw_redeal := false
+		var correct_layers := true
+		var correct_rest := true
+		var start_order: Array = []
+		for info in game.card_infos: start_order.append(info.panel)
+		# A stale hover must not become the front card again after sorting.
+		game.card_infos[0].hovered = true
+		game._update_card_stack()
+		game._sort_animating = true
+		game._sort_hand_cards(mode)
+		for frame in 75:
+			await get_tree().process_frame
+			var changed := false
+			for i in game.card_infos.size():
+				if game.card_infos[i].panel != start_order[i]: changed = true
+			if changed and game.card_infos[0].get("flying", false): saw_redeal = true
+			for i in range(1, game.card_infos.size()):
+				var left: Control = game.card_infos[i - 1].panel
+				var right: Control = game.card_infos[i].panel
+				if left.z_index > right.z_index: correct_layers = false
+				if not game.card_infos[0].get("flying", false) and left.get_index() > right.get_index(): correct_rest = false
+		game._sort_animating = false
+		check(saw_redeal, "Sort changes order while cards are dealt back")
+		check(correct_layers, "Right cards stay above left cards throughout both sort modes")
+		check(correct_rest, "Resting draw order is restored before the next hover update")
 	new_hand()
 	await get_tree().process_frame
 	for metric in GameState.metrics: GameState.metrics[metric] = 70
