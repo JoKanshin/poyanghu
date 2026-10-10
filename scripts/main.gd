@@ -5049,6 +5049,8 @@ func _sort_deck_cards(by_category: bool) -> void:
 ## 出牌阶段的排序：与牌库共用一个模式、一套冷却，只是作用对象换成在场手牌。
 func _toggle_hand_sort() -> void:
 	if sandpan_view and sandpan_view.collapsed: return
+	for info in card_infos:
+		if info.get("dealing", false): return
 	var now := Time.get_ticks_msec()
 	if now - _sort_cooldown_ms < SORT_COOLDOWN_MS:
 		return
@@ -6794,7 +6796,7 @@ func _layout_fan(animate_hand: bool = false) -> void:
 		panel.size = Vector2(card_w, card_h)
 		panel.custom_minimum_size = Vector2(card_w, card_h)
 		panel.pivot_offset = Vector2(card_w / 2.0, card_h)
-		if not animate_hand:
+		if not animate_hand and not fan_infos[i].get("dealing", false):
 			panel.rotation = theta
 
 	# 第二遍：算出旋转后整体的真实包围盒（不依赖手算常数）
@@ -6824,6 +6826,8 @@ func _layout_fan(animate_hand: bool = false) -> void:
 		fan_infos[i]["base_pos"] = target
 		fan_infos[i]["theta"] = thetas[i]
 		fan_infos[i]["radial"] = Vector2(sin(thetas[i]), -cos(thetas[i]))
+		if fan_infos[i].get("dealing", false):
+			continue # The arrival callback uses the latest layout after a resize.
 		if animate_hand:
 			# Retarget from the current pose, preserving spring momentum even when
 			# another card leaves or returns before the previous reflow has settled.
@@ -6836,10 +6840,10 @@ func _layout_fan(animate_hand: bool = false) -> void:
 	_layout_staged_cards(staged_infos)
 	_fan_layout_size = area_size
 	if sandpan_view: sandpan_view.invalidate_layout()
-	# 发牌入场动画（从下方滑入 + 逐张错开）
+	# Defer once so container layout and dispatch synchronization settle first.
 	if play_deal_anim:
 		play_deal_anim = false
-		_play_deal_animation()
+		_play_deal_animation.call_deferred()
 
 
 func _layout_staged_cards(staged_infos: Array) -> void:
@@ -6871,24 +6875,58 @@ func _layout_staged_cards(staged_infos: Array) -> void:
 		MotionSpring.to(panel, "position", target, 440.0, 28.0)
 
 
-## 发牌入场：牌从下方滑入，逐张错开（EASE_OUT，玩家等待中的入场用稍长时长）
+## Balatro-style deal: leave the visible stack, rotate and spread into the fan.
 func _play_deal_animation() -> void:
+	if _score_animating or _current_phase != "allocate": return
+	var vp := get_viewport().get_visible_rect().size
+	var source := Vector2(vp.x - 160.0, minf(379.0, vp.y * 0.55))
+	if not deck_backs.is_empty() and is_instance_valid(deck_backs.back()):
+		var back: Control = deck_backs.back()
+		source = back.get_global_transform() * (back.size * 0.5)
+	source.x = clampf(source.x, 32.0, vp.x - 32.0)
+	source.y = clampf(source.y, 32.0, vp.y - 32.0)
 	var deal_index := 0
 	for i in card_infos.size():
 		var info: Dictionary = card_infos[i]
 		if info.get("staged_by_drag", false):
 			continue
 		var panel: PanelContainer = info["panel"]
+		if not is_instance_valid(panel): continue
 		var target: Vector2 = info["base_pos"]
-		panel.position = target + Vector2(0, 90.0)
+		if wetland and wetland.reduced_motion:
+			panel.position = target
+			panel.rotation = info["theta"]
+			panel.scale = Vector2.ONE
+			panel.modulate.a = 1.0
+			continue
+		for key in ["position", "rotation", "scale"]: MotionSpring.stop(panel, key)
+		info["dealing"] = true
+		info["flying"] = true
+		panel.set_meta("deal_source", source)
+		panel.set_meta("deal_index", deal_index)
+		panel.scale = Vector2(0.52, 0.52)
+		panel.position = _screen_to_card_box(source) - panel.pivot_offset + (panel.pivot_offset - panel.size * 0.5) * 0.52
+		panel.rotation = -0.10
 		panel.modulate.a = 0.0
 		var tw := Motion.tween(panel, "linear", "deal")
-		tw.set_parallel(true)
-		Motion.curve(tw, "power2.out")
-		tw.tween_property(panel, "position", target, 0.34).set_delay(deal_index * 0.045)
-		tw.tween_property(panel, "modulate:a", 1.0, 0.22).set_delay(deal_index * 0.045)
+		tw.tween_interval(float(deal_index) * 0.06)
+		Motion.curve(tw, "power2.inOut")
+		tw.tween_property(panel, "position", target, 0.36)
+		tw.parallel().tween_property(panel, "rotation", float(info["theta"]), 0.36)
+		tw.parallel().tween_property(panel, "scale", Vector2.ONE, 0.36)
+		tw.parallel().tween_property(panel, "modulate:a", 1.0, 0.045)
+		tw.tween_callback(_finish_card_deal.bind(info, panel))
 		deal_index += 1
 
+func _finish_card_deal(info: Dictionary, panel: PanelContainer) -> void:
+	if not is_instance_valid(panel) or not info.get("dealing", false): return
+	info["dealing"] = false
+	info["flying"] = false
+	panel.position = info["base_pos"]
+	panel.rotation = info["theta"]
+	panel.scale = Vector2.ONE
+	panel.modulate.a = 1.0
+	_step_card_gyro(panel, Vector2.ZERO, 1.0)
 
 ## 容器尺寸变化时重排（确保扇形始终居中）
 func _on_card_box_resized() -> void:
@@ -7694,6 +7732,7 @@ func _play_score_animation(ledger: Array, before_all: Dictionary, played: Array,
 		if not is_instance_valid(panel): continue
 		for key in ["position", "rotation", "scale"]: MotionSpring.stop(panel, key)
 		Motion.cancel(panel, "deal")
+		info["dealing"] = false
 	var landing_targets: Dictionary = {}
 	var n_played: int = played.size()
 	# 落点间距：默认 FLY_SPACING（牌宽 122 + 24 的余量）。简单模式一回合最多可能出现
