@@ -72,7 +72,7 @@ func verify_face(panel: PanelContainer, title: String, footer: String, dixinhu: 
 				unchanged = unchanged and (title_region.has_point(Vector2i(x, y)) or cost_region.has_point(Vector2i(x, y)))
 				if pixel == Color8(150, 150, 150):
 					shadows += 1
-					shadow_offset_correct = shadow_offset_correct and image.get_pixel(x - glyph_scale, y - glyph_scale) in [Color.BLACK, Color("35482d")]
+					shadow_offset_correct = shadow_offset_correct and image.get_pixel(x - glyph_scale, y - glyph_scale) in [Color.BLACK, PixelArt.COST_INK]
 	check(unchanged, "Every pixel outside text and shadow remains original")
 	check(shadows > 0, "Shadow is exactly RGB 150,150,150")
 	check(shadow_offset_correct, "Every shadow pixel is one source pixel below/right of ink")

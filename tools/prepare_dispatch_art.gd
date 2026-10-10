@@ -1,23 +1,7 @@
 extends SceneTree
-## Generated repairs supply only the removed note region; retain original frame/header pixels.
+## Legacy car preparation. Card templates now rebuild with tools/import_card_art.py.
 func _init() -> void:
-	for category in ["ecology", "social", "manage"]:
-		var original := Image.load_from_file("res://assets/art/card-suits/%s.png" % category)
-		var repair := Image.load_from_file("res://tools/art_sources/%s-generated.png" % category)
-		original.convert(Image.FORMAT_RGBA8)
-		repair.convert(Image.FORMAT_RGBA8)
-		repair.resize(400, 600, Image.INTERPOLATE_NEAREST)
-		original.blit_rect(repair, Rect2i(30, 383, 320, 145), Vector2i(30, 383))
-		# Restore the right paper edge/frame where the clip extended beyond the note.
-		original.blit_rect(original, Rect2i(350, 180, 29, 145), Vector2i(350, 383))
-		original.save_png("res://assets/art/dispatch/%s.png" % category)
-	var knowledge := Image.load_from_file("res://assets/art/knowledge/kd-08.png")
-	var blank := Image.load_from_file("res://tools/art_sources/category-generated.png")
-	knowledge.convert(Image.FORMAT_RGBA8)
-	blank.convert(Image.FORMAT_RGBA8)
-	blank.resize(400, 600, Image.INTERPOLATE_NEAREST)
-	knowledge.blit_rect(blank, Rect2i(130, 70, 145, 34), Vector2i(130, 70))
-	knowledge.save_png("res://assets/art/knowledge/category-blank.png")
+	print("Card templates: run python tools/import_card_art.py, then tools/bake_dispatch_deck.tscn")
 	var car := Image.load_from_file("res://tools/art_sources/community-car-generated.png")
 	car.convert(Image.FORMAT_RGBA8)
 	# Cut transparent padding so its visual scale is explicit relative to 76px houses.

@@ -1035,6 +1035,8 @@ const ACTION_CARDS := [
 ]
 
 # ==================== 知识卡数据 ====================
+## 分类与美术 Card.zip 的九套牌底一致；彩蛋单独排在末尾。
+const KNOWLEDGE_CATEGORIES := preload("res://scripts/knowledge_categories.gd").ORDER
 const KNOWLEDGE_CARDS := {
 	"egg_dixinhu": {
 		"name": "狄鑫斛", "category": "彩蛋", "trigger": "random_only",
@@ -1731,6 +1733,8 @@ var log_messages: Array = []        # 因果提示
 var score_ledger: Array = []
 var game_over: bool = false
 var total_spent: int = 0            # 累计卡牌支出（用于资金效率评价）
+var turn_budget: int = 0            # 本回合拨款、结转与运营扣除后的总预算
+var turn_card_spent: int = 0        # 本回合普通行动卡 + 紧急调度费用，不含刷新手牌
 # ===== 肉鸽机制状态 =====
 var run_seed: int = 0               # 本局种子（同种子可复现，用于反事实对照）
 var run_id: String = ""             # Unique reward receipt; independent of seeded gameplay RNG.
@@ -1742,6 +1746,8 @@ var forecast_crisis: Dictionary = {} # 深预警：2 回合后那一场，下回
                                      # （不是另抽一次随机 —— 是把本来下一回合才抽的那个
                                      #   提前一回合抽出来存着，所以预告一定兑现）
 var last_crisis_name: String = ""   # 上回合爆发的危机名（用于结算展示）
+const MUSIC_CRISIS_RECOVERY_RATIO := 0.5
+var music_crisis_recovery: Dictionary = {} # 危机曲解除条件：补回 50% 实际损失（向上取整）
 var crisis_history: Array = []      # 已爆发的危机 [{id, turn}]，防连出与冷却的依据
 var warn_history: Array = []        # 本局预警历史 [{turn, id, value, hit_turn}]，顶部「预警回顾」用
                                     # hit_turn = -1 表示这条预警还没等到爆发（本局就结束了）
@@ -1795,12 +1801,15 @@ func serialize() -> Dictionary:
 		"pending_knowledge": pending_knowledge.duplicate(),
 		"log_messages": log_messages.duplicate(),
 		"game_over": game_over, "total_spent": total_spent,
+		"turn_budget": turn_budget, "turn_card_spent": turn_card_spent,
 		"run_seed": run_seed, "run_id": run_id, "settlement": settlement,
 		# 本局天赋词条：继续游戏要原样带回来，否则中途读档会丢加成
 		"talents": Talents.granted.duplicate(),
 		"tree_talents": Talents.run_tree_ranks.duplicate(), "tree_mastery": Talents.run_tree_mastery,
 		"difficulty": difficulty, "floating_islands": floating_islands,
 		"pending_crisis": pending_crisis.duplicate(true),
+		"music_crisis_recovery": music_crisis_recovery.duplicate(),
+		"music_crisis_recovery_ratio": MUSIC_CRISIS_RECOVERY_RATIO,
 		"forecast_crisis": forecast_crisis.duplicate(true),
 		"last_crisis_name": last_crisis_name,
 		"crisis_history": crisis_history.duplicate(true),
@@ -1820,6 +1829,12 @@ func serialize() -> Dictionary:
 func load_state(d: Dictionary) -> void:
 	turn = int(d.get("turn", 0))
 	funds = int(d.get("funds", 0))
+	# 旧存档可由已调度记录恢复确定的调度费用。
+	var legacy_dispatch_spent := 0
+	if not d.get("dispatched_cards", []).is_empty():
+		legacy_dispatch_spent = DISPATCH_COST + DISPATCH_PRICE_STEP * maxi(0, int(d.get("dispatch_used_count", 1)) - 1)
+	turn_card_spent = int(d.get("turn_card_spent", legacy_dispatch_spent))
+	turn_budget = int(d.get("turn_budget", maxi(0, funds + turn_card_spent)))
 	carry = int(d.get("carry", 0))
 	last_metric_funding = int(d.get("last_metric_funding", 0))
 	research_points = int(d.get("research_points", 0))
@@ -1846,6 +1861,13 @@ func load_state(d: Dictionary) -> void:
 	run_id = str(d.get("run_id", "legacy:%d:%d" % [run_seed, difficulty]))
 	floating_islands = int(d.get("floating_islands", 0))
 	pending_crisis = d.get("pending_crisis", {})
+	music_crisis_recovery = d.get("music_crisis_recovery", {})
+	# 旧存档要求全量修复：将剩余修复量减半，不影响游戏指标和判负规则。
+	if float(d.get("music_crisis_recovery_ratio", 1.0)) > MUSIC_CRISIS_RECOVERY_RATIO:
+		for metric in music_crisis_recovery:
+			var current: int = int(metrics.get(metric, 0))
+			var remaining := maxi(0, int(music_crisis_recovery[metric]) - current)
+			music_crisis_recovery[metric] = current + ceili(remaining * MUSIC_CRISIS_RECOVERY_RATIO)
 	forecast_crisis = d.get("forecast_crisis", {})
 	last_crisis_name = str(d.get("last_crisis_name", ""))
 	crisis_history = d.get("crisis_history", [])
@@ -1878,6 +1900,8 @@ func reset_game() -> void:
 	funds = 0
 	research_points = 0
 	total_spent = 0
+	turn_budget = 0
+	turn_card_spent = 0
 	settlement = 70
 	floating_islands = 0
 	effects_queue = []
@@ -1890,6 +1914,7 @@ func reset_game() -> void:
 	score_ledger = []
 	game_over = false
 	pending_crisis = {}
+	music_crisis_recovery = {}
 	forecast_crisis = {}
 	last_crisis_name = ""
 	crisis_history = []
@@ -2050,6 +2075,8 @@ func start_new_turn() -> void:
 	funding += int(Talents.get_bonus("funding"))
 
 	funds = carry + funding - (OPERATION_COST + int(Talents.get_bonus("operation")))
+	turn_budget = funds
+	turn_card_spent = 0
 	carry = 0
 
 	metrics_changed.emit()
@@ -2090,6 +2117,12 @@ func _resolve_pending_crisis() -> void:
 	_mark_warning_hit(str(c["id"]), turn)
 	_add_log("⚠ %s" % c["hit"])
 	for e in c["effects"]:
+		if int(e["delta"]) < 0:
+			var metric: String = str(e["metric"])
+			var before: int = int(metrics[metric])
+			var after := clampi(before + int(e["delta"]), 0, 100)
+			var recovery_target := after + ceili((before - after) * MUSIC_CRISIS_RECOVERY_RATIO)
+			music_crisis_recovery[metric] = maxi(recovery_target, int(music_crisis_recovery.get(metric, 0)))
 		_apply_delta(e["metric"], e["delta"], false, "crisis", str(c["name"]))   # 危机伤害不叠负向倍率，见 _apply_delta 注释
 		_add_log("   %s %+d" % [METRIC_NAMES[e["metric"]], e["delta"]])
 	if c.has("settlement"):
@@ -2099,6 +2132,14 @@ func _resolve_pending_crisis() -> void:
 	metrics_changed.emit()
 	crisis_hit.emit(c)
 	check_failure_now()   # 危机爆发把指标打到致死线以下 → 当场判负，不再放你一回合
+
+
+## 音乐的危机生命周期独立于警示弹窗；关掉弹窗不会解除危机。
+func has_unresolved_music_crisis() -> bool:
+	for metric in music_crisis_recovery.keys():
+		if int(metrics.get(metric, 0)) >= int(music_crisis_recovery[metric]):
+			music_crisis_recovery.erase(metric)
+	return not pending_crisis.is_empty() or not music_crisis_recovery.is_empty()
 
 
 ## 抽取本回合的危机预警（提前 1 回合告知，给玩家应对机会）
@@ -2432,11 +2473,13 @@ func card_by_id(id: String) -> Dictionary:
 
 
 ## 花一笔钱（返回是否成功）。局内消费统一走这里，保证 total_spent 记账不漏。
-func spend(amount: int) -> bool:
+func spend(amount: int, count_for_cards: bool = false) -> bool:
 	if funds < amount:
 		return false
 	funds -= amount
 	total_spent += amount
+	if count_for_cards:
+		turn_card_spent += amount
 	funds_changed.emit()
 	return true
 
@@ -2465,7 +2508,7 @@ func dispatch_card(card_id: String) -> bool:
 		return false
 	if _find_card(card_id).is_empty():
 		return false
-	if not spend(dispatch_cost()):
+	if not spend(dispatch_cost(), true):
 		return false
 	dispatch_used_count += 1     # 记在前头：下一次的报价立刻变贵
 	dispatch_last_turn = turn
@@ -2598,6 +2641,7 @@ func execute_action(card_id: String, tier: String, free: bool = false) -> bool:
 		var cost := tier_cost(card_id, tier)
 		funds -= cost
 		total_spent += cost
+		turn_card_spent += cost
 	# 行动位上限只在 free=false 时拦；但两种路径都要记进 used_action_ids ——
 	# 它同时是「本回合打过什么」的依据（自然演化的条件、协同触发都读它）。
 	used_action_ids.append(card_id)

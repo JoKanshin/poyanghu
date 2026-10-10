@@ -222,7 +222,7 @@ var bottom_right: VBoxContainer
 var card_box: Control
 var selected_label: Label
 var drag_play_hint: Label = null
-var action_hint: Label         # 右下角常驻提示「每回合最多 N 个行动」——N 随难度变化，见 _update_hud
+var action_hint: Label         # 已移除常驻提示，保留隐藏节点供旧测试兼容
 var current_hand: Array = []   # 当前手牌（card dict 数组）
 var card_infos: Array = []     # {panel, card_id, base_pos, theta, radial, selected, tier, cost_label}
 var _fan_layout_size: Vector2 = Vector2.ZERO  # 上次布局时的容器尺寸
@@ -299,7 +299,12 @@ var clear_status_label: Label
 
 # 音频 / BGM
 var bgm_player: AudioStreamPlayer
-var bgm_index: int = 1
+var bgm_index: int = 0
+var _bgm_danger: bool = false
+var _bgm_streams: Array[AudioStream] = []
+var _bgm_recovery_tween: Tween
+var _bgm_risk_key: Array = []
+var _bgm_risk: bool = false
 var bgm_volume: float = 0.8
 ## 结算动画速度倍率（1.0 = 正常）。玩家可在设置里调 —— 手感因人而异，
 ## 与其每次改代码重导，不如给个滑块。与音量一起存在 user://settings.json。
@@ -317,8 +322,10 @@ var pause_volume_label: Label
 var pause_bgm_btn: Button
 var pause_score_speed_slider: HSlider
 var pause_score_speed_label: Label
-const BGM_PATHS := ["res://assets/audio/poyanghu.mp3", "res://assets/audio/poyanghunaiyu.mp3"]
-const BGM_NAMES := ["鄱阳湖", "评委审核版"]
+const BGM_PATHS := ["res://assets/audio/theme.mp3", "res://assets/audio/poyanghudanger.mp3"]
+const BGM_NAMES := ["theme", "危机"]
+const BGM_RECOVERY_SPEED := 0.75
+const BGM_RECOVERY_SECONDS := 3.0
 const AUDIO_SETTINGS_PATH := "user://settings.json"
 
 # 音效（程序化合成，生成器见 tools/make_ding.py —— 要改音色请改脚本重跑，别手改 wav）
@@ -1288,6 +1295,7 @@ func _build_mudflats(parent: Node3D) -> void:
 
 
 func _process(delta: float) -> void:
+	_update_bgm_state()
 	# 指标悬停小窗：暂停/弹层时它自己会收起来，所以放在 _paused 提前返回之前
 	_update_metric_tip()
 	if wetland:
@@ -1884,7 +1892,8 @@ func _build_ui() -> void:
 	funds_row.add_child(_make_icon(_icon_grid_for("coin"), Color(0.95, 0.78, 0.25), 18))
 	# ⚠ 必须写 24：_snap_px() 只认 12 的倍数，写 17 / 18 都会被吸附回 12px，
 	#   改完看不出一丁点变大（原来的 17 就是这么被吃掉的）。
-	funds_label = _make_label("80 万", 24, Color(1, 0.95, 0.6))
+	funds_label = _make_label("0 / 80 万", 24, Color(1, 0.95, 0.6))
+	funds_label.tooltip_text = "本回合已打出牌的费用＋紧急调度费用 / 本回合总预算"
 	funds_label.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	funds_row.add_child(funds_label)
 	lv.add_child(funds_row)
@@ -1994,7 +2003,7 @@ func _build_ui() -> void:
 	drag_play_hint.visible = false
 	canvas.add_child(drag_play_hint)
 
-	# 右下角：行动次数提醒（缩短）+ 结束回合按钮（沙盘素材之外的空白角落）
+	# 右下角仅保留操作按钮，预算统一在左侧大金额显示。
 	bottom_right = VBoxContainer.new()
 	bottom_right.anchor_left = 1.0
 	bottom_right.anchor_top = 1.0
@@ -2006,16 +2015,17 @@ func _build_ui() -> void:
 	bottom_right.grow_vertical = Control.GROW_DIRECTION_BEGIN
 	bottom_right.offset_left = -210
 	bottom_right.offset_right = -18
-	# 高度要放得下 6 项（已选 / 行动提示 / 排序按钮 / 紧急调度 / 刷新手牌 / 结束回合）。
+	# 高度放得下四个按钮；常驻的出牌与行动次数说明已移除。
 	# ⚠ 容器装不下时 Godot 会保 offset_top 而向下长，底部按钮会被顶出屏幕。
-	bottom_right.offset_top = -276
+	bottom_right.offset_top = -190
 	bottom_right.offset_bottom = -14
-	_ui_slide_origin[bottom_right] = [-210.0, -276.0, -18.0, -14.0]
+	_ui_slide_origin[bottom_right] = [-210.0, -190.0, -18.0, -14.0]
 	bottom_right.add_theme_constant_override("separation", 4)
 	bottom_right.visible = false
 	canvas.add_child(bottom_right)
 
-	selected_label = _make_label("桌面待打出：0 张", 14, Color(1, 0.9, 0.5))
+	selected_label = _make_label("", 14, Color(1, 0.9, 0.5))
+	selected_label.visible = false
 	selected_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	selected_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	selected_label.custom_minimum_size.y = 30
@@ -2026,6 +2036,7 @@ func _build_ui() -> void:
 	# 文案不写死：_build_ui 在 _ready 里就跑完了，那时玩家还没选难度。
 	# 实际文字由 _update_hud() 按 GameState.action_slots() 填。
 	action_hint = _make_label("", 12, Color(0.92, 0.94, 0.96))
+	action_hint.visible = false
 	action_hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	action_hint.add_theme_color_override("font_outline_color", Color(0.05, 0.08, 0.06, 0.8))
 	action_hint.add_theme_constant_override("outline_size", 4)
@@ -3311,13 +3322,14 @@ func _load_audio_settings() -> void:
 	f.close()
 	var data = JSON.parse_string(text)
 	if data is Dictionary:
-		bgm_index = clampi(int(data.get("bgm_index", 0)), 0, BGM_PATHS.size() - 1)
+		# 旧的手选曲目索引不再适用；危机曲只由游戏状态触发。
+		bgm_index = 0
 		bgm_volume = clampf(float(data.get("bgm_volume", 0.8)), 0.0, 1.0)
 		score_speed = clampf(float(data.get("score_speed", 1.0)), SCORE_SPEED_MIN, SCORE_SPEED_MAX)
 
 
 func _save_audio_settings() -> void:
-	var data := {"bgm_index": bgm_index, "bgm_volume": bgm_volume, "score_speed": score_speed}
+	var data := {"bgm_volume": bgm_volume, "score_speed": score_speed}
 	var f := FileAccess.open(AUDIO_SETTINGS_PATH, FileAccess.WRITE)
 	if f != null:
 		f.store_string(JSON.stringify(data))
@@ -3328,18 +3340,63 @@ func _save_audio_settings() -> void:
 func _setup_bgm() -> void:
 	bgm_player = AudioStreamPlayer.new()
 	add_child(bgm_player)
+	for path in BGM_PATHS:
+		var stream: AudioStream = load(path)
+		if stream is AudioStreamMP3:
+			stream.loop = true
+		_bgm_streams.append(stream)
 	_apply_bgm()
 	bgm_player.finished.connect(func() -> void: bgm_player.play())  # 循环
 
 
 ## 载入当前 BGM 与音量并播放
-func _apply_bgm() -> void:
-	var stream: AudioStream = load(BGM_PATHS[bgm_index])
-	if stream is AudioStreamMP3:
-		stream.loop = true
-	bgm_player.stream = stream
+func _apply_bgm(recover: bool = false) -> void:
+	if _bgm_recovery_tween != null:
+		_bgm_recovery_tween.kill()
+		_bgm_recovery_tween = null
+	bgm_player.stop()
+	bgm_player.stream = _bgm_streams[bgm_index]
+	bgm_player.pitch_scale = BGM_RECOVERY_SPEED if recover else 1.0
 	bgm_player.volume_db = linear_to_db(maxf(bgm_volume, 0.001))
 	bgm_player.play()
+	if recover:
+		_bgm_recovery_tween = create_tween()
+		_bgm_recovery_tween.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+		_bgm_recovery_tween.tween_property(bgm_player, "pitch_scale", 1.0, BGM_RECOVERY_SECONDS)
+	_update_bgm_btn()
+
+
+## 危机状态持续到修复；临界风险沿用 HUD 的确定性推演，不消耗随机流。
+func _update_bgm_state() -> void:
+	if bgm_player == null:
+		return
+	var in_game := _playing and (menu_root == null or not menu_root.visible)
+	var danger := false
+	if in_game:
+		# 失败报告保留危机氛围，通关报告回归主题。
+		if GameState.game_over:
+			danger = GameState.is_failure
+		else:
+			danger = GameState.has_unresolved_music_crisis()
+			# 结算结束的数值已演化过，等下一回合开始再预测，避免重复算一次。
+			if not _score_animating and _current_phase != "popup_settlement":
+				var key: Array = [GameState.metrics, GameState.difficulty, GameState.turn,
+					GameState.run_seed, GameState.used_action_ids, GameState.pending_crisis]
+				if key != _bgm_risk_key:
+					_bgm_risk_key = key.duplicate(true)
+					_bgm_risk = false
+					for metric in GameState.METRIC_NAMES:
+						if bool(GameState.metric_hover_preview(metric)["break_total"]):
+							_bgm_risk = true
+							break
+				danger = danger or _bgm_risk
+			elif _score_animating or _current_phase == "popup_settlement":
+				danger = danger or _bgm_danger
+	if danger == _bgm_danger:
+		return
+	_bgm_danger = danger
+	bgm_index = 1 if danger else 0
+	_apply_bgm(not danger and in_game)
 
 
 ## 建立音效播放池。同一个 AudioStream 可以被多个 player 同时播，
@@ -3406,12 +3463,9 @@ func _sync_score_speed_ui() -> void:
 		pause_score_speed_label.text = txt
 
 
-## 切换 BGM（在两个曲目间循环）
+## BGM 由局势自动选择，设置按钮只显示当前曲目。
 func _on_switch_bgm() -> void:
-	bgm_index = (bgm_index + 1) % BGM_PATHS.size()
-	_apply_bgm()
-	_save_audio_settings()
-	_sync_audio_ui()
+	_update_bgm_state()
 
 
 ## 同步两处音频 UI（主菜单设置 + 暂停设置）
@@ -3430,11 +3484,13 @@ func _sync_audio_ui() -> void:
 
 ## 刷新切换 BGM 按钮文字（两处）
 func _update_bgm_btn() -> void:
-	var txt := "切换 BGM（当前：%s）" % BGM_NAMES[bgm_index]
+	var txt := "BGM：%s（随局势自动切换）" % BGM_NAMES[bgm_index]
 	if bgm_switch_btn != null:
 		bgm_switch_btn.text = txt
+		bgm_switch_btn.disabled = true
 	if pause_bgm_btn != null:
 		pause_bgm_btn.text = txt
+		pause_bgm_btn.disabled = true
 
 
 ## The branching panel owns node selection, allocation limits and purchases.
@@ -6268,12 +6324,12 @@ func _update_hud() -> void:
 		if season_dial != null:
 			season_dial.turn_to(season_index, t > 1)
 	spent_label.text = "已消耗：%d 万" % GameState.total_spent
-	funds_label.text = "%d 万" % GameState.funds
+	_update_turn_budget_label()
 	research_label.text = "科研点：%d" % GameState.research_points
-	# 行动位上限随难度变化（简单 4 / 普通·困难 3），必须每帧从这个入口刷，
-	# 不能在 _build_ui 里写死 —— 那时难度还没选。
+	# 行动位仍由游戏规则限制，右下角不再显示常驻说明。
 	if action_hint != null:
-		action_hint.text = "每回合最多 %d 个行动" % GameState.action_slots()
+		action_hint.text = ""
+		action_hint.visible = false
 	_refresh_event_banner()
 	_update_selected_label()
 	_refresh_warn_bar()
@@ -7164,7 +7220,7 @@ func _card_selection_error(info: Dictionary) -> String:
 func _committed_funds() -> int:
 	var total := 0
 	for info in card_infos:
-		if info["selected"] and not info.get("dispatched", false):
+		if info["selected"] and not info.get("dispatched", false) and not info.get("budget_executed", false):
 			# 调度牌已经单独付款，不重复占用回合资金预算。
 			total += GameState.tier_cost(info["card_id"], _info_tier(info))
 	return total
@@ -7179,16 +7235,18 @@ func _selected_count() -> int:
 
 
 func _update_selected_label() -> void:
-	var used := _committed_funds()
-	var pending := 0
-	for info in card_infos:
-		if info.get("selected", false):
-			pending += 1
-	var queue_text := "拖牌到上方桌面待打出"
-	if pending > 0:
-		queue_text = "桌面待打出：%d 张" % pending
-	selected_label.text = "%s\n行动位 %d/%d · 预算 %d/%d 万" % [
-		queue_text, _selected_count(), GameState.action_slots(), used, GameState.funds]
+	if selected_label != null:
+		selected_label.text = ""
+		selected_label.visible = false
+	_update_turn_budget_label()
+
+
+func _update_turn_budget_label() -> void:
+	if funds_label == null:
+		return
+	var pending := _committed_funds() if _current_phase == "allocate" else 0
+	var committed := GameState.turn_card_spent + pending
+	funds_label.text = "%d / %d 万" % [committed, GameState.turn_budget]
 
 
 ## 拒绝选中：红框提示 + 弹簧受力回摆 + 提示原因
@@ -7218,6 +7276,7 @@ func _reject_card(panel: PanelContainer, reason: String) -> void:
 
 ## 顶部提示条短暂显示（红字），随后恢复
 func _flash_hint(text: String) -> void:
+	selected_label.visible = true
 	selected_label.add_theme_color_override("font_color", Color(1.0, 0.42, 0.36))
 	selected_label.text = text
 	var tw := Motion.tween(selected_label, "linear")
@@ -7445,10 +7504,13 @@ func _finish_turn() -> void:
 	for i in staged_indices:
 		var info: Dictionary = card_infos[i]
 		var is_dispatched: bool = info.get("dispatched", false)
+		# 付款信号在 execute_action 内发射，提前移出待付账本，避免重复计费。
+		info["budget_executed"] = true
 		if GameState.execute_action(info["card_id"], _info_tier(info), is_dispatched):
 			info["sandpan_state"] = wetland.capture_state()
 			played.append(i)
 		else:
+			info["budget_executed"] = false
 			failed.append(info["card_id"])
 		if GameState.game_over:
 			break   # 已经判负，剩下的牌不再执行
@@ -7543,6 +7605,7 @@ func _finish_turn() -> void:
 	tier_lever.visible = false
 	_slide_side_panels(true)  # 结算后侧边栏收回屏幕外，让出沙盘
 	_current_phase = "popup_settlement"
+	_update_turn_budget_label()
 	_show_popup("结算反馈", "\n".join(lines), "继续", _on_resolve_continue)
 	# 结算弹窗铺好之后再放攒下的危机预警/爆发。
 	# ⚠ 此时 popup_root 已可见，所以 _on_crisis_dismiss 里那句
@@ -8065,6 +8128,7 @@ func _on_game_end(report: Dictionary) -> void:
 
 func _show_report(r: Dictionary) -> void:
 	_current_phase = "popup_report"
+	_update_turn_budget_label()
 	_clear_save()  # 一局已结束，清掉存档（不能再继续）
 	# 通关成就必须在**这里**判，不能放进 _on_game_end：
 	# 打满回合的通关走的是 _finish_turn → _advance_to_next → _show_report 这条路，

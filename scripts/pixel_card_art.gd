@@ -8,20 +8,25 @@ const SUITS := {
 }
 ## 图鉴使用完整知识卡牌面，与普通手牌和紧急调度分别取材。
 const KNOWLEDGE_FACES := {
-	"植物": preload("res://assets/art/knowledge/kd-08.png"),
-	"鸟类": preload("res://assets/art/knowledge/kd-09.png"),
+	"地理": preload("res://assets/art/knowledge/geography.png"),
+	"植物": preload("res://assets/art/knowledge/plants.png"),
+	"鸟类": preload("res://assets/art/knowledge/birds.png"),
+	"水生动物": preload("res://assets/art/knowledge/aquatic.png"),
+	"外来物种": preload("res://assets/art/knowledge/invasive.png"),
+	"机制": preload("res://assets/art/knowledge/mechanisms.png"),
+	"保护行动": preload("res://assets/art/knowledge/conservation.png"),
+	"案例": preload("res://assets/art/knowledge/cases.png"),
+	"管理策略": preload("res://assets/art/knowledge/management.png"),
 }
-## 未解锁统一用这张：图上自带「未知 / ？ / UNKNOW」，一个字都不用再写。
-const KNOWLEDGE_FACE_BLANK := preload("res://assets/art/knowledge/category-blank.png")
-const KNOWLEDGE_CATEGORIES := ["地理", "水生动物", "外来物种", "机制", "保护行动", "案例", "管理策略"]
+const KNOWLEDGE_CATEGORIES := preload("res://scripts/knowledge_categories.gd").ORDER
 const DISPATCH_SUITS := {
 	"ecology": preload("res://assets/art/dispatch/ecology.png"),
 	"social": preload("res://assets/art/dispatch/social.png"),
 	"manage": preload("res://assets/art/dispatch/manage.png"),
 }
-const KNOWLEDGE_FACE_LOCKED := preload("res://assets/art/knowledge/kd-11.png")
-## 彩蛋卡：整张画好的卡面（含内页插画与名字），与旧的 card-suits/dixinhu.png 逐像素相同。
-const KNOWLEDGE_FACE_EGG := preload("res://assets/art/knowledge/kd-07.png")
+## 未解锁与彩蛋均使用美术提供的完整牌面，不额外写标题。
+const KNOWLEDGE_FACE_LOCKED := preload("res://assets/art/knowledge/unknown.png")
+const KNOWLEDGE_FACE_EGG := preload("res://assets/art/knowledge/easter-egg.png")
 ## 往新卡面上写卡名用的排版参数（测试也读这三个，别在别处再写一遍魔数）
 const FACE_SCALE := 4        # 400×600 卡面上，字形放大 4 倍（与行动卡的卡名同规格）
 const FACE_SPACING := 80     # 行距
@@ -29,12 +34,12 @@ const FACE_BAND_CENTER := 338 # 中间空白带的垂直中心（实测卡面 14
 const GLYPHS := preload("res://assets/art/card-font-glyphs.png")
 const SHADOW := Color8(150, 150, 150)
 const INK := Color.BLACK
+const COST_INK := Color8(56, 68, 53) # #384435，采自新手牌图例的金额数字
 static var mapping: Dictionary = {}
 static var glyph_image: Image
 static var paper_image: Image
 static var textures: Dictionary = {}
 static var suit_images: Dictionary = {}
-static var knowledge_category_faces: Dictionary = {}
 
 static func _load_pixels() -> void:
 	if paper_image != null:
@@ -67,18 +72,7 @@ static func base_image(category: String) -> Image:
 
 ## 全部已收集知识卡都有无便签纸的完整卡面。
 static func knowledge_face(category: String) -> Texture2D:
-	_load_pixels()
-	if KNOWLEDGE_FACES.has(category):
-		return KNOWLEDGE_FACES[category]
-	if category not in KNOWLEDGE_CATEGORIES:
-		return null
-	if not knowledge_category_faces.has(category):
-		var image := KNOWLEDGE_FACE_BLANK.get_image().duplicate() as Image
-		image.convert(Image.FORMAT_RGBA8)
-		image.resize(400, 600, Image.INTERPOLATE_NEAREST)
-		_write(image, category, 72, Color("557530"), -1, 2)
-		knowledge_category_faces[category] = ImageTexture.create_from_image(image)
-	return knowledge_category_faces[category]
+	return KNOWLEDGE_FACES.get(category)
 
 ## 专用素材牌库按 id 读取整张副本；生成素材时只写名称，不写费用。
 static func dispatch_texture(card: Dictionary, baked: bool = true) -> Texture2D:
@@ -185,7 +179,7 @@ static func texture(title: String, footer: String = "", category: String = "") -
 	if not footer.is_empty():
 		# Costs are already in ten-thousands; the supplied banknote prints 萬.
 		if SUITS.has(category):
-			_write(image, footer, 417, Color("35482d"), 179 - _width(footer) * 2, glyph_scale)
+			_write(image, footer, 417, COST_INK, 179 - _width(footer) * 2, glyph_scale)
 		else: _write(image, footer, 100)
 	var result := ImageTexture.create_from_image(image)
 	textures[key] = result
@@ -195,7 +189,7 @@ static func add_face(panel: PanelContainer, title: String, footer: String = "", 
 	var face := TextureRect.new()
 	face.name = "PixelCardFace"
 	# 卡面来源：彩蛋 → 画好的整张；未解锁 → 统一的「未知」卡面；有该类别卡面 → 卡面 + 写卡名；
-	# 其余（还没画卡面的知识卡类别、行动卡）→ 老路：空白纸 + 卡名 + footer。
+	# 行动卡 → 三类手牌模板 + 卡名 + 深绿色金额。
 	var art: Texture2D = null
 	if dixinhu:
 		art = KNOWLEDGE_FACE_EGG
@@ -208,7 +202,7 @@ static func add_face(panel: PanelContainer, title: String, footer: String = "", 
 	face.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 	face.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
 	face.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	# 新卡面自带灰调（kd-11），再压一层 0.68 会发黑，所以只有老路那条才调暗。
+	# 新未知牌面自带灰调，再压一层 0.68 会发黑，所以只有回退路径才调暗。
 	if locked and art == null:
 		face.modulate = Color(0.68, 0.68, 0.68)
 	panel.add_child(face)

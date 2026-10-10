@@ -608,8 +608,9 @@ func _follow_interest(bird: Dictionary, delta: float) -> bool:
 		selected.caught = true
 		interest_captures += 1
 		bird.state = 1
-		bird.timer = 0.8
-		bird["motion_response_age"] = 0.0
+		bird.timer = 2.2
+		bird["motion_response_age"] = 1.0
+		bird["animation_age"] = 0.0
 		bird["motion_velocity"] = Vector2.ZERO
 		return true
 	var velocity := MotionWeb.steer(bird.get("motion_velocity", Vector2.ZERO), selected.pos - pos, delta, 0.035, 0.12)
@@ -914,12 +915,12 @@ func _choose_bird_state(bird: Dictionary) -> void:
 	if not trees.is_empty() and roll < perch_chance:
 		bird["state"] = 3 # Fly to a visible tree and rest there.
 		bird["target"] = trees[visual_rng.randi_range(0, trees.size() - 1)]
-	elif roll < 0.45:
+	elif roll < 0.60:
 		bird["state"] = 0 # Stand in shallow water.
-		bird["timer"] = visual_rng.randf_range(1.0, 3.5)
-	elif roll < 0.78:
-		bird["state"] = 1 # Peck at the water.
-		bird["timer"] = visual_rng.randf_range(1.2, 2.6)
+		bird["timer"] = visual_rng.randf_range(2.5, 5.0)
+	elif roll < 0.78 and int(bird["state"]) != 1:
+		bird["state"] = 1 # One gentle sip, followed by an upright pause.
+		bird["timer"] = visual_rng.randf_range(2.2, 3.0)
 	else:
 		bird["state"] = 2 # Walk to a nearby water pixel.
 		bird["timer"] = visual_rng.randf_range(2.0, 4.5)
@@ -1506,7 +1507,7 @@ func _bird_animation_frame(bird: Dictionary) -> int:
 	var response_age := float(bird.get("motion_response_age", 1.0))
 	if not reduced_motion and response_age < 5.0 / 11.0:
 		# toy-flipbook: one fully visible atlas frame, held at 11 Hz, no dissolve.
-		return [6, 7, 8, 15, 0][mini(4, floori(response_age * 11.0))]
+		return [0, 6, 6, 0, 0][mini(4, floori(response_age * 11.0))]
 	var age := float(bird.get("animation_age", 0.0))
 	var previous := int(bird.get("animation_previous_state", 0))
 	if not reduced_motion and age < 0.18:
@@ -1514,7 +1515,11 @@ func _bird_animation_frame(bird: Dictionary) -> int:
 		if previous == 3 or previous == 5: return 15 # Feet-down landing.
 	var tick := int(age * 7.0 + float(bird.get("slot", 0))) if not reduced_motion else 0
 	match state:
-		1: return 6 + tick % 3 # Bend, peck, lift.
+		1:
+			# Hold the shallower bend; omit the deep peck and exaggerated lift.
+			# No loop: the remaining state duration is an upright drinking pause.
+			if reduced_motion: return 0
+			return 6 if age >= 0.45 and age < 1.25 else 0
 		2: return 2 + tick % 4 # Four-step walking loop.
 		3, 5: return 9 + tick % 4 # Four-phase wingbeat.
 		4: return 13 # Folded wings while resting.
