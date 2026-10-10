@@ -59,7 +59,7 @@ func configure(owner_game: Node, canvas: CanvasLayer) -> void:
 	canvas.add_child(hud_layer)
 	canvas.move_child(hud_layer, 0)
 	var hud_controls: Array = [game.left_panel, game.right_panel, game.staged_board, game.event_label,
-		game.bottom_right, game.tier_lever, game.deck_root, game.warn_bar]
+		game.bottom_right, game.tier_lever, game.deck_root]
 	for child in canvas.get_children():
 		if child is ColorRect: hud_controls.append(child)
 	for control in hud_controls:

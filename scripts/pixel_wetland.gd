@@ -39,6 +39,9 @@ const VIEW_AZIMUTH := 0.0
 const VIEW_PITCH := PI / 4.0
 const GROUND_SIZE := 100.0
 const BIRD_DISPLAY_SCALE := 0.65
+const BIRD_PERCH_BODY := [0.56, 0.54, 0.60, 0.59, 0.65]
+const BOAT_BIRD_CLEARANCE := Vector2(44, 40)
+var _perch_heights: Dictionary = {}
 const RiverRoutes := preload("res://scripts/wetland_rivers.gd")
 const CREEPER_ART := preload("res://assets/creeper.png")
 # Peripheral grass: within the menu view, beyond the closer gameplay view.
@@ -599,7 +602,7 @@ func _input(event: InputEvent) -> void:
 
 func _emit_interest(uv: Vector2) -> bool:
 	if reduced_motion or interest_cooldown > 0.0 or interests.size() >= MAX_INTERESTS: return false
-	if not Rect2(Vector2.ZERO, Vector2.ONE).has_point(uv) or not _is_water(uv): return false
+	if not Rect2(Vector2.ZERO, Vector2.ONE).has_point(uv) or not _is_water(uv) or _bird_boat_space(uv).length_squared() < 1.0: return false
 	interests.append({"pos": uv, "age": 0.0, "caught": false})
 	interest_cooldown = 0.8
 	return true
@@ -629,9 +632,10 @@ func _follow_interest(bird: Dictionary, delta: float) -> bool:
 		bird["animation_age"] = 0.0
 		bird["motion_velocity"] = Vector2.ZERO
 		return true
-	var velocity := MotionWeb.steer(bird.get("motion_velocity", Vector2.ZERO), selected.pos - pos, delta, 0.035, 0.12)
+	var waypoint := _bird_water_waypoint(bird, selected.pos)
+	var velocity := MotionWeb.steer(bird.get("motion_velocity", Vector2.ZERO), waypoint - pos, delta, 0.035, 0.12)
 	var next := pos + velocity * delta
-	if not _is_water(next) or not _is_water((pos + next) * 0.5):
+	if not _bird_water_segment_clear(pos, next):
 		bird["motion_velocity"] = Vector2.ZERO
 		bird["motion_hunting"] = false
 		return false
@@ -844,7 +848,9 @@ func _accept_habitat(kind: String, uv: Vector2) -> bool:
 	# Seeded placement uses the original geography, independent of the previous
 	# run's animated water level. Movement uses the current, changing shoreline.
 	match kind:
-		"bird", "submerged", "floating":
+		"bird":
+			return _is_water(uv, true) and _bird_boat_space(uv).length_squared() >= 1.2 * 1.2
+		"submerged", "floating":
 			return _is_water(uv, true)
 		"emergent", "marsh":
 			return _is_shore(uv) or (_is_land(uv, true) and _near_water(uv, true))
@@ -872,7 +878,10 @@ func _scatter_site(kind: String, placed: Array[Vector2]) -> Vector2:
 	if kind == "tree":
 		return Vector2(0.80, 0.55 + 0.018 * placed.size())
 	if kind == "bird" or kind == "floating" or kind == "submerged":
-		return WATER_ANCHORS[placed.size() % WATER_ANCHORS.size()]
+		for i in WATER_ANCHORS.size():
+			var anchor := WATER_ANCHORS[(placed.size() + i) % WATER_ANCHORS.size()]
+			if _accept_habitat(kind, anchor): return anchor
+		return Vector2(0.43, 0.63)
 	return SHORE_ANCHORS[placed.size() % SHORE_ANCHORS.size()]
 
 func _reset_scenery() -> void:
@@ -905,6 +914,90 @@ func _visible_trees() -> Array:
 	var sites: Array = plant_sites.get("chishan", [])
 	var count := clampi(int(float(plants.get("chishan", 0)) / 7.0), 0, sites.size())
 	return sites.slice(0, count)
+
+## The obstacle follows the drawn lake boat, including its gentle lateral sway.
+## Work in the unzoomed billboard plane, so camera zoom cannot change clearance.
+func _bird_boat_space(uv: Vector2) -> Vector2:
+	var offset := _shadow_projection.basis_xform(uv - BOAT_ANCHOR)
+	return (offset - Vector2(round(sin(elapsed * 0.06) * 4), -14)) / BOAT_BIRD_CLEARANCE
+
+func _bird_boat_uv(point: Vector2) -> Vector2:
+	return BOAT_ANCHOR + _shadow_projection.affine_inverse().basis_xform(point * BOAT_BIRD_CLEARANCE + Vector2(round(sin(elapsed * 0.06) * 4), -14))
+
+func _bird_water_segment_clear(a: Vector2, b: Vector2) -> bool:
+	var nearest := Geometry2D.get_closest_point_to_segment(Vector2.ZERO, _bird_boat_space(a), _bird_boat_space(b))
+	if nearest.length_squared() < 1.0: return false
+	for fraction in [0.25, 0.5, 0.75, 1.0]:
+		if not _is_water(a.lerp(b, fraction)): return false
+	return true
+
+func _bird_water_route(start: Vector2, target: Vector2) -> Array[Vector2]:
+	var direct: Array[Vector2] = [target]
+	if _bird_water_segment_clear(start, target): return direct
+	var a := _bird_boat_space(start)
+	var b := _bird_boat_space(target)
+	if a.length_squared() < 1.0 or b.length_squared() < 1.0: return []
+	var angle := wrapf(b.angle() - a.angle(), -PI, PI)
+	for sweep in [angle, angle - TAU if angle > 0.0 else angle + TAU]:
+		var route: Array[Vector2] = []
+		var steps := maxi(1, ceili(absf(sweep) / (PI / 12.0)))
+		var previous := start
+		var clear := true
+		for i in steps + 1:
+			var point := _bird_boat_uv(Vector2.from_angle(a.angle() + sweep * float(i) / steps) * 1.2)
+			if not _bird_water_segment_clear(previous, point):
+				clear = false
+				break
+			route.append(point)
+			previous = point
+		if clear and _bird_water_segment_clear(previous, target):
+			route.append(target)
+			return route
+	return []
+
+func _bird_water_waypoint(bird: Dictionary, target: Vector2) -> Vector2:
+	var basis: Vector2 = Vector2(_shadow_projection.x.length(), _shadow_projection.y.length())
+	if bird.get("route_target", Vector2.INF) != target or bird.get("route_basis", Vector2.ZERO) != basis:
+		bird["water_route"] = _bird_water_route(bird.pos, target)
+		bird["route_target"] = target
+		bird["route_basis"] = basis
+	var route: Array = bird.get("water_route", [])
+	while not route.is_empty() and bird.pos.distance_to(route[0]) < 0.001:
+		route.pop_front()
+	return bird.pos if route.is_empty() else route[0]
+
+func _tree_perch_height(uv: Vector2) -> float:
+	var amount := _tree_season_blend(uv)
+	var texture: Texture2D = seasonal_trees[season]
+	if amount < 1.0 and (season == 3 or (season == 0 and previous_season == 3)):
+		texture = tree_frames[season][clampi(roundi(amount * 16), 0, 16)]
+	var key := texture.get_instance_id()
+	if not _perch_heights.has(key):
+		var image := texture.get_image()
+		if image.is_compressed(): image.decompress()
+		var crown := 8
+		for y in image.get_height():
+			var occupied := false
+			for x in range(16, 24):
+				if image.get_pixel(x, y).a > 0.5: occupied = true
+			if occupied:
+				crown = y
+				break
+		_perch_heights[key] = 44.0 * 0.9 - crown - 1.0
+	var index: int = plant_sites.get("chishan", []).find(uv)
+	var growth := _visual_weight("plants", "chishan", index, 7.0) if index >= 0 else 1.0
+	return float(_perch_heights[key]) * growth
+
+func _bird_height(bird: Dictionary) -> float:
+	var state := int(bird.state)
+	if state == 4: return _tree_perch_height(bird.pos)
+	if state not in [3, 5]: return 0.0
+	var start: Vector2 = bird.get("flight_start", bird.home)
+	var distance := maxf(0.001, start.distance_to(bird.target))
+	var fraction := smoothstep(0.0, 1.0, 1.0 - bird.pos.distance_to(bird.target) / distance)
+	var from_height := float(bird.get("flight_height", 6.0))
+	var to_height := _tree_perch_height(bird.target) if state == 3 else 6.0
+	return lerpf(from_height, to_height, fraction)
 
 func _bird_count(sid: String) -> int:
 	var count := _metric_bird_count(sid, metrics)
@@ -947,6 +1040,8 @@ func _choose_bird_state(bird: Dictionary) -> void:
 	if not trees.is_empty() and roll < perch_chance:
 		bird["state"] = 3 # Fly to a visible tree and rest there.
 		bird["target"] = trees[visual_rng.randi_range(0, trees.size() - 1)]
+		bird["flight_start"] = bird.pos
+		bird["flight_height"] = 6.0
 	elif roll < 0.60:
 		bird["state"] = 0 # Stand in shallow water.
 		bird["timer"] = visual_rng.randf_range(2.5, 5.0)
@@ -960,7 +1055,7 @@ func _choose_bird_state(bird: Dictionary) -> void:
 		bird["target"] = home
 		for attempt in 20:
 			var candidate := home + Vector2(visual_rng.randf_range(-0.045, 0.045), visual_rng.randf_range(-0.045, 0.045))
-			if _is_water(candidate) and _is_water((candidate + bird["pos"]) * 0.5):
+			if _is_water(candidate) and _bird_boat_space(candidate).length_squared() >= 1.0:
 				bird["target"] = candidate
 				break
 
@@ -987,19 +1082,23 @@ func _process_birds(delta: float) -> void:
 		elif state == 4:
 			bird["timer"] = float(bird["timer"]) - delta
 			if bird["timer"] <= 0.0 or _visible_trees().is_empty():
+				bird["flight_start"] = bird.pos
+				bird["flight_height"] = _tree_perch_height(bird.pos)
 				bird["state"] = 5 # Fly back before walking or pecking again.
 				bird["target"] = bird["home"]
 		else:
 			bird["timer"] = float(bird["timer"]) - delta
 			if state == 2:
-				var to_target := target - pos
+				var waypoint := _bird_water_waypoint(bird, target)
+				var to_target := waypoint - pos
 				var step := 0.018 * delta
-				if to_target.length() <= step:
-					bird["pos"] = target
+				var next := pos.move_toward(waypoint, step)
+				if _bird_water_segment_clear(pos, next): bird["pos"] = next
+				else: bird.erase("route_target")
+				if bird.pos.distance_to(target) < 0.001 or waypoint == pos:
 					bird["state"] = 0
 					bird["timer"] = visual_rng.randf_range(1.0, 3.0)
-				else:
-					bird["pos"] = pos + to_target.normalized() * step
+				elif to_target.length_squared() > 0.0:
 					bird["angle"] = to_target.angle()
 			if bird["timer"] <= 0.0:
 				_choose_bird_state(bird)
@@ -1573,6 +1672,7 @@ func _draw_sprite(c: Control, p: Vector2, index: int, extent: Vector2, tint: Col
 
 func _bird_animation_frame(bird: Dictionary) -> int:
 	var state: int = bird["state"]
+	if state == 4: return 13
 	var response_age := float(bird.get("motion_response_age", 1.0))
 	if not reduced_motion and response_age < 5.0 / 11.0:
 		# toy-flipbook: one fully visible atlas frame, held at 11 Hz, no dissolve.
@@ -1609,17 +1709,21 @@ func _draw_bird_actor(c: Control, bird: Dictionary) -> void:
 		var response_alpha := (1.0 - response_age / 0.55) * visibility
 		c.draw_arc(p + Vector2(0, -8), 5.0 + response_age * 8.0, -PI * 0.85, -PI * 0.15, 8, Color(0.78, 0.94, 0.62, response_alpha), 1.5, false)
 	var frame := _bird_animation_frame(bird)
-	if state == 3 or state == 5:
-		p.y -= 6.0 + round(sin(elapsed * 13.0) * 2.0)
-	elif state == 4:
-		p.y -= 5.0 + round(sin(elapsed * 4.0) * 1.0)
+	p.y -= _bird_height(bird)
 	var extent := (Vector2(46, 46) if sprite_index != 2 else Vector2(50, 50)) * BIRD_DISPLAY_SCALE
 	if state == 3 or state == 5:
 		extent *= 1.2
+	var region := _bird_frame_region(sprite_index, frame)
+	var anchor := Vector2(0.5, 0.875)
+	if state == 4:
+		# Crop the lower leg area without stretching the retained head/body pixels.
+		region.size.y = floor(region.size.y * BIRD_PERCH_BODY[sprite_index])
+		extent.y *= region.size.y / _bird_frame_region(sprite_index, frame).size.y
+		anchor.y = 1.0
 	# Billboard sprites remain upright: only mirror horizontally, never rotate.
 	# Anchor the feet to the habitat point instead of the middle of the body.
 	c.draw_set_transform(p, 0.0, Vector2(_bird_facing(bird), 1.0))
-	c.draw_texture_rect_region(_atlas_texture(BIRD_ACTIONS[sprite_index]), Rect2(-extent * Vector2(0.5, 0.875), extent), _bird_frame_region(sprite_index, frame), Color(1, 1, 1, visibility))
+	c.draw_texture_rect_region(_atlas_texture(BIRD_ACTIONS[sprite_index]), Rect2(-extent * anchor, extent), region, Color(1, 1, 1, visibility))
 	c.draw_set_transform(Vector2.ZERO)
 
 ## Flood-fill from the map edges: isolated lake islands stay outside this mask.

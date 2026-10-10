@@ -1732,9 +1732,10 @@ var log_messages: Array = []        # 因果提示
 #   加进去只会给存档增加无谓的不兼容面。
 var score_ledger: Array = []
 var game_over: bool = false
-var total_spent: int = 0            # 累计卡牌支出（用于资金效率评价）
+var total_spent: int = 0            # 累计行动、调度与刷新支出（用于资金效率评价）
 var turn_budget: int = 0            # 本回合拨款、结转与运营扣除后的总预算
 var turn_card_spent: int = 0        # 本回合普通行动卡 + 紧急调度费用，不含刷新手牌
+var turn_other_spent: int = 0       # 本回合刷新等非卡牌支出，同样占用总预算
 # ===== 肉鸽机制状态 =====
 var run_seed: int = 0               # 本局种子（同种子可复现，用于反事实对照）
 var run_id: String = ""             # Unique reward receipt; independent of seeded gameplay RNG.
@@ -1802,6 +1803,7 @@ func serialize() -> Dictionary:
 		"log_messages": log_messages.duplicate(),
 		"game_over": game_over, "total_spent": total_spent,
 		"turn_budget": turn_budget, "turn_card_spent": turn_card_spent,
+		"turn_other_spent": turn_other_spent,
 		"run_seed": run_seed, "run_id": run_id, "settlement": settlement,
 		# 本局天赋词条：继续游戏要原样带回来，否则中途读档会丢加成
 		"talents": Talents.granted.duplicate(),
@@ -1835,6 +1837,7 @@ func load_state(d: Dictionary, restore_talents: bool = true) -> void:
 		legacy_dispatch_spent = DISPATCH_COST + DISPATCH_PRICE_STEP * maxi(0, int(d.get("dispatch_used_count", 1)) - 1)
 	turn_card_spent = int(d.get("turn_card_spent", legacy_dispatch_spent))
 	turn_budget = int(d.get("turn_budget", maxi(0, funds + turn_card_spent)))
+	turn_other_spent = int(d.get("turn_other_spent", 0))
 	carry = int(d.get("carry", 0))
 	last_metric_funding = int(d.get("last_metric_funding", 0))
 	research_points = int(d.get("research_points", 0))
@@ -1903,6 +1906,7 @@ func reset_game() -> void:
 	total_spent = 0
 	turn_budget = 0
 	turn_card_spent = 0
+	turn_other_spent = 0
 	settlement = 70
 	floating_islands = 0
 	effects_queue = []
@@ -2078,6 +2082,7 @@ func start_new_turn() -> void:
 	funds = carry + funding - (OPERATION_COST + int(Talents.get_bonus("operation")))
 	turn_budget = funds
 	turn_card_spent = 0
+	turn_other_spent = 0
 	carry = 0
 
 	metrics_changed.emit()
@@ -2115,6 +2120,7 @@ func _resolve_pending_crisis() -> void:
 	pending_crisis = {}
 	last_crisis_name = c["name"]
 	crisis_history.append({"id": c["id"], "turn": turn})   # 防连出 / 冷却的依据
+	record_crisis_notice(c, 0)
 	_mark_warning_hit(str(c["id"]), turn)
 	_add_log("⚠ %s" % c["hit"])
 	for e in c["effects"]:
@@ -2196,7 +2202,8 @@ func _promote_forecast_if_needed() -> void:
 		return  # 预告与正式预警一一对应，正常不会同时存在（后者是防御）
 	pending_crisis = forecast_crisis
 	forecast_crisis = {}
-	# 不重复记 warn_history：预告那一回合已经记过了（lead=2）
+	# 同一爆发回合会合并到已有深预警，同时补齐旧档遗漏。
+	record_crisis_notice(pending_crisis, 1)
 
 
 ## 抽一场危机。at_turn = 判定「冷却 / 全局喘息 / 概率」用的时点：
@@ -2250,11 +2257,38 @@ func _roll_crisis(at_turn: int, exclude_id: String = "") -> Dictionary:
 ## 记一条预警历史（顶部「预警回顾」读它）。
 ## lead = 提前几回合告知：1 = 常规预警，2 = 深预警
 func _note_warning(c: Dictionary, lead: int) -> void:
-	var pc := _parse_cond_simple(str(c["cond"]))
+	record_crisis_notice(c, lead)
+
+
+## 用预计爆发回合区分每一场危机；生成、展示、读档均可安全补记。
+func record_crisis_notice(c: Dictionary, lead: int = 1, notice_turn: int = -1) -> void:
+	if c.is_empty():
+		return
+	var issued := turn if notice_turn < 0 else notice_turn
+	var expected := issued + lead
+	var id := str(c.get("id", ""))
+	for entry in warn_history:
+		var old_expected := int(entry.get("expected_hit_turn", int(entry.get("turn", 0)) + int(entry.get("lead", 1))))
+		if str(entry.get("id", "")) == id and old_expected == expected:
+			entry["expected_hit_turn"] = expected
+			entry["crisis"] = c.duplicate(true)
+			if lead == 0:
+				entry["hit_turn"] = expected
+			return
+	var pc := _parse_cond_simple(str(c.get("cond", "")))
 	warn_history.append({
-		"turn": turn, "id": c["id"], "hit_turn": -1, "lead": lead,
+		"turn": issued, "id": id, "hit_turn": expected if lead == 0 else -1,
+		"lead": lead, "expected_hit_turn": expected, "crisis": c.duplicate(true),
 		"value": int(metrics.get(str(pc.get("metric", "")), 0)),
 	})
+
+
+func restore_crisis_notices(next_hit_turn: int) -> void:
+	record_crisis_notice(pending_crisis, 1, next_hit_turn - 1)
+	record_crisis_notice(forecast_crisis, 2, next_hit_turn - 1)
+	for hit in crisis_history:
+		var c := crisis_by_id(str(hit.get("id", "")))
+		record_crisis_notice(c, 0, int(hit.get("turn", turn)))
 
 
 ## 深预警是否已开启（科研点累计达标，**不消耗**）
@@ -2310,7 +2344,7 @@ func crisis_by_id(id: String) -> Dictionary:
 func _mark_warning_hit(id: String, hit_turn: int) -> void:
 	for i in range(warn_history.size() - 1, -1, -1):
 		var e: Dictionary = warn_history[i]
-		if str(e["id"]) == id and int(e.get("hit_turn", -1)) < 0:
+		if str(e["id"]) == id and int(e.get("expected_hit_turn", int(e.get("turn", 0)) + int(e.get("lead", 1)))) == hit_turn:
 			e["hit_turn"] = hit_turn
 			return
 
@@ -2481,6 +2515,8 @@ func spend(amount: int, count_for_cards: bool = false) -> bool:
 	total_spent += amount
 	if count_for_cards:
 		turn_card_spent += amount
+	else:
+		turn_other_spent += amount
 	funds_changed.emit()
 	return true
 

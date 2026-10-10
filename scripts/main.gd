@@ -1915,7 +1915,7 @@ func _build_ui() -> void:
 	# ⚠ 必须写 24：_snap_px() 只认 12 的倍数，写 17 / 18 都会被吸附回 12px，
 	#   改完看不出一丁点变大（原来的 17 就是这么被吃掉的）。
 	funds_label = _make_label("0 / 80 万", 24, Color(1, 0.95, 0.6))
-	funds_label.tooltip_text = "本回合已打出牌的费用＋紧急调度费用 / 本回合总预算"
+	funds_label.tooltip_text = "本回合已用及待付（含行动、调度与刷新费用）/ 本回合总预算"
 	funds_label.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	funds_row.add_child(funds_label)
 	lv.add_child(funds_row)
@@ -1974,18 +1974,20 @@ func _build_ui() -> void:
 		rv.add_child(_make_metric_row(metric))
 	_build_staged_board(canvas)
 
-	# --- 顶部事件横幅（单行、居中、不遮挡沙盘）---
+	# 顶部提示完整换行；牌桌自动让到提示下方。
 	event_label = _make_label("暂无", 13, Color(0.95, 0.95, 0.92))
 	event_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	event_label.clip_text = true
-	event_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	event_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	event_label.text_overrun_behavior = TextServer.OVERRUN_NO_TRIMMING
+	event_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	event_label.anchor_left = 0.0
 	event_label.anchor_top = 0.0
 	event_label.anchor_right = 1.0
 	event_label.offset_left = 240
-	event_label.offset_right = -602
-	event_label.offset_top = 25
-	event_label.offset_bottom = 53
+	event_label.offset_right = -222
+	event_label.offset_top = 18
+	event_label.offset_bottom = 52
+	event_label.resized.connect(_layout_event_banner)
 	event_label.add_theme_color_override("font_outline_color", Color(0.05, 0.08, 0.06, 0.8))
 	event_label.add_theme_constant_override("outline_size", 5)
 	canvas.add_child(event_label)
@@ -2040,7 +2042,7 @@ func _build_ui() -> void:
 	bottom_right.grow_vertical = Control.GROW_DIRECTION_BEGIN
 	bottom_right.offset_left = -210
 	bottom_right.offset_right = -18
-	# 高度放得下四个按钮；常驻的出牌与行动次数说明已移除。
+	# 预警回顾与四个操作按钮使用紧凑高度，必要时向上扩展。
 	# ⚠ 容器装不下时 Godot 会保 offset_top 而向下长，底部按钮会被顶出屏幕。
 	bottom_right.offset_top = -190
 	bottom_right.offset_bottom = -14
@@ -2071,23 +2073,23 @@ func _build_ui() -> void:
 	# 所以两边永远同步 —— 在牌库切过再回来，手牌也是同一套规则，
 	# 新一局发牌同样按它排（见 _build_hand_panel）。
 	hand_sort_btn = _make_button("按类别排序", _toggle_hand_sort, 14)
-	hand_sort_btn.custom_minimum_size = Vector2(166, 40)
+	hand_sort_btn.custom_minimum_size = Vector2(166, 32)
 	bottom_right.add_child(hand_sort_btn)
 
 	# 两个「花钱换牌」的容错阀（都在结束回合之上）：
 	#   紧急调度 = 花 40 万从当季池点名一张牌，不占行动位，回合末与手牌一起结算
 	#   刷新手牌 = 花 5 万把整手重抽一遍，每回合限一次
 	dispatch_btn = _make_button("紧急调度 · 40 万", _open_dispatch_panel, 14)
-	dispatch_btn.custom_minimum_size = Vector2(166, 40)
+	dispatch_btn.custom_minimum_size = Vector2(166, 32)
 	bottom_right.add_child(dispatch_btn)
 
 	refresh_btn = _make_button("刷新手牌 · 5 万", _on_refresh_hand, 14)
-	refresh_btn.custom_minimum_size = Vector2(166, 40)
+	refresh_btn.custom_minimum_size = Vector2(166, 32)
 	bottom_right.add_child(refresh_btn)
 
 	end_turn_btn = _make_button("执行行动 ▶", _finish_turn, 20)
 	VisualTheme.style_button(end_turn_btn, false, true)
-	end_turn_btn.custom_minimum_size = Vector2(166, 48)
+	end_turn_btn.custom_minimum_size = Vector2(166, 44)
 	bottom_right.add_child(end_turn_btn)
 
 	# 左下角：出牌档位拉杆（向左拨 = 基础投入，中间 = 有效投入，向右拨 = 深度投入）
@@ -4067,6 +4069,7 @@ func save_game() -> void:
 		"hand_ids": hand_ids,
 		"staged_queue": staged_queue,
 		"dispatched_hand_ids": dispatched_hand_ids,
+		"refresh_used_turn": _refresh_used_turn,
 		"phase": _current_phase,
 		"event_text": _current_event,
 	}
@@ -4093,7 +4096,15 @@ func load_game() -> bool:
 	var data = JSON.parse_string(text)
 	if data == null or not (data is Dictionary):
 		return false
-	GameState.load_state(data.get("state", {}))
+	var phase: String = str(data.get("phase", "allocate"))
+	var state: Dictionary = data.get("state", {})
+	# 旧分配阶段存档漏记刷新费：由总预算、现有资金和已付款恢复。
+	# 结算阶段资金已转入结转，不能把结转误认为刷新支出。
+	if phase == "allocate" and state.has("turn_budget") and not state.has("turn_other_spent"):
+		state["turn_other_spent"] = maxi(0, int(state["turn_budget"]) - int(state.get("funds", 0)) - int(state.get("turn_card_spent", 0)))
+	GameState.load_state(state)
+	GameState.restore_crisis_notices(GameState.turn if phase in ["allocate", "popup_event"] else GameState.turn + 1)
+	_refresh_used_turn = int(data.get("refresh_used_turn", GameState.turn if GameState.turn_other_spent >= GameState.REFRESH_HAND_COST else -1))
 	_update_threshold_lines()
 	_hide_menu()
 	_playing = true
@@ -4102,7 +4113,6 @@ func load_game() -> bool:
 	_banner_override = ""   # 读档后横幅直接显示当前态势，不继承上一局的危机残留
 	_update_hud()
 	_update_3d()
-	var phase: String = str(data.get("phase", "allocate"))
 	_current_phase = phase
 	var popup: Dictionary = data.get("popup", {})
 	match phase:
@@ -4291,12 +4301,17 @@ func _build_pause_menu() -> void:
 # ==================== 危机警示 ====================
 ## 危机预警信号：入队，逐个弹出大红警示
 func _on_crisis_warn(crisis: Dictionary) -> void:
+	GameState.record_crisis_notice(crisis, 1)
+	GameState.record_crisis_notice(GameState.forecast_crisis, 2)
+	_refresh_warn_bar()
 	_crisis_queue.append({"crisis": crisis, "is_warning": true})
 	_process_crisis_queue()
 
 
 ## 危机爆发信号：入队，逐个弹出大红警示
 func _on_crisis_hit(crisis: Dictionary) -> void:
+	GameState.record_crisis_notice(crisis, 0)
+	_refresh_warn_bar()
 	_crisis_queue.append({"crisis": crisis, "is_warning": false})
 	_process_crisis_queue()
 
@@ -4499,19 +4514,14 @@ func _build_crisis_alert() -> void:
 
 
 # ==================== 危机预警回顾（P1）====================
-## 顶部「预警回顾」条：预警弹窗关掉后信息收在这里，点一下能重看本局全部预警
+## 右下角的预警回顾按钮，位于手牌排序按钮上方。
 func _build_warn_history(canvas: CanvasLayer) -> void:
 	warn_bar = _make_button("", _open_warn_history, 13)
-	warn_bar.anchor_left = 0.5
-	warn_bar.anchor_right = 0.5
-	warn_bar.offset_left = -240
-	warn_bar.offset_right = 240
-	warn_bar.offset_top = 34
-	warn_bar.offset_bottom = 64
-	warn_bar.clip_text = true
+	warn_bar.custom_minimum_size = Vector2(166, 28)
 	warn_bar.tooltip_text = "点击重看本局全部危机预警"
 	warn_bar.visible = false
-	canvas.add_child(warn_bar)
+	bottom_right.add_child(warn_bar)
+	bottom_right.move_child(warn_bar, hand_sort_btn.get_index())
 
 	var layer := CanvasLayer.new()
 	layer.name = "WarnLayer"
@@ -4580,7 +4590,7 @@ func _close_warn_history() -> void:
 		warn_panel_root.visible = false
 
 
-## 顶部那一条：显示最近一条预警，点开看全部
+## 按钮显示记录数，最近一次预警放在悬停提示。
 func _refresh_warn_bar() -> void:
 	if warn_bar == null:
 		return
@@ -4589,7 +4599,8 @@ func _refresh_warn_bar() -> void:
 		warn_bar.visible = false
 		return
 	var last: Dictionary = rows[rows.size() - 1]
-	warn_bar.text = "⚠ 危机预警日志：%s（第 %d 回合）· 共 %d 条" % [
+	warn_bar.text = "预警回顾 · %d 条" % rows.size()
+	warn_bar.tooltip_text = "最近预警：%s（第 %d 回合）· 共 %d 条\n点击查看本局完整记录" % [
 		_crisis_short_label(str(last["id"])), int(last["turn"]), rows.size()]
 	warn_bar.visible = true
 
@@ -4626,7 +4637,7 @@ func _make_warn_row(e: Dictionary) -> Control:
 	var id := str(e["id"])
 	var turn := int(e["turn"])
 	var hit := int(e.get("hit_turn", -1))
-	var c: Dictionary = GameState.crisis_by_id(id)
+	var c: Dictionary = e.get("crisis", GameState.crisis_by_id(id))
 	var cname: String = str(c.get("name", id))
 	var pc := _parse_cond(str(c.get("cond", "")))
 	var metric := str(pc.get("metric", ""))
@@ -4656,8 +4667,10 @@ func _make_warn_row(e: Dictionary) -> Control:
 		for ef in c.get("effects", []):
 			eff.append("%s %+d" % [GameState.METRIC_NAMES.get(ef["metric"], ef["metric"]), int(ef["delta"])])
 		t += "[color=#ff9090]→ 第 %d 回合已爆发：%s[/color]\n" % [hit, "、".join(eff)]
-	else:
+	elif GameState.game_over:
 		t += "[color=#9aa0a6]→ 未爆发（本局在那之前就结束了）[/color]\n"
+	else:
+		t += "[color=#ffcf80]→ 待爆发：第 %d 回合[/color]\n" % int(e.get("expected_hit_turn", turn + lead))
 	# 沿用预警弹窗里的说法（「应对建议：优先打出「卡名」」），不暴露内部的标签名 ——
 	# 「补水调度」「病害防控」这类标签玩家在别处根本看不到，写在日志里会显得割裂。
 	var counters: Array = GameState.counter_ids_for(c)
@@ -6222,7 +6235,7 @@ func _update_threshold_lines() -> void:
 ## 数字全部来自 GameState.metric_hover_preview()（只读推演），这里只负责显示，不参与任何判定。
 ## ⚠ 只给结果，不给解释：指标之间的因果链、难度对衰减的放大，都是**隐性参数**，
 ##   玩家应该自己从数字里总结，不能写在这块板上。
-const METRIC_TIP_W := 294.0
+const METRIC_TIP_W := 244.0
 
 
 func _build_metric_tip(parent: Node) -> void:
@@ -6234,10 +6247,13 @@ func _build_metric_tip(parent: Node) -> void:
 	metric_tip.anchor_bottom = 0.0
 	metric_tip.visible = false
 	_panel_style(metric_tip, Color(0.16, 0.12, 0.08, 0.96))
+	var tip_style := metric_tip.get_theme_stylebox("panel").duplicate() as StyleBox
+	tip_style.set_content_margin_all(8)
+	metric_tip.add_theme_stylebox_override("panel", tip_style)
 	parent.add_child(metric_tip)
 
 	var vb := VBoxContainer.new()
-	vb.add_theme_constant_override("separation", 3)
+	vb.add_theme_constant_override("separation", 2)
 	metric_tip.add_child(vb)
 
 	metric_tip_title = _make_label("", 14, Color(0.95, 0.95, 0.95))
@@ -6247,7 +6263,7 @@ func _build_metric_tip(parent: Node) -> void:
 	metric_tip_body.bbcode_enabled = true
 	metric_tip_body.fit_content = true
 	metric_tip_body.scroll_active = false
-	metric_tip_body.custom_minimum_size = Vector2(METRIC_TIP_W - 26, 0)
+	metric_tip_body.custom_minimum_size = Vector2(METRIC_TIP_W - 16, 0)
 	# 全工程最后一处绕过 _snap_px 的字号（写死 13 → 像素字体 12px，会被缩放糊掉）。
 	# 统一走 _snap_px 后落回 12px，与其它面板一致。
 	metric_tip_body.add_theme_font_size_override("normal_font_size", _snap_px(13))
@@ -6359,7 +6375,7 @@ func _fill_metric_tip(metric: String) -> void:
 		dtxt = "%+d" % nat_min
 		dcol = "#ff8f7a"
 	var rows: Array = []
-	rows.append("[color=#cfd6dc]自然演化（含洪旱联动）[/color]   [color=%s][b]%s[/b][/color]" % [dcol, dtxt])
+	rows.append("[color=#cfd6dc]自然演化（含洪旱）[/color]   [color=%s][b]%s[/b][/color]" % [dcol, dtxt])
 	# 刻意不写「为什么」：水质怎么拖累植被、植被怎么影响候鸟这一类因果，是留给玩家自己悟的隐性参数。
 	# 人鸟矛盾同理：只报一个安静的小计，不给公式、不给原因
 	if cf_pen > 0:
@@ -6424,9 +6440,7 @@ func _fill_water_metric_tip(p: Dictionary) -> void:
 	var season: String = GameState.current_season()
 	var rows: Array[String] = []
 	rows.append("[color=#b6ebae][b]%s·%s季参考 %d–%d[/b][/color]（含端点）" % [GameState.difficulty_name(), GameState.SEASON_NAMES[season], rule["low"], rule["high"]])
-	rows.append(str(rule["theme"]))
 	rows.append("本年水情：%s（自然涨落修正 %+d）" % [weather["name"], weather["shift"]])
-	rows.append("水位不直接判负；过低干旱，过高淹水。")
 	if pressure["side"] == "safe":
 		rows.append("[color=#7ee08a]当前在参考区间内[/color]")
 	else:
@@ -6447,9 +6461,7 @@ func _fill_water_metric_tip(p: Dictionary) -> void:
 		if lo < 0:
 			losses.append("%s %s" % [GameState.METRIC_NAMES[metric], "%+d" % lo if lo == hi else "%+d ~ %+d" % [lo, hi]])
 	rows.append("[color=#ffb060]回合末洪旱额外损失（已含难度）：[/color]" if not losses.is_empty() else "[color=#7ee08a]预计回合末无洪旱额外损失[/color]")
-	for loss in losses: rows.append("  " + loss)
-	rows.append("[color=#8e9aa4]季内偏离平均计算：每 10 点 1 倍，上限 3 倍。[/color]")
-	rows.append("自然恢复可减轻损失，不能抹去本季已有压力。")
+	if not losses.is_empty(): rows.append("；".join(losses))
 	var next_season: String = GameState.SEASONS[(GameState.SEASONS.find(season) + 1) % 4]
 	var next_rule: Dictionary = GameState.water_reference(next_season)
 	if GameState.turn < GameState.TOTAL_TURNS:
@@ -6479,10 +6491,12 @@ func _place_metric_tip(mp: Vector2) -> void:
 		limit_x = minf(limit_x, right_panel.get_global_rect().position.x - 8.0)
 	var pos := Vector2(mp.x - s.x - 16.0, mp.y - s.y * 0.5)
 	pos.x = clampf(pos.x, 8.0, maxf(8.0, limit_x - s.x))
-	# 窗口顶部 4~62px 是「当前事件横幅 + 危机预警日志条」，压住它们会看不清；
-	# 能整个让到下面就让（悬停上面几项时会触发），否则再退回居中。
-	if pos.y < 66.0 and 66.0 + s.y <= vp.y - 8.0:
-		pos.y = 66.0
+	var banner_bottom := event_label.get_global_rect().end.y + 8.0 if event_label else 8.0
+	pos.y = maxf(pos.y, banner_bottom)
+	if staged_board and staged_board.is_visible_in_tree():
+		var board := staged_board.get_global_rect().grow(8.0)
+		if board.intersects(Rect2(pos, s)):
+			pos.y = board.end.y
 	pos.y = clampf(pos.y, 8.0, maxf(8.0, vp.y - s.y - 8.0))
 	metric_tip.position = pos
 
@@ -6550,6 +6564,18 @@ func _refresh_event_banner() -> void:
 		s = "暂无"
 	if event_label.text != s:
 		event_label.text = s
+		_layout_event_banner.call_deferred()
+
+
+func _layout_event_banner() -> void:
+	if not event_label or not staged_board: return
+	var top := 18.0 + event_label.size.y + 12.0
+	_ui_slide_origin[staged_board] = [-562.0, top, -222.0, top + 124.0]
+	if _deck_open or (dispatch_panel and dispatch_panel.visible): return
+	if is_equal_approx(staged_board.offset_top, top): return
+	staged_board.offset_top = top
+	staged_board.offset_bottom = top + 124.0
+	if not _score_animating: _layout_fan.call_deferred()
 
 
 # ==================== 事件 / 结算 / 知识卡 / 报告 ====================
@@ -7634,12 +7660,12 @@ func _update_metric_preview() -> void:
 		var info: Dictionary = card_infos[index]
 		if info.get("stage_zone", "preview") != "board" or info.get("queue_flying", false): continue
 		queue.append({"card_id": info["card_id"], "tier": _info_tier(info), "dispatched": info.get("dispatched", false)})
-	_metric_preview_values = GameState.preview_settlement(queue) if not queue.is_empty() else {}
+	_metric_preview_values = GameState.preview_settlement(queue)
 	for metric in metric_bars:
 		var current := float(GameState.metrics[metric])
 		var predicted := float(_metric_preview_values.get(metric, current))
 		metric_bars[metric]["preview"].configure(current, predicted)
-		metric_bars[metric]["val"].tooltip_text = "结算预览：%d → %d（%+d）\n含本回合到期的遗留效果、协同、自然变化、六值联动与已预警危机；与实际结算共用本回合水位结果。" % [int(current), int(predicted), int(predicted - current)] if not queue.is_empty() else ""
+		metric_bars[metric]["val"].tooltip_text = "结算预览：%d → %d（%+d）\n含本回合到期的遗留效果、协同、自然变化、六值联动与已预警危机；与实际结算共用本回合水位结果。" % [int(current), int(predicted), int(predicted - current)]
 
 
 func _cards_waiting_for_board() -> bool:
@@ -7660,8 +7686,10 @@ func _update_turn_budget_label() -> void:
 	if funds_label == null:
 		return
 	var pending := _committed_funds() if _current_phase == "allocate" else 0
-	var committed := GameState.turn_card_spent + pending
+	var card_cost := GameState.turn_card_spent + pending
+	var committed := card_cost + GameState.turn_other_spent
 	funds_label.text = "%d / %d 万" % [committed, GameState.turn_budget]
+	funds_label.tooltip_text = "本回合已用及待付 / 本回合总预算\n行动与调度：%d 万\n刷新手牌：%d 万\n剩余预算：%d 万" % [card_cost, GameState.turn_other_spent, GameState.turn_budget - committed]
 
 
 ## 拒绝选中：红框提示 + 弹簧受力回摆 + 提示原因

@@ -216,8 +216,9 @@ func direct_board_preview() -> void:
 	game._return_staged_to_hand(info)
 	await wait_for(0.6)
 	game._update_metric_preview()
-	check(game._metric_preview_values.is_empty(), "Undoing the final board card clears the forecast")
-	for metric in game.metric_bars: check(not game.metric_bars[metric].preview.visible, "Empty queue stops preview blinking")
+	check(game._metric_preview_values == GameState.preview_settlement([]), "Empty queue retains the natural settlement forecast")
+	for metric in game.metric_bars:
+		check(game.metric_bars[metric].preview.predicted == game._metric_preview_values[metric], "Empty queue previews each natural metric change")
 	var live: Dictionary = GameState.serialize().duplicate(true)
 	for ids in [["veg_restore", "water_control"], ["dredge", "education"], ["guard_team", "research"]]:
 		var source: Dictionary = live.duplicate(true)
