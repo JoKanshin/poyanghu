@@ -10,7 +10,6 @@ const CardFlight = preload("res://scripts/card_flight.gd")
 
 const VisualTheme = preload("res://scripts/visual_theme.gd")
 const PixelCardArt = preload("res://scripts/pixel_card_art.gd")
-const ChangelogAccess = preload("res://scripts/changelog_access.gd")
 const PixelWetland = preload("res://scripts/pixel_wetland.gd")
 var wetland: Control
 var card_art_preview: CanvasLayer
@@ -379,11 +378,10 @@ var menu_seed_start_btn: Button
 var menu_talent_btn: Button
 var menu_settings_btn: Button
 var menu_credits_btn: Button
-var menu_changelog_btn: Button
 var menu_achievements_btn: Button
 var menu_knowledge_btn: Button
 var menu_quit_btn: Button
-var _info_back_to_settings: bool = false   # 更新日志/制作人员是从设置里点进去的 → 返回时回设置而不是主菜单
+var _info_back_to_settings: bool = false   # 制作人员是从设置里点进去的 → 返回时回设置而不是主菜单
 var menu_seed_label: Label
 var menu_mode_label: Label
 var seed_input: LineEdit
@@ -391,15 +389,6 @@ var menu_hint: Label
 var menu_talent_panel: PanelContainer
 var menu_settings_panel: PanelContainer
 var menu_credits_panel: PanelContainer
-var menu_changelog_panel: PanelContainer
-var _changelog_gate: VBoxContainer
-var _changelog_content: VBoxContainer
-var _changelog_password: LineEdit
-var _changelog_status: Label
-var _changelog_rows: VBoxContainer
-var _changelog_scroll: ScrollContainer
-var _changelog_failed_attempts := 0
-var _changelog_retry_at_ms := 0
 var menu_achievements_panel: PanelContainer
 var menu_clear_save_btn: Button
 var menu_clear_confirm_panel: PanelContainer
@@ -2534,8 +2523,8 @@ func _build_menu() -> void:
 	menu_settings_btn.custom_minimum_size = Vector2(0, 44)
 	menu_utilities.add_child(menu_settings_btn)
 
-	# 「更新日志」「制作人员」已移入设置面板（见下面的 svb），不在这里建 ——
-	# 主菜单列少两个按钮，底部才不会溢出屏幕。
+	# 「制作人员」已移入设置面板（见下面的 svb），不在这里建 ——
+	# 主菜单列少这个按钮，底部才不会溢出屏幕。
 	menu_achievements_btn = _make_button("成就", _show_achievements_panel, 18)
 	menu_achievements_btn.custom_minimum_size = Vector2(0, 44)
 	# 入口图标：像素小金牌。**不挂在 Button.icon 上** —— Button 会把图标宽度算进
@@ -2664,10 +2653,7 @@ func _build_menu() -> void:
 	replay_ending_btn.custom_minimum_size = Vector2(0, 52)
 	svb.add_child(replay_ending_btn)
 
-	# 更新日志 / 制作人员：从主菜单挪进设置里
-	menu_changelog_btn = _make_button("更新日志", _show_changelog_panel, 18)
-	menu_changelog_btn.custom_minimum_size = Vector2(0, 44)
-	svb.add_child(menu_changelog_btn)
+	# 制作人员：从主菜单挪进设置里
 
 	menu_credits_btn = _make_button("制作人员", _show_credits_panel, 18)
 	menu_credits_btn.custom_minimum_size = Vector2(0, 44)
@@ -2757,75 +2743,6 @@ func _build_menu() -> void:
 	c_back.custom_minimum_size = Vector2(0, 40)
 	cvb.add_child(c_back)
 
-	# --- 更新日志面板 ---
-	menu_changelog_panel = PanelContainer.new()
-	menu_changelog_panel.custom_minimum_size = Vector2(580, 0)
-	_panel_style(menu_changelog_panel, Color(0.20, 0.14, 0.09, 0.97))
-	menu_changelog_panel.visible = false
-	center.add_child(menu_changelog_panel)
-
-	var gvb := VBoxContainer.new()
-	gvb.add_theme_constant_override("separation", 10)
-	menu_changelog_panel.add_child(gvb)
-
-	var g_title := _make_label("更新日志", 24, Color(1, 0.9, 0.55))
-	g_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	gvb.add_child(g_title)
-
-	_changelog_gate = VBoxContainer.new()
-	_changelog_gate.add_theme_constant_override("separation", 16)
-	gvb.add_child(_changelog_gate)
-	var lock_title := _make_label("更新日志已上锁", 22, Color(1, 0.9, 0.55))
-	lock_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_changelog_gate.add_child(lock_title)
-	var lock_hint := _make_label("请输入密码，每次查看都需重新解锁", 16, Color(0.72, 0.76, 0.80))
-	lock_hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_changelog_gate.add_child(lock_hint)
-	_changelog_password = LineEdit.new()
-	_changelog_password.secret = true
-	_changelog_password.max_length = 128
-	_changelog_password.placeholder_text = "输入密码"
-	_changelog_password.custom_minimum_size = Vector2(0, 48)
-	_changelog_password.add_theme_font_size_override("font_size", 20)
-	_changelog_password.text_submitted.connect(_submit_changelog_password)
-	_changelog_gate.add_child(_changelog_password)
-	_changelog_status = _make_label("", 16, Color(1, 0.65, 0.55))
-	_changelog_status.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_changelog_gate.add_child(_changelog_status)
-	var unlock_button := _make_button("解锁查看", _submit_changelog_password, 18)
-	unlock_button.custom_minimum_size = Vector2(0, 48)
-	_changelog_gate.add_child(unlock_button)
-	_changelog_content = VBoxContainer.new()
-	_changelog_content.add_theme_constant_override("separation", 10)
-	_changelog_content.visible = false
-	gvb.add_child(_changelog_content)
-
-	var g_sub := _make_label("当前版本 %s" % Changelog.CURRENT, 14, Color(0.72, 0.76, 0.80))
-	g_sub.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_changelog_content.add_child(g_sub)
-
-	var g_sep := HSeparator.new()
-	_changelog_content.add_child(g_sep)
-
-	# 必须用 ScrollContainer：日志只会越写越长，老弹窗系统不滚动会顶穿窗口
-	var g_scroll := ScrollContainer.new()
-	MotionScroll.attach(g_scroll)
-	g_scroll.custom_minimum_size = Vector2(540, 360)
-	g_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	_changelog_content.add_child(g_scroll)
-	_changelog_scroll = g_scroll
-
-	var g_col := VBoxContainer.new()
-	g_col.add_theme_constant_override("separation", 12)
-	g_col.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	g_scroll.add_child(g_col)
-
-	_changelog_rows = g_col
-
-	var g_back := _make_button("返回", _on_changelog_back, 16)
-	g_back.custom_minimum_size = Vector2(0, 40)
-	gvb.add_child(g_back)
-	menu_changelog_panel.visibility_changed.connect(_on_changelog_visibility_changed)
 
 	# --- 成就面板 ---
 	menu_achievements_panel = PanelContainer.new()
@@ -2864,46 +2781,6 @@ func _build_menu() -> void:
 	avb.add_child(a_back)
 
 
-## 把 Changelog.RELEASES 渲染进面板 —— 以后加版本只改 scripts/changelog.gd，这里不用动
-func _build_changelog_rows(col: VBoxContainer) -> void:
-	for rel in Changelog.RELEASES:
-		var v_head := _make_label("v%s · %s" % [str(rel["version"]), str(rel["title"])], 19, Color(1, 0.88, 0.55))
-		v_head.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART   # 标题写长了要能折行，不然会被裁
-		v_head.custom_minimum_size = Vector2(520, 0)
-		col.add_child(v_head)
-		col.add_child(_make_label(str(rel["date"]), 13, Color(0.72, 0.76, 0.80)))
-		for sec in rel["sections"]:
-			col.add_child(_make_label("◆ " + str(sec["head"]), 16, Color(0.62, 0.82, 1.0)))
-			for item in sec["items"]:
-				var body := RichTextLabel.new()
-				# 公告正文里作者会写 **重点**（markdown 习惯）。以前 bbcode 是关的，
-				# 于是星号原样露在页面上（0.0.5 那几条一直是这样）。
-				# 现在开 bbcode + 把 **x** 转成 [b]x[/b]，顺带把其余方括号转义，
-				# 免得正文里出现 [某字] 被当成标签吃掉。
-				body.bbcode_enabled = true
-				body.fit_content = true
-				body.scroll_active = false
-				body.custom_minimum_size = Vector2(520, 0)
-				body.add_theme_font_size_override("normal_font_size", _snap_px(14))
-				body.add_theme_color_override("default_color", Color(0.92, 0.90, 0.86))
-				body.text = "· " + _md_emphasis(str(item))
-				col.add_child(body)
-
-
-## 把公告里的 **重点** 转成 BBCode 强调。
-## ⚠ 用颜色而不是 [b]：这套界面是点阵字，[b] 只会把笔画糊在一起（见 _setup_pixel_font）。
-## ⚠ 开了 bbcode 之后，正文里其余的方括号必须转义成 [lb]，否则会被当成标签吃掉 ——
-##   例如「[已解决]」这种写法会静默消失。所以先转义、再插颜色标签。
-func _md_emphasis(s: String) -> String:
-	var parts := s.split("**")
-	var out := ""
-	for i in parts.size():
-		var chunk: String = str(parts[i]).replace("[", "[lb]")
-		if i % 2 == 1:
-			out += "[color=#ffd479]" + chunk + "[/color]"
-		else:
-			out += chunk
-	return out
 
 
 # ==================== 成就 ====================
@@ -2913,7 +2790,6 @@ func _show_achievements_panel() -> void:
 	menu_talent_panel.visible = false
 	menu_settings_panel.visible = false
 	menu_credits_panel.visible = false
-	menu_changelog_panel.visible = false
 	_build_achievement_rows()   # 每次打开重建：解锁状态可能刚变过，不能只在建菜单时铺一次
 	menu_achievements_panel.visible = true
 
@@ -3285,7 +3161,6 @@ func _show_menu() -> void:
 	menu_talent_panel.visible = false
 	menu_settings_panel.visible = false
 	menu_credits_panel.visible = false
-	menu_changelog_panel.visible = false
 	_close_knowledge_viewer()   # 回到开始页时图鉴也要收起来
 	_set_hud_visible(false)   # 开始页是干净的全景：HUD 让位给标题与选项
 	_menu_state(0)
@@ -3303,7 +3178,7 @@ func _set_hud_visible(v: bool) -> void:
 
 
 ## 开始页右上角照片条：只在「开始页 + 左下选项列可见」时出现。
-## 跟着 menu_col 走的原因：设置/成就/知识卡/制作人员/更新日志/天赋树每个面板打开时
+## 跟着 menu_col 走的原因：设置/成就/知识卡/制作人员/天赋树每个面板打开时
 ## 都会先把 menu_col 收起来，返回时再放回来 —— 一处判据自动覆盖全部分支，
 ## 也不用在这些函数里各加一行（漏一处就是「照片条压在新面板上」）。
 ## 放大层是独立的全屏模态，收起时必须一起关，否则它会留在屏幕上。
@@ -3325,7 +3200,7 @@ func _menu_state(state: int) -> void:
 	if menu_talent_btn != null:
 		menu_talent_btn.visible = main_level
 	menu_settings_btn.visible = main_level
-	# 更新日志 / 制作人员已移入设置面板，显隐由面板自己管，不在这里控制
+	# 制作人员已移入设置面板，显隐由面板自己管，不在这里控制
 	menu_achievements_btn.visible = main_level
 	menu_knowledge_btn.visible = main_level
 	menu_utilities.visible = main_level
@@ -3394,7 +3269,6 @@ func _show_talent_panel() -> void:
 	menu_col.visible = false
 	menu_settings_panel.visible = false
 	menu_credits_panel.visible = false
-	menu_changelog_panel.visible = false
 	menu_talent_panel.visible = true
 	_refresh_talent_panel()
 
@@ -3409,7 +3283,6 @@ func _show_settings_panel() -> void:
 	menu_col.visible = false
 	menu_talent_panel.visible = false
 	menu_credits_panel.visible = false
-	menu_changelog_panel.visible = false
 	menu_achievements_panel.visible = false
 	# 每次重进都收起确认框、清掉上次的「已清空」提示，免得误导
 	menu_clear_confirm_panel.visible = false
@@ -3461,7 +3334,6 @@ func _show_credits_panel() -> void:
 	menu_col.visible = false
 	menu_talent_panel.visible = false
 	menu_settings_panel.visible = false
-	menu_changelog_panel.visible = false
 	menu_achievements_panel.visible = false
 	menu_credits_panel.visible = true
 
@@ -3476,79 +3348,6 @@ func _on_credits_back() -> void:
 	_menu_state(0)
 
 
-func _show_changelog_panel() -> void:
-	# 入口有两个：主菜单和设置面板。记下是从哪来的，返回时才知道该回哪儿。
-	_info_back_to_settings = menu_settings_panel.visible
-	menu_col.visible = false
-	menu_talent_panel.visible = false
-	menu_settings_panel.visible = false
-	menu_credits_panel.visible = false
-	menu_achievements_panel.visible = false
-	_reset_changelog_lock()
-	menu_changelog_panel.visible = true
-	_focus_changelog_password.call_deferred()
-
-
-func _reset_changelog_lock() -> void:
-	_changelog_password.clear()
-	_changelog_status.text = ""
-	_changelog_content.visible = false
-	_changelog_gate.visible = true
-	# 解锁不跨打开保留，关闭后连日志节点也清掉。
-	for child in _changelog_rows.get_children():
-		_changelog_rows.remove_child(child)
-		child.queue_free()
-
-
-func _on_changelog_visibility_changed() -> void:
-	if not menu_changelog_panel.is_visible_in_tree():
-		_reset_changelog_lock()
-
-
-func _focus_changelog_password() -> void:
-	if menu_changelog_panel.is_visible_in_tree() and _changelog_gate.visible:
-		_changelog_password.grab_focus()
-
-
-func _submit_changelog_password(_submitted: String = "") -> void:
-	if not menu_changelog_panel.is_visible_in_tree() or not _changelog_gate.visible:
-		return
-	var now := Time.get_ticks_msec()
-	if now < _changelog_retry_at_ms:
-		_changelog_password.clear()
-		_changelog_status.text = "尝试过于频繁，请稍后再试"
-		_focus_changelog_password()
-		return
-	if _changelog_password.text.is_empty():
-		_changelog_status.text = "请输入密码"
-		_focus_changelog_password()
-		return
-	var allowed := ChangelogAccess.verify(_changelog_password.text)
-	_changelog_password.clear()
-	if not allowed:
-		_changelog_failed_attempts += 1
-		if _changelog_failed_attempts >= 3:
-			_changelog_retry_at_ms = now + mini(30000, 5000 * (1 << mini(3, _changelog_failed_attempts - 3)))
-		_changelog_status.text = "密码不正确，请重试" if now >= _changelog_retry_at_ms else "密码不正确，请稍后再试"
-		_focus_changelog_password()
-		return
-	_changelog_failed_attempts = 0
-	_changelog_retry_at_ms = 0
-	_changelog_status.text = ""
-	_build_changelog_rows(_changelog_rows)
-	_changelog_scroll.set_deferred("scroll_vertical", 0)
-	_changelog_gate.visible = false
-	_changelog_content.visible = true
-
-
-func _on_changelog_back() -> void:
-	menu_changelog_panel.visible = false
-	if _info_back_to_settings:
-		_info_back_to_settings = false
-		menu_settings_panel.visible = true
-		return
-	menu_col.visible = true
-	_menu_state(0)
 
 
 ## 设置里重播开场动画：隐藏菜单后重新播放（播完自动回主菜单）
@@ -3883,12 +3682,6 @@ func _unhandled_input(event: InputEvent) -> void:
 
 ## Capture release/motion globally so a held card keeps tracking the pointer outside its panel.
 func _input(event: InputEvent) -> void:
-	# 在 LineEdit 消费 ESC 之前处理返回，输入框获得焦点时也能关闭并重新上锁。
-	if event is InputEventKey and event.pressed and not event.echo and event.keycode == KEY_ESCAPE \
-			and menu_changelog_panel != null and menu_changelog_panel.is_visible_in_tree():
-		_on_changelog_back()
-		get_viewport().set_input_as_handled()
-		return
 	if _card_press_panel == null:
 		return
 	if event is InputEventMouseMotion:
@@ -9598,7 +9391,7 @@ func _setup_pixel_font() -> void:
 	# 不写这三行的话，RichTextLabel 会掉回引擎默认主题的 bold：那是一份
 	# FontVariation(base=引擎自带无衬线, variation_embolden=1.2)。叠加在这套点阵/像素字体上，
 	# 1px 的笔画被横向撑胖、字腔糊死 —— 玩测反馈原话「粗体字导致看不清文本」。
-	# 现在 [b] 与正文同版面（不加粗），要强调的地方改用颜色（见 _md_emphasis）。
+	# 现在 [b] 与正文同版面（不加粗），要强调的地方改用颜色。
 	for rtl_font in ["bold_font", "italics_font", "bold_italics_font"]:
 		theme.set_font(rtl_font, "RichTextLabel", ui_font)
 	theme.set_stylebox("panel", "TooltipPanel", UiSkin.panel())

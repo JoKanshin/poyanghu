@@ -24,11 +24,11 @@ BB_TAG = re.compile(r"\[/?(?:b|i|u|s|center|left|right|fill|color|font|font_size
 CONTEXT = re.compile(r"^(?:(?:static )?func|const|var)\s+([A-Za-z_][A-Za-z_0-9]*)", re.M)
 DISPLAY_CONTEXT = re.compile(r"(?:\.text\s*=|\.tooltip_text\s*=|\.placeholder_text\s*=|(?:_make_label|text_label|_make_button|_make_btn|_btn|button|draw_string|_label)\s*\()")
 ASCII_VISIBLE = {"QQQi_ZZZhe", "Kanshin", "C3L1K1N4", "Oliveira", "P O Y A N G   /   W E T L A N D S"}
-NON_DISPLAY_CONTEXTS = {"_md_emphasis", "_grid_image", "_refresh_run_talents", "_eval_cond", "_eval_condition_simple", "_parse_cond_simple", "_eval_condition"}
+NON_DISPLAY_CONTEXTS = {"_grid_image", "_refresh_run_talents", "_eval_cond", "_eval_condition_simple", "_parse_cond_simple", "_eval_condition"}
 PRIORITY = {"界面与操作提示": 0, "行动卡": 1, "知识卡": 2, "物种与植物": 3,
             "危机与季节事件": 4, "结算、日志与规则": 5, "天赋与研修": 6,
-            "成就": 7, "更新日志": 8, "通用名称与关联引用": 9, "图片内文字": 10,
-            "开发诊断": 11}
+            "成就": 7, "通用名称与关联引用": 8, "图片内文字": 9,
+            "开发诊断": 10}
 
 
 def read_source(path):
@@ -42,11 +42,17 @@ def digest(data):
 
 
 def current_version():
-    """游戏内当前版本号（scripts/changelog.gd 的 CURRENT），导出文件名与说明里都用它。"""
+    """当前版本号（export_presets.cfg 的 application/product_version 前三段），导出文件名与说明里都用它。
+
+    2026-10-18 起游戏内更新日志入口已移除，版本号不再从 scripts/changelog.gd 取。
+    """
     try:
-        match = re.search(r'const CURRENT\s*:=\s*"([^"]+)"',
-                          (ROOT / "scripts/changelog.gd").read_text(encoding="utf-8"))
-        return match.group(1) if match else "?"
+        text = (ROOT / "export_presets.cfg").read_text(encoding="utf-8")
+        match = re.search(r'application/product_version\s*=\s*"([^"]+)"', text)
+        if not match:
+            return "?"
+        parts = match.group(1).split(".")
+        return ".".join(parts[:3]) if len(parts) >= 3 else match.group(1)
     except OSError:
         return "?"
 
@@ -119,7 +125,6 @@ def category(path, context, line):
     name = Path(path).stem
     if "push_warning(" in line or "push_error(" in line or "printerr(" in line:
         return "开发诊断"
-    if name == "changelog": return "更新日志"
     if name == "achievements": return "成就"
     if "talent" in name: return "天赋与研修"
     if name == "seasonal_events" or context == "NATURAL_CRISES": return "危机与季节事件"
@@ -186,17 +191,16 @@ def extract(output):
                     continue
                 if path.suffix == ".tscn" and not re.match(r"\s*(?:text|tooltip_text|placeholder_text)\s*=", line):
                     continue
-                # UI-only ASCII/symbol fragments, dynamic format templates, credits,
-                # and visible release version/date values. Never export engine keys.
+                # UI-only ASCII/symbol fragments, dynamic format templates, credits.
+                # Never export engine keys.
                 explicit_ascii = value in ASCII_VISIBLE
-                visible_version = path.stem == "changelog" and (context == "CURRENT" or re.search(r'"(?:version|date)"\s*:\s*$', source[max(0, token["start"]-25):token["start"]]))
                 first_argument = re.search(r"(?:_make_label|text_label|_make_button|_make_btn|_btn|button|_label)\s*\(\s*$", source[max(line_start, token["start"]-35):token["start"]])
                 assignment = re.search(r"\.(?:text|tooltip_text|placeholder_text)\s*=\s*$", source[max(line_start, token["start"]-40):token["start"]])
                 format_fragment = bool(FORMAT.search(value)) and (display or path.stem in ("game_state", "talents"))
                 symbol_fragment = bool(value.strip()) and not re.search(r"[A-Za-z0-9_]", value) and path.stem in ("main", "talent_tree_panel", "game_state", "pixel_card_art") and len(value) <= 10
                 source_url = context == "KNOWLEDGE_CARDS" and value.startswith("https://")
                 if value.startswith(("http://", "https://")) and not source_url: continue
-                if not (explicit_ascii or visible_version or first_argument or assignment or format_fragment or symbol_fragment or source_url): continue
+                if not (explicit_ascii or first_argument or assignment or format_fragment or symbol_fragment or source_url): continue
             if not value.strip(): continue
             if value.startswith(("res://", "user://", "Godot/app_userdata/")):
                 skipped.append({"path": rel, "line": line_no, "text": value, "reason": "资源/存档路径，不是显示文案"}); continue
@@ -231,7 +235,6 @@ def extract(output):
         if any(l.get("context") in ("KNOWLEDGE_FACES", "ORDER", "CONFLICT_FEED_TAGS") or '"tags"' in l.get("before", "") or '"needs"' in l.get("before", "") for l in entry["locations"]): notes.append("名称参与分类/对策匹配，回填时同步检查关联")
         if entry["category"] == "开发诊断": notes.append("开发诊断文字，通常不向玩家显示")
         if entry["text"].startswith(("https://", "http://")): notes.append("知识卡引用链接，修改时保留有效地址")
-        if re.fullmatch(r"[\d.\-/]+", entry["text"]) and entry["category"] == "更新日志": notes.append("版本号/日期，修改文字不会自动升级版本")
         entry["notes"] = "；".join(notes)
     manifest = {"schema": 1, "exported_at": datetime.now().isoformat(timespec="seconds"),
                 "project_root": str(ROOT), "game_version": current_version(), "files": files,

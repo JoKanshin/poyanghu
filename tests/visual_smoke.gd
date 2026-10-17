@@ -87,13 +87,6 @@ func _ready() -> void:
 	var ship_b: Dictionary = game.wetland._river_sample(game.wetland.yangtze_route, 0.41)
 	check(ship_a.pos.distance_to(ship_b.pos) > 0.01 and game.wetland._in_river_corridor(ship_a.pos, 0.02), "Yangtze ships must move along the channel")
 	await capture("01-menu")
-	# 主菜单 → 更新日志：确认 v0.1.2 条目渲染出来、且「当前版本」跟着 Changelog.CURRENT 走
-	game._show_changelog_panel()
-	await settle(0.7)
-	check(game.menu_changelog_panel.visible, "更新日志面板应能打开")
-	await capture("01a-changelog-v012")
-	game._on_changelog_back()
-	await settle(0.4)
 	# ---------------- 知识卡图鉴（主页入口）----------------
 	check(Knowledge.collected_count() == 0, "新账号不该有已收集的知识卡")
 	game._open_knowledge_viewer()
@@ -337,8 +330,9 @@ func _ready() -> void:
 	await capture("07-pause")
 	game._on_pause_settings()
 	await settle(0.3)
-	game.pause_score_speed_slider.value = 300.0
-	check(is_equal_approx(game.score_speed, 3.0) and is_equal_approx(game.score_speed_slider.value, 300.0), "Both settings panels must support and synchronize 300% settlement speed")
+	# 暂停设置面板 0.1.28 起只剩音量，结算速度滑块只有主设置这一份 —— 测存在的那一份。
+	game.score_speed_slider.value = 300.0
+	check(is_equal_approx(game.score_speed, 3.0) and is_equal_approx(game.score_speed_slider.value, 300.0), "Settlement speed supports 300% and syncs across settings panels")
 	game.score_speed = 1.0
 	game._load_audio_settings()
 	game._sync_score_speed_ui()

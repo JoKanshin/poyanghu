@@ -34,8 +34,6 @@ USAGE = [
 
 # context（文本挂着的常量 / 函数）→ 玩家能在哪看到
 CONTEXT_PLACES = {
-    "RELEASES": "主菜单 › 更新日志面板",
-    "CURRENT": "主菜单 › 更新日志面板（当前版本号）",
     "KNOWLEDGE_CARDS": "知识卡图鉴与知识卡详情",
     "KNOWLEDGE_FACES": "知识卡卡面",
     "KNOWLEDGE_CATEGORY_COLORS": "知识卡图鉴（类别色）",
@@ -98,7 +96,6 @@ PREFIX_PLACES = [
 
 # 文件 → 界面（context 兜不住时用）
 FILE_PLACES = {
-    "changelog.gd": "主菜单 › 更新日志面板",
     "seasonal_events.gd": "危机预警与季节事件弹窗",
     "achievements.gd": "成就面板",
     "knowledge.gd": "知识卡图鉴与收藏（存档文案）",

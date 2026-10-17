@@ -1,7 +1,7 @@
 extends Node
 ## 成就系统 —— autoload 单例 Achievements。
 ##
-## 与 Changelog 的区别：成就**有状态**（哪些已解锁）且要**跨局持久化**，
+## 与静态文本表的区别：成就**有状态**（哪些已解锁）且要**跨局持久化**，
 ## 所以是 autoload 而不是纯常量脚本。
 ##
 ## 存档：user://achievements.json —— 这是「账号级」的，独立于
