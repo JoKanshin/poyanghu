@@ -611,7 +611,7 @@ var _plant_pos_seed: int = -1        # 已生成位置对应的种子，换局�
 # 开场像素 PPT（Undertale 风：首次游玩讲背景）
 var intro_layer: CanvasLayer = null
 var intro_root: Control = null
-## 结局短片：美术交付的 mp4 原片（4K60、36 秒）转成了 Godot 唯一支持的 Ogg Theora。
+## 结局短片：美术交付的 mp4 原片（1080p30、2 分钟）转成了 Godot 唯一支持的 Ogg Theora。
 ## 口径：四个难度各自第一次走完一局、看完结算报告回主菜单时自动播一次；设置里随时能重看；
 ## 只要在播片，游戏 BGM 全程关掉，播完从头重放。
 const ENDING_VIDEO := "res://assets/video/ending.ogv"

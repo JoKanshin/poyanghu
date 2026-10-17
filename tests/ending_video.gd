@@ -69,7 +69,7 @@ func _ready() -> void:
 		check(game._try_play_ending(), "难度 %d 第一次结束会自动播片" % d)
 		check(game._has_seen_ending(), "播过之后难度 %d 记为已看" % d)
 		check(not game._try_play_ending(), "难度 %d 第二次结束不再自动播" % d)
-		game._finish_ending()          # 立刻收尾，别真等 36 秒
+		game._finish_ending()          # 立刻收尾，别真等 2 分钟
 		await wait(0.25)
 	check(DirAccess.remove_absolute(abs_seen) == OK or not FileAccess.file_exists(abs_seen),
 		"收尾时清理测试用的标记文件")
