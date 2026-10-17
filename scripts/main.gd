@@ -415,6 +415,9 @@ var _bgm_recovery_tween: Tween
 var _bgm_risk_key: Array = []
 var _bgm_risk: bool = false
 var bgm_volume: float = 0.8
+## 0% 必须是真的没声音。linear_to_db(0) 是 -inf，从前用 maxf(v, 0.001) 兜底，
+## 结果 0% 时播放器还停在 -60 dB —— 安静段落里 BGM 依然听得见（0.2.9 的 bug）。
+const SILENT_VOLUME_DB := -80.0
 ## 结算动画速度倍率（1.0 = 正常）。玩家可在设置里调 —— 手感因人而异，
 ## 与其每次改代码重导，不如给个滑块。与音量一起存在 user://settings.json。
 var score_speed: float = 1.0
@@ -3599,7 +3602,7 @@ func _build_ending_layer() -> void:
 	ending_player = VideoStreamPlayer.new()
 	ending_player.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	ending_player.expand = true                       # 铺满窗口，保持比例
-	ending_player.volume_db = linear_to_db(maxf(bgm_volume, 0.001))
+	ending_player.volume_db = _volume_db(bgm_volume)
 	ending_player.finished.connect(_finish_ending)
 	ending_layer.add_child(ending_player)
 	ending_hint = _make_label("点击或按 Esc 跳过", 14, Color(1, 1, 1, 0.62))
@@ -3619,7 +3622,7 @@ func _play_ending() -> void:
 	_ending_playing = true
 	ending_layer.visible = true
 	# 每次都按当前音量设定刷新一遍 —— 玩家可能刚在设置里拖过滑块
-	ending_player.volume_db = linear_to_db(maxf(bgm_volume, 0.001))
+	ending_player.volume_db = _volume_db(bgm_volume)
 	ending_player.stream = load(ENDING_VIDEO)
 	ending_player.play()
 
@@ -3684,7 +3687,8 @@ func _apply_bgm(recover: bool = false) -> void:
 	bgm_player.stop()
 	bgm_player.stream = _bgm_streams[bgm_index]
 	bgm_player.pitch_scale = BGM_RECOVERY_SPEED if recover else 1.0
-	bgm_player.volume_db = linear_to_db(maxf(bgm_volume, 0.001))
+	bgm_player.volume_db = _volume_db(bgm_volume)
+	_sync_master_mute()
 	bgm_player.play()
 	if recover:
 		_bgm_recovery_tween = create_tween()
@@ -3759,15 +3763,34 @@ func play_sfx(sfx_name: String, pitch: float = 1.0, vol_db: float = 0.0) -> void
 	p.stream = _sfx_streams[sfx_name]
 	p.pitch_scale = pitch
 	# 音量复用 BGM 那一个滑块：拉到 0 就该全静音，不给音效单独开设置项
-	p.volume_db = linear_to_db(maxf(bgm_volume, 0.001)) + vol_db
+	p.volume_db = _volume_db(bgm_volume, vol_db)
 	p.play()
+
+
+## 线性音量（0-1）换成播放器用的 dB。0 的时候直接落到最小值：
+## linear_to_db(0) 是 -inf，以前拿 maxf(v, 0.001) 兜底，0% 实际上还留着 -60 dB。
+func _volume_db(linear: float, offset_db: float = 0.0) -> float:
+	if linear <= 0.0001:
+		return SILENT_VOLUME_DB
+	return linear_to_db(linear) + offset_db
+
+
+## 0% 的时候给主总线一个硬静音。播放器压到 -80 dB 已经基本听不见，
+## 但正在播的音效、播片这些通道各自带着偏移量，总线 mute 才是「真的一点声音都没有」。
+func _sync_master_mute() -> void:
+	AudioServer.set_bus_mute(0, bgm_volume <= 0.0001)
 
 
 ## 音量滑动条回调
 func _on_volume_changed(value: float) -> void:
 	bgm_volume = value / 100.0
 	bgm_volume = clampf(bgm_volume, 0.0, 1.0)
-	bgm_player.volume_db = linear_to_db(maxf(bgm_volume, 0.001))
+	bgm_player.volume_db = _volume_db(bgm_volume)
+	if _deal_sfx_player != null:
+		_deal_sfx_player.volume_db = _volume_db(bgm_volume, DEAL_SFX_DB)
+	if ending_player != null:
+		ending_player.volume_db = _volume_db(bgm_volume)
+	_sync_master_mute()
 	_save_audio_settings()
 	_sync_audio_ui()
 
@@ -7733,7 +7756,7 @@ func _play_deal_sfx(card_count: int, full_hand_duration: float) -> void:
 	var audio_duration := full_hand_duration * DEAL_SFX_DURATION_RATIO * card_ratio
 	_deal_sfx_player.stream = _sfx_streams["deal"]
 	_deal_sfx_player.pitch_scale = _deal_sfx_player.stream.get_length() / audio_duration
-	_deal_sfx_player.volume_db = linear_to_db(maxf(bgm_volume, 0.001)) + DEAL_SFX_DB
+	_deal_sfx_player.volume_db = _volume_db(bgm_volume, DEAL_SFX_DB)
 	_deal_sfx_player.play()
 	var tw := Motion.tween(self, "linear", "deal_audio")
 	tw.tween_interval(audio_duration)
