@@ -134,7 +134,7 @@ func _ready() -> void:
 func _process(delta: float) -> void:
 	if not is_visible_in_tree(): return
 	_step_fade(delta)
-	_hover = get_global_rect().has_point(get_global_mouse_position())
+	_hover = not preload("res://scripts/mobile_support.gd").enabled() and get_global_rect().has_point(get_global_mouse_position())
 	var now := Time.get_ticks_msec()
 	_tick_auto(now, _hover)
 
@@ -528,7 +528,7 @@ func _build_zoom() -> void:
 	link.add_theme_color_override("font_pressed_color", VisualTheme.PAPER)
 	link_row.add_child(link)
 	_zoom_link = link
-	var hint := _label("◀ ▶ 或方向键切换 · 点击任意处或按 ESC 关闭", 12, Color(VisualTheme.MINT, 0.8))
+	var hint := _label("轻点箭头切换 · 轻点空白处关闭" if preload("res://scripts/mobile_support.gd").enabled() else "◀ ▶ 或方向键切换 · 点击任意处或按 ESC 关闭", 12, Color(VisualTheme.MINT, 0.8))
 	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_full_width(hint, ZOOM_HINT_Y, 20.0)
 	overlay.add_child(hint)

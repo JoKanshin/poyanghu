@@ -16,6 +16,7 @@ config/use_custom_user_dir.windows=true
 config/custom_user_dir_name.windows="Godot/app_userdata/保卫鄱阳湖"
 run/main_scene="res://scenes/main.tscn"
 run/max_fps=120
+run/max_fps.android=60
 config/features=PackedStringArray("4.7", "GL Compatibility")
 config/icon="res://icon.png"
 
@@ -35,8 +36,15 @@ window/size/window_width_override=1280
 window/size/window_height_override=720
 window/stretch/mode="canvas_items"
 window/stretch/aspect="expand"
+window/stretch/aspect.android="keep"
 window/size/min_width=960
 window/size/min_height=540
+window/handheld/orientation=4
+window/handheld/orientation.android=4
+window/size/viewport_width.android=1280
+window/size/viewport_height.android=720
+window/vsync/vsync_mode.android=1
+window/energy_saving/keep_screen_on=true
 
 [dotnet]
 
@@ -45,6 +53,17 @@ project/assembly_name="鄱阳归翎-生态修复手记"
 [editor_plugins]
 
 enabled=PackedStringArray("res://addons/godot_ai/plugin.cfg")
+
+[input_devices]
+
+pointing/emulate_mouse_from_touch=true
+pointing/emulate_touch_from_mouse=false
+sensors/enable_gravity=true
+sensors/enable_gyroscope=true
+
+[gui]
+
+timers/tooltip_delay_sec.android=9999.0
 
 [physics]
 

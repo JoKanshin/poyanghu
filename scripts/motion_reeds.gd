@@ -13,6 +13,7 @@ func _ready() -> void:
 	set_process(false)
 
 func _input(event: InputEvent) -> void:
+	if preload("res://scripts/mobile_support.gd").enabled(): return
 	if not event is InputEventMouseMotion or not is_visible_in_tree() or Physics.reduced(self) or Physics.paused(self): return
 	var local: Vector2 = get_global_transform().affine_inverse() * event.position
 	if not Rect2(Vector2(-25, -20), size + Vector2(50, 40)).has_point(local): return

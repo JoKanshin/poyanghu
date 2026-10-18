@@ -1,5 +1,8 @@
 extends Node
 
+const MobileSupport = preload("res://scripts/mobile_support.gd")
+var mobile: Node
+
 const Motion = preload("res://scripts/motion.gd")
 const MotionWeb = preload("res://scripts/motion_web.gd")
 const MotionSpring = preload("res://scripts/motion_spring.gd")
@@ -610,6 +613,7 @@ const ENDING_VIDEO := "res://assets/video/ending.ogv"
 var ending_layer: CanvasLayer = null
 var ending_player: VideoStreamPlayer = null
 var ending_hint: Label = null
+var ending_skip_button: Button = null
 var _ending_playing: bool = false
 var intro_col: VBoxContainer = null
 var intro_image: TextureRect = null
@@ -637,6 +641,10 @@ func _ready() -> void:
 	_setup_camera()
 	_build_wetland()
 	_build_ui()
+	if MobileSupport.enabled():
+		mobile = preload("res://scripts/mobile_port.gd").new()
+		add_child(mobile)
+		mobile.configure(self)
 	GameState.metrics_changed.connect(_update_hud)
 	GameState.metrics_changed.connect(_update_3d)
 	GameState.funds_changed.connect(_update_hud)
@@ -3038,7 +3046,7 @@ func _build_intro() -> void:
 	intro_body.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.7))
 	intro_body.add_theme_constant_override("outline_size", 3)
 	col.add_child(intro_body)
-	intro_hint = _make_label("回车 继续　·　ESC 跳过", 13, Color(0.55, 0.6, 0.65))
+	intro_hint = _make_label("轻点继续 · 右上角可跳过" if MobileSupport.enabled() else "回车 继续　·　ESC 跳过", 13, Color(0.55, 0.6, 0.65))
 	intro_hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	col.add_child(intro_hint)
 
@@ -3220,7 +3228,7 @@ func _menu_state(state: int) -> void:
 
 	menu_back_btn.visible = state != 0
 	menu_hint.text = ""
-	if seed_level:
+	if seed_level and not MobileSupport.enabled():
 		seed_input.grab_focus()
 
 
@@ -3380,7 +3388,10 @@ func _mark_ending_seen() -> void:
 
 ## 该难度第一次结束：标记成已看、开始播片，返回 true 让主菜单延后到播完。
 ## 看过、或者素材缺失（比如导出时漏了视频）都返回 false，直接回主菜单，不卡流程。
-func _try_play_ending() -> bool:
+func _try_play_ending(report: Dictionary) -> bool:
+	# Only an explicit victory report can unlock automatic ending playback.
+	if not bool(report.get("victory", false)) or bool(report.get("is_failure", false)):
+		return false
 	if _has_seen_ending() or not ResourceLoader.exists(ENDING_VIDEO):
 		return false
 	_mark_ending_seen()
@@ -3404,7 +3415,19 @@ func _build_ending_layer() -> void:
 	ending_player.volume_db = _volume_db(bgm_volume)
 	ending_player.finished.connect(_finish_ending)
 	ending_layer.add_child(ending_player)
-	ending_hint = _make_label("点击或按 Esc 跳过", 14, Color(1, 1, 1, 0.62))
+	# Skip belongs to the video layer so it stays above the fullscreen player.
+	if MobileSupport.enabled():
+		ending_player.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		backdrop.mouse_filter = Control.MOUSE_FILTER_STOP
+		ending_skip_button = _make_button("跳过", _finish_ending, 20)
+		ending_skip_button.focus_mode = Control.FOCUS_NONE
+		ending_layer.add_child(ending_skip_button)
+		ending_skip_button.set_anchors_and_offsets_preset(Control.PRESET_TOP_RIGHT)
+		ending_skip_button.offset_left = -132
+		ending_skip_button.offset_right = -20
+		ending_skip_button.offset_top = 16
+		ending_skip_button.offset_bottom = 72
+	ending_hint = _make_label("右上角可跳过" if MobileSupport.enabled() else "点击或按 Esc 跳过", 14, Color(1, 1, 1, 0.62))
 	ending_hint.set_anchors_and_offsets_preset(Control.PRESET_CENTER_BOTTOM)
 	ending_hint.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	ending_layer.add_child(ending_hint)
@@ -3660,6 +3683,11 @@ func _hide_menu() -> void:
 ## 游戏进行中按下 ESC：弹出暂停菜单（继续游戏 / 设置 / 退出至主菜单）
 func _unhandled_input(event: InputEvent) -> void:
 	if _ending_playing:
+		# Mobile taps (including emulated mouse events) never dismiss the video.
+		# The dedicated GUI button and natural playback completion handle exit.
+		if MobileSupport.enabled():
+			get_viewport().set_input_as_handled()
+			return
 		# 结局播片：点击或 ESC 跳过（跳过的收尾和播完一样）
 		if (event is InputEventKey and event.pressed and not event.echo) \
 				or (event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT):
@@ -3686,7 +3714,8 @@ func _input(event: InputEvent) -> void:
 		return
 	if event is InputEventMouseMotion:
 		var mouse: Vector2 = event.position
-		if not _card_dragging and mouse.distance_to(_card_press_origin) >= CARD_DRAG_THRESHOLD:
+		if not _card_dragging and mouse.distance_to(_card_press_origin) >= CARD_DRAG_THRESHOLD \
+				and (mobile == null or _card_press_elapsed >= mobile.HOLD_SECONDS):
 			_start_card_drag()
 		if _card_dragging:
 			_update_card_drag_pose(mouse, event.relative)
@@ -3715,13 +3744,13 @@ func _process_card_drag(delta: float) -> void:
 		_card_drag_lean *= exp(-10.0 * delta)
 		_place_dragged_card()
 		return
-	if not Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT):
+	if not (mobile.pointer_down if mobile else Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT)):
 		return
 	_card_press_elapsed += delta
-	if _card_press_elapsed >= CARD_DRAG_HOLD_SEC:
+	if _card_press_elapsed >= (mobile.HOLD_SECONDS if mobile else CARD_DRAG_HOLD_SEC):
 		_start_card_drag()
 		if _card_dragging:
-			_update_card_drag_pose(get_viewport().get_mouse_position(), Vector2.ZERO)
+			_update_card_drag_pose(mobile.pointer_position if mobile else get_viewport().get_mouse_position(), Vector2.ZERO)
 
 
 func _start_card_drag() -> void:
@@ -3739,6 +3768,7 @@ func _start_card_drag() -> void:
 	if _card_drag_index < 0:
 		return
 	_card_dragging = true
+	if mobile: mobile.show_card_hint(_card_press_panel)
 	info["dragging"] = true
 	info["hovered"] = false
 	_card_drag_mouse = _card_press_origin if _card_press_origin != Vector2.ZERO else get_viewport().get_mouse_position()
@@ -5132,6 +5162,8 @@ func _card_gyro_center(card: Control) -> Vector2:
 
 
 func _card_gyro_target(card: Control, mouse: Vector2, active: bool, relative_to_face: bool = false) -> Vector2:
+	if mobile:
+		return mobile.tilt
 	if not active:
 		return Vector2.ZERO
 	if relative_to_face:
@@ -5591,7 +5623,7 @@ func _process_detail_gyro(delta: float, mouse_override: Vector2 = Vector2.INF) -
 
 
 func _on_viewer_card_click(event: InputEvent, view: Control, card: Dictionary) -> void:
-	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
+	if MobileSupport.tap(event) and (mobile == null or mobile.allow_tap()):
 		_poke_card(view)
 		_show_card_detail(view, card)
 
@@ -5928,7 +5960,7 @@ func _close_knowledge_viewer() -> void:
 
 
 func _on_knowledge_card_click(event: InputEvent, view: Control, kid: String) -> void:
-	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
+	if MobileSupport.tap(event) and (mobile == null or mobile.allow_tap()):
 		_poke_card(view)
 		_show_knowledge_detail(view, kid)
 
@@ -6477,6 +6509,9 @@ func _ignore_mouse(n: Node) -> void:
 ## 每帧判断鼠标是否落在某个指标行上：是 → 刷新内容并跟随指针；否 → 收起
 ## mouse_override 仅供自动化测试顶替真实鼠标，正常游戏不传（默认取真实鼠标位置）
 func _update_metric_tip(mouse_override: Vector2 = Vector2.INF) -> void:
+	if mobile:
+		mobile.update_metric_tip()
+		return
 	if metric_tip == null:
 		return
 	if not _tip_allowed():
@@ -7194,7 +7229,7 @@ func _fill_dispatch_grid() -> void:
 
 ## 调度面板点击后立即把牌放到桌面队列末尾；它与普通牌一样等「执行行动」再生效。
 func _on_dispatch_card_click(event: InputEvent, _view: Control, card: Dictionary) -> void:
-	if not (event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT):
+	if not MobileSupport.tap(event) or (mobile != null and not mobile.allow_tap()):
 		return
 	if GameState.dispatch_card(str(card["id"])):
 		_close_dispatch_panel()
@@ -7971,6 +8006,9 @@ func _flash_hint(text: String) -> void:
 ## mouse_override 仅供自动化测试顶替真实鼠标（与 _update_metric_tip 同一个套路），
 ## 正常游戏不传 —— 但手牌陀螺仪要拍证据，就必须能凭空指定一个悬停点。
 func _update_card_hover(delta: float, mouse_override: Vector2 = Vector2.INF) -> void:
+	if mobile:
+		mobile.update_hand(delta)
+		return
 	if sandpan_view and (sandpan_view.collapsed or sandpan_view.board_cards_attached): return
 	if hand_panel.visible == false or card_infos.is_empty():
 		return
@@ -8886,15 +8924,15 @@ func _show_report(r: Dictionary) -> void:
 		body += "[color=#ffd060]通关获得灵感：+%d　(当前 %d)[/color]\n" % [reward.amount, Talents.inspiration]
 	else:
 		body += "[color=#9dd5bd]胜利通关(含提前胜利)可获得灵感，本次未获得。[/color]\n"
-	_show_popup(title, body, "返回主菜单", _restart)
+	_show_popup(title, body, "返回主菜单", _restart.bind(r.duplicate(true)))
 
 
-func _restart() -> void:
+func _restart(report: Dictionary = {}) -> void:
 	_playing = false
 	_current_event = ""
 	_banner_override = ""
 	# 四个难度各自第一次走完一局：先放结尾短片（播完自己回主菜单）；看过或没素材就直接回
-	if _try_play_ending():
+	if _try_play_ending(report):
 		return
 	# 回到主菜单，让玩家可重新输入种子（留空则随机）
 	_show_menu()
@@ -8960,6 +8998,7 @@ func _show_popup(title: String, body: String, button_text: String, on_continue: 
 	popup_title.text = title
 	popup_body.text = body
 	_configure_knowledge_popup(knowledge_id)
+	if mobile: mobile.fit_popup.call_deferred()
 	popup_button.text = button_text
 	_popup_continue = on_continue
 	popup_root.visible = true
