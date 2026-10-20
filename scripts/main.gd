@@ -394,6 +394,7 @@ var menu_settings_panel: PanelContainer
 var menu_credits_panel: PanelContainer
 var menu_achievements_panel: PanelContainer
 var menu_clear_save_btn: Button
+var demo_entry_button: Button
 var menu_clear_confirm_panel: PanelContainer
 var clear_status_label: Label
 
@@ -656,6 +657,14 @@ func _ready() -> void:
 	# 窗口尺寸/全屏变化时自适应相机，避免全屏后沙盘被裁或留黑边
 	get_viewport().size_changed.connect(_fit_camera_to_window)
 	_fit_camera_to_window()
+	if get_viewport() == get_tree().root and "--demo-auto" in OS.get_cmdline_user_args() \
+			and not get_tree().root.has_meta("demo_autostart_consumed"):
+		get_tree().root.set_meta("demo_autostart_consumed", true)
+		get_tree().change_scene_to_file.call_deferred("res://scenes/demo.tscn")
+		return
+	if OS.has_feature("demo_build"):
+		_show_menu()
+		return
 	if "--card-art-test" in OS.get_cmdline_user_args():
 		_show_menu()
 		_open_card_art_preview()
@@ -2409,6 +2418,18 @@ func _build_menu() -> void:
 	var subtitle := _make_label("一湖清水，万物共生。", 24, VisualTheme.PAPER)
 	subtitle.position = Vector2(68, 150)
 	menu_root.add_child(subtitle)
+	if get_viewport() == get_tree().root and (OS.has_feature("demo_build") or "--demo-enabled" in OS.get_cmdline_user_args()):
+		var demo_button := _make_button("一分钟实机演示  ▶", _open_recording_demo, 18)
+		demo_entry_button = demo_button
+		demo_button.name = "DemoEntryButton"
+		menu_root.add_child(demo_button)
+		# The full-screen menu center is built later; keep this entry above that input layer.
+		menu_root.move_child.call_deferred(demo_button, -1)
+		demo_button.set_anchors_and_offsets_preset(Control.PRESET_TOP_RIGHT)
+		demo_button.offset_left = -244
+		demo_button.offset_right = -28
+		demo_button.offset_top = 24
+		demo_button.offset_bottom = 76
 	preload("res://scripts/motion_parallax.gd").attach(subtitle, 4.0)
 	var description := _make_label("生态保护 · 卡牌策略 · 四季之旅", 12, VisualTheme.MINT)
 	description.position = Vector2(68, 194)
@@ -3230,6 +3251,13 @@ func _menu_state(state: int) -> void:
 	menu_hint.text = ""
 	if seed_level and not MobileSupport.enabled():
 		seed_input.grab_focus()
+
+
+func _open_recording_demo() -> void:
+	if is_instance_valid(demo_entry_button):
+		demo_entry_button.disabled = true
+		demo_entry_button.hide()
+	get_tree().change_scene_to_file.call_deferred("res://scenes/demo.tscn")
 
 
 func _on_title_start() -> void:
